@@ -1,0 +1,14 @@
+# Git
+.git
+.gitignore
+
+# Python
+backend/venv
+backend/__pycache__
+
+# Node
+frontend/node_modules
+frontend/build
+
+# Docker
+Dockerfile
