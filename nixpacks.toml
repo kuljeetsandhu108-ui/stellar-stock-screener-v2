@@ -1,5 +1,5 @@
-# Tell Railway to install both Python and Node.js version 18
-providers = ["python", "nodejs@18"]
+# Tell Railway to install both Python and its default stable version of Node.js
+providers = ["python", "nodejs"]
 
 [phases.install]
 # This command installs all our libraries.
