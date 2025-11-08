@@ -9,7 +9,7 @@ RUN npm run build
 
 # Stage 2: Build the Python Backend and Serve the App
 # We start with an official Python image
-FROM python:3.11-slim
+FROM python:3.12-slim
 WORKDIR /app
 
 # Install system dependencies (not strictly needed now, but good practice)

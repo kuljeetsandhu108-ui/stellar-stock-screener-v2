@@ -138,12 +138,13 @@ const StockDetailPage = () => {
         <MainGrid>
           <LeftColumn>
             <TradingViewChart symbol={symbol} />
-            <Technicals analystRatings={stockData.analyst_ratings} />
+            <Technicals analystRatings={stockData.analyst_ratings} technicalIndicators={stockData.technical_indicators} />
+
             <Financials financialData={stockData.annual_revenue_and_profit} />
           </LeftColumn>
 
           <RightColumn>
-            <SwotAnalysis analysisText={stockData.swot_analysis} />
+            <SwotAnalysis symbol={symbol} profile={stockData.profile} />
             <Shareholding shareholdingData={stockData.shareholding} />
             
             {/* --- FINAL ADDITION --- */}

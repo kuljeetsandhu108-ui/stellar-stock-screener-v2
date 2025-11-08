@@ -1,67 +1,63 @@
 import yfinance as yf
-from pandas import DataFrame
+import pandas as pd
+import pandas_ta as ta
 
-def get_historical_data(symbol: str, period: str = "5y", interval: str = "1d") -> list:
+def get_historical_data(symbol: str, period: str = "1y", interval: str = "1d"):
     """
     Fetches historical stock price data from Yahoo Finance for a given ticker.
-    This data is ideal for charting libraries.
-    
-    Args:
-        symbol (str): The stock ticker symbol (e.g., "AAPL", "MSFT").
-        period (str): The time period for the data (e.g., "1d", "5d", "1mo", "1y", "5y", "max").
-        interval (str): The data interval (e.g., "1m", "2m", "1d", "1wk", "1mo").
-
-    Returns:
-        list: A list of dictionaries, where each dictionary represents a time point
-              with keys like 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'.
-              Returns an empty list if the ticker is invalid or data cannot be fetched.
+    This now returns a PANDAS DATAFRAME instead of a list of dictionaries.
     """
     try:
         ticker = yf.Ticker(symbol)
-        
-        # Fetch the historical market data
-        hist: DataFrame = ticker.history(period=period, interval=interval)
+        hist = ticker.history(period=period, interval=interval)
         
         if hist.empty:
-            print(f"Warning: No historical data found for symbol '{symbol}'. It may be an invalid ticker.")
-            return []
-            
-        # Reset the index to turn the 'Date' index into a column
-        hist = hist.reset_index()
+            print(f"Warning: No historical data found for symbol '{symbol}'.")
+            return None
         
-        # Convert the 'Date' column to a string format 'YYYY-MM-DD'
-        # TradingView and other libraries often work best with this format.
-        # We need to handle both datetime and date objects.
-        if 'Date' in hist.columns:
-            hist['Date'] = hist['Date'].dt.strftime('%Y-%m-%d')
-        elif 'Datetime' in hist.columns:
-            hist.rename(columns={'Datetime': 'Date'}, inplace=True)
-            hist['Date'] = hist['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-
-        # Convert the DataFrame to a list of dictionaries, which is a common JSON format
-        return hist.to_dict('records')
+        # Ensure column names are lowercase for pandas_ta compatibility
+        hist.columns = [col.lower() for col in hist.columns]
+        return hist
 
     except Exception as e:
         print(f"An error occurred while fetching historical data for {symbol} from yfinance: {e}")
-        return []
+        return None
 
-def get_company_info(symbol: str) -> dict:
+def calculate_technical_indicators(df: pd.DataFrame):
     """
-    Fetches general company information and summary from Yahoo Finance.
-    This can supplement data from FMP if needed.
+    Calculates a set of technical indicators from a DataFrame of historical price data.
     """
+    if df is None or df.empty:
+        return {}
+
     try:
-        ticker = yf.Ticker(symbol)
+        # Calculate all the indicators we need using pandas_ta
+        df.ta.rsi(length=14, append=True)
+        df.ta.macd(fast=12, slow=26, signal=9, append=True)
+        df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
+        df.ta.adx(length=14, append=True)
+        df.ta.atr(length=14, append=True)
+        df.ta.willr(length=14, append=True)
+        df.ta.bbands(length=20, std=2, append=True)
         
-        # The .info dictionary contains a wealth of information
-        info = ticker.info
-        
-        if not info or 'symbol' not in info:
-             print(f"Warning: No company info found for symbol '{symbol}'.")
-             return {}
+        # Get the very last row which contains the most recent indicator values
+        latest_indicators = df.iloc[-1]
 
-        return info
-        
+        # Structure the data to match what our frontend component expects
+        return {
+            "rsi": latest_indicators.get('RSI_14'),
+            "macd": latest_indicators.get('MACD_12_26_9'),
+            "macdsignal": latest_indicators.get('MACDs_12_26_9'),
+            "stochasticsk": latest_indicators.get('STOCHk_14_3_3'),
+            "adx": latest_indicators.get('ADX_14'),
+            "atr": latest_indicators.get('ATRr_14'),
+            "williamsr": latest_indicators.get('WILLR_14'),
+            "bollingerBands": {
+                "upperBand": latest_indicators.get('BBU_20_2.0'),
+                "middleBand": latest_indicators.get('BBM_20_2.0'),
+                "lowerBand": latest_indicators.get('BBL_20_2.0'),
+            }
+        }
     except Exception as e:
-        print(f"An error occurred while fetching company info for {symbol} from yfinance: {e}")
+        print(f"Error calculating technical indicators: {e}")
         return {}

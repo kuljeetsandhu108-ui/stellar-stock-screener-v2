@@ -1,8 +1,23 @@
-import React, { useState, useMemo } from 'react';
-import styled from 'styled-components';
+import React, { useState, useEffect, useMemo } from 'react';
+import styled, { keyframes } from 'styled-components';
 import Card from '../common/Card';
+import axios from 'axios';
 
-// --- Styled Components ---
+// --- Styled Components (with a new Loader) ---
+
+const fadeIn = keyframes`
+  from { opacity: 0; }
+  to { opacity: 1; }
+`;
+
+const Loader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--color-primary);
+  animation: ${fadeIn} 0.5s ease-in;
+`;
 
 const TabContainer = styled.div`
   display: flex;
@@ -20,12 +35,10 @@ const TabButton = styled.button`
   cursor: pointer;
   position: relative;
   transition: color 0.3s ease;
-
-  /* The active tab indicator line */
   &::after {
     content: '';
     position: absolute;
-    bottom: -1px; /* Align with the container's border */
+    bottom: -1px;
     left: 0;
     width: 100%;
     height: 2px;
@@ -36,7 +49,8 @@ const TabButton = styled.button`
 `;
 
 const ContentContainer = styled.div`
-  min-height: 200px; /* Ensures consistent card height */
+  min-height: 200px;
+  animation: ${fadeIn} 0.5s ease-in;
 `;
 
 const SwotList = styled.ul`
@@ -48,42 +62,61 @@ const SwotListItem = styled.li`
   margin-bottom: 0.75rem;
   color: var(--color-text-primary);
   line-height: 1.6;
-  
   &::before {
-    content: '✓'; /* Simple bullet point */
+    content: '✓';
     color: var(--color-success);
     margin-right: 10px;
     font-weight: bold;
   }
 `;
 
+// --- NEW, SMARTER REACT COMPONENT ---
 
-// --- React Component ---
-
-const SwotAnalysis = ({ analysisText }) => {
+const SwotAnalysis = ({ symbol, profile }) => {
+  const [analysisText, setAnalysisText] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('Strengths');
 
-  // useMemo will parse the text only once, improving performance
-  const swotData = useMemo(() => {
-    if (!analysisText) return {};
+  useEffect(() => {
+    // This effect runs when the component first loads.
+    const fetchSwotData = async () => {
+      // Don't try to fetch if we don't have the necessary profile info.
+      if (!symbol || !profile || !profile.companyName || !profile.description) {
+        setIsLoading(false);
+        return;
+      }
+      
+      setIsLoading(true);
+      try {
+        const payload = {
+            companyName: profile.companyName,
+            description: profile.description,
+        };
+        // Make the dedicated API call to our new endpoint.
+        const response = await axios.post(`/api/stocks/${symbol}/swot`, payload);
+        setAnalysisText(response.data.swot_analysis);
+      } catch (error) {
+        console.error("Failed to fetch SWOT analysis:", error);
+        setAnalysisText(''); // Ensure text is cleared on error
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
+    fetchSwotData();
+  }, [symbol, profile]); // Re-run if the symbol or profile changes
+
+  const swotData = useMemo(() => {
+    // This parsing logic remains the same.
+    if (!analysisText) return {};
     const sections = ['Strengths', 'Weaknesses', 'Opportunities', 'Threats'];
     const data = {};
-
-    // Split the text into sections based on the titles
     const parts = analysisText.split(/\n(?=Strengths|Weaknesses|Opportunities|Threats)/);
-
     parts.forEach(part => {
       const trimmedPart = part.trim();
       for (const section of sections) {
         if (trimmedPart.startsWith(section)) {
-          // Get the content, remove the title, and split into bullet points
-          data[section] = trimmedPart
-            .replace(new RegExp(`^${section}:?`, 'i'), '')
-            .trim()
-            .split(/-\s|\*\s|\n/) // Split by bullets or newlines
-            .map(item => item.trim())
-            .filter(item => item); // Filter out any empty lines
+          data[section] = trimmedPart.replace(new RegExp(`^${section}:?`, 'i'), '').trim().split(/-\s|\*\s|\n/).map(item => item.trim()).filter(Boolean);
         }
       }
     });
@@ -91,6 +124,16 @@ const SwotAnalysis = ({ analysisText }) => {
   }, [analysisText]);
 
   const tabs = Object.keys(swotData);
+
+  // --- RENDER LOGIC ---
+
+  if (isLoading) {
+    return (
+        <Card title="AI-Powered SWOT Analysis">
+            <Loader>Generating AI analysis...</Loader>
+        </Card>
+    );
+  }
 
   if (tabs.length === 0) {
     return (
@@ -104,11 +147,7 @@ const SwotAnalysis = ({ analysisText }) => {
     <Card title="AI-Powered SWOT Analysis">
       <TabContainer>
         {tabs.map(tab => (
-          <TabButton
-            key={tab}
-            active={activeTab === tab}
-            onClick={() => setActiveTab(tab)}
-          >
+          <TabButton key={tab} active={activeTab === tab} onClick={() => setActiveTab(tab)}>
             {tab}
           </TabButton>
         ))}

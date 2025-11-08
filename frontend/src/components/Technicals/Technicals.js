@@ -4,6 +4,8 @@ import Card from '../common/Card';
 import RatingDial from './RatingDial';
 import PivotLevels from './PivotLevels';
 import MovingAverages from './MovingAverages';
+// --- NEW IMPORT ---
+import TechnicalIndicatorsTable from './TechnicalIndicatorsTable';
 
 // --- Styled Components ---
 
@@ -14,9 +16,7 @@ const TopSectionGrid = styled.div`
   gap: 2rem;
   align-items: center;
   padding-bottom: 2rem;
-  margin-bottom: 2rem;
-  border-bottom: 1px solid var(--color-border);
-
+  
   /* On smaller screens, stack them */
   @media (max-width: 992px) {
     grid-template-columns: 1fr;
@@ -24,12 +24,13 @@ const TopSectionGrid = styled.div`
 `;
 
 const BottomSection = styled.div`
-  /* This section will hold the pivot levels table */
+  /* This section will hold the pivot levels table and the new indicators table */
 `;
 
 // --- React Component ---
 
-const Technicals = ({ analystRatings }) => {
+// The component now accepts the new 'technicalIndicators' data prop
+const Technicals = ({ analystRatings, technicalIndicators }) => {
 
   // We need to get the latest analyst rating to feed into our dial.
   // The FMP API provides an array of ratings, with the most recent first.
@@ -53,7 +54,13 @@ const Technicals = ({ analystRatings }) => {
 
       {/* --- Bottom Section --- */}
       <BottomSection>
-        <PivotLevels />
+        {/* The new indicators table is added here, passing the data down */}
+        <TechnicalIndicatorsTable indicators={technicalIndicators} />
+        
+        {/* The PivotLevels table is now below the new table */}
+        <div style={{ marginTop: '2rem' }}>
+          <PivotLevels />
+        </div>
       </BottomSection>
 
     </Card>

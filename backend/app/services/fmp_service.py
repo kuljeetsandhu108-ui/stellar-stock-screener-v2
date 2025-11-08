@@ -15,7 +15,7 @@ def get_company_profile(symbol: str):
     try:
         url = f"{BASE_URL}/profile/{symbol}?apikey={FMP_API_KEY}"
         response = requests.get(url)
-        response.raise_for_status()  # Raises an HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"Error fetching company profile for {symbol}: {e}")
@@ -101,3 +101,21 @@ def get_shareholding_data(symbol: str, limit: int = 100):
     except requests.exceptions.RequestException as e:
         print(f"Error fetching shareholding data for {symbol}: {e}")
         return []
+
+# --- NEW FUNCTION ADDED HERE ---
+def get_technical_indicators(symbol: str, period: int = 14):
+    """
+    Fetches a wide range of daily technical indicators from FMP.
+    """
+    if not FMP_API_KEY:
+        return {"error": "FMP API key not found."}
+    try:
+        # The FMP endpoint provides a rich set of indicators for the daily timeframe.
+        url = f"{BASE_URL}/technical_indicator/daily/{symbol}?period={period}&apikey={FMP_API_KEY}"
+        response = requests.get(url)
+        response.raise_for_status()
+        # We only need the most recent indicator values, which is the first item in the array.
+        return response.json()[0] if response.json() else {}
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching technical indicators for {symbol}: {e}")
+        return {}
