@@ -1,0 +1,76 @@
+import os
+import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Configure the Gemini API with your key from the .env file
+try:
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY not found in .env file.")
+    genai.configure(api_key=GEMINI_API_KEY)
+except ValueError as e:
+    print(f"Error: {e}")
+    # Handle the error appropriately, maybe exit or use a fallback
+    # For now, we'll just print it.
+
+
+def get_ticker_from_query(query: str):
+    """
+    Uses the Gemini model to intelligently find a stock ticker symbol from a natural language query.
+    For example, "what's the stock for the company that makes iPhones" -> "AAPL".
+    """
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    # This is a carefully crafted prompt to ensure the model returns ONLY the ticker.
+    prompt = f"""
+    Analyze the following user query to identify the company and its official stock ticker symbol.
+    
+    Query: "{query}"
+
+    Return ONLY the stock ticker symbol. For example, if the company is Apple, return "AAPL". 
+    If it's Reliance Industries in India, return "RELIANCE.NS". 
+    If you cannot determine a clear ticker, return "NOT_FOUND".
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        # We clean the response to remove any potential markdown or extra text
+        # although the prompt is designed to prevent it.
+        ticker = response.text.strip().replace("`", "").upper()
+        return ticker
+    except Exception as e:
+        print(f"An error occurred while calling the Gemini API: {e}")
+        return "ERROR"
+
+def generate_swot_analysis(company_name: str, description: str, news_headlines: list):
+    """
+    Generates a SWOT analysis for a given company using its description and recent news.
+    """
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    # Joining news headlines into a single string for the prompt
+    news_string = "\n- ".join(news_headlines)
+    
+    prompt = f"""
+    Based on the following company information and recent news headlines, generate a SWOT analysis.
+    The output should be in four distinct sections: Strengths, Weaknesses, Opportunities, and Threats.
+    For each section, provide at least 3-4 concise bullet points.
+
+    Company Name: {company_name}
+
+    Company Description: {description}
+
+    Recent News Headlines:
+    - {news_string}
+
+    Generate the SWOT analysis now.
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"An error occurred while generating SWOT analysis: {e}")
+        return "Could not generate AI-powered analysis at this time."
