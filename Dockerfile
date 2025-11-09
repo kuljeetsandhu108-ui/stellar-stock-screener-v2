@@ -1,4 +1,4 @@
-# Stage 1: Build the React Frontend (This stage is perfect and does not change)
+# Stage 1: Build the React Frontend
 FROM node:18-alpine AS builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
@@ -6,26 +6,25 @@ RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Build the Python Backend (This stage is completely rewritten)
+# Stage 2: Build the Python Backend
 FROM python:3.12-slim
 
-# Set the working directory for the entire stage
+# --- NEW LINE ADDED ---
+# This is a standard best practice that prevents Python from buffering output,
+# making logs appear instantly. It also forces Railway to do a fresh build.
+ENV PYTHONUNBUFFERED 1
+
 WORKDIR /app
 
-# 1. Copy ONLY the requirements file first.
-# This is a critical optimization for Docker's caching.
-# The dependencies will only be re-installed if this file changes.
+# Copy ONLY the requirements file first for caching optimization
 COPY ./backend/requirements.txt .
 
-# 2. Install all Python dependencies.
-# We add --no-cache-dir to keep the image slim and --upgrade pip for best practice.
+# Install all Python dependencies
 RUN pip install --no-cache-dir --upgrade pip -r requirements.txt
 
-# 3. Now, copy all of your application code into the image.
-# This includes the backend code AND the built frontend from the previous stage.
+# Now, copy all of your application code
 COPY ./backend ./backend
-COPY --from=builder /app/frontend/build ./frontend/build
+COPY --from-builder /app/frontend/build ./frontend/build
 
-# 4. Set the command to run the Uvicorn server.
-# This is the same robust command from before.
+# Set the final command to run the server
 CMD ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8080"]
