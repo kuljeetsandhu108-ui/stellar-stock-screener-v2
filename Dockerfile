@@ -30,4 +30,4 @@ EXPOSE 10000
 
 # Set the command to run the Uvicorn server
 # Note: Railway provides the $PORT variable, so we use it.
-CMD uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+CMD python -m uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
