@@ -74,3 +74,47 @@ def generate_swot_analysis(company_name: str, description: str, news_headlines: 
     except Exception as e:
         print(f"An error occurred while generating SWOT analysis: {e}")
         return "Could not generate AI-powered analysis at this time."
+
+# (Keep the existing get_ticker_from_query and generate_swot_analysis functions)
+
+# --- ADD THIS NEW FUNCTION AT THE END OF THE FILE ---
+
+def generate_forecast_analysis(company_name: str, analyst_ratings: list, price_target: dict, key_stats: dict, news_headlines: list):
+    """
+    Generates a comprehensive summary of the analyst forecast using Gemini.
+    """
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    # Format the data into a human-readable string for the AI prompt
+    ratings_summary = "\n".join([f"- {r['ratingStrongBuy']} Strong Buy, {r['ratingBuy']} Buy, {r['ratingHold']} Hold" for r in analyst_ratings[:1]])
+    news_string = "\n- ".join(news_headlines)
+    
+    prompt = f"""
+    Act as a professional financial analyst. Based on the following data for {company_name}, provide a concise, insightful summary of the analyst forecast.
+    The summary should be easy for a retail investor to understand.
+    Structure your response in two paragraphs:
+    1.  **Analyst Sentiment:** Briefly describe the overall analyst sentiment based on the ratings breakdown and consensus.
+    2.  **Price Target Analysis:** Explain the 1-year price target, including the high, average, and low estimates, and what this implies for the stock's potential.
+
+    **DATA:**
+    - **Analyst Ratings Breakdown:**
+    {ratings_summary}
+    - **Price Target Consensus:**
+    - High: ${price_target.get('targetHigh')}
+    - Average: ${price_target.get('targetConsensus')}
+    - Low: ${price_target.get('targetLow')}
+    - **Key Financials:**
+    - P/E Ratio: {key_stats.get('peRatio')}
+    - EPS: {key_stats.get('basicEPS')}
+    - **Recent News Headlines:**
+    - {news_string}
+
+    Generate the two-paragraph summary now.
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"An error occurred while generating forecast analysis: {e}")
+        return "Could not generate AI-powered forecast analysis at this time."

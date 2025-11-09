@@ -3,17 +3,20 @@ import { useParams, useNavigate } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
 
-// --- Final Imports ---
+// --- Imports for all our components ---
 import StockHeader from '../components/Header/StockHeader';
 import Financials from '../components/Financials/Financials';
 import Shareholding from '../components/Shareholding/Shareholding';
 import Technicals from '../components/Technicals/Technicals';
 import TradingViewChart from '../components/Chart/TradingViewChart';
 import SwotAnalysis from '../components/SWOT/SwotAnalysis';
-import NewsList from '../components/News/NewsList'; // <-- FINAL COMPONENT
+import NewsList from '../components/News/NewsList';
+import { Tabs, TabPanel } from '../components/common/Tabs/Tabs';
+// --- NEW: Import our new Forecasts component ---
+import Forecasts from '../components/Forecasts/Forecasts';
 
-// --- Styled Components (no changes) ---
 
+// --- (All styled components remain the same) ---
 const fadeIn = keyframes`
   from { opacity: 0; }
   to { opacity: 1; }
@@ -26,13 +29,12 @@ const StockDetailPageContainer = styled.div`
   animation: ${fadeIn} 0.5s ease-in;
 `;
 
-const MainGrid = styled.div`
+const TabContentGrid = styled.div`
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 2fr 1fr;
   gap: 2rem;
-
-  @media (min-width: 1200px) {
-    grid-template-columns: 2fr 1fr; 
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr;
   }
 `;
 
@@ -63,24 +65,22 @@ const ErrorContainer = styled(LoadingContainer)`
 `;
 
 const BackButton = styled.button`
-    background: none;
-    border: 1px solid var(--color-border);
-    color: var(--color-text-secondary);
-    padding: 8px 16px;
-    border-radius: 20px;
-    cursor: pointer;
-    font-size: 0.9rem;
-    margin-bottom: 2rem;
-    transition: all 0.2s ease;
-
-    &:hover {
-        background-color: var(--color-secondary);
-        color: var(--color-text-primary);
-    }
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  padding: 8px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  margin-bottom: 2rem;
+  transition: all 0.2s ease;
+  &:hover {
+    background-color: var(--color-secondary);
+    color: var(--color-text-primary);
+  }
 `;
 
-// --- React Component (useEffect is unchanged) ---
-
+// --- (The main React component logic remains the same) ---
 const StockDetailPage = () => {
   const { symbol } = useParams();
   const navigate = useNavigate();
@@ -95,66 +95,90 @@ const StockDetailPage = () => {
       try {
         const response = await axios.get(`/api/stocks/${symbol}/all`);
         setStockData(response.data);
+        console.log("Forecast Data Check:", response.data);
       } catch (err) {
+        console.error("Failed to fetch stock data:", err);
         setError(`Could not retrieve data for ${symbol}. Please check the symbol and try again.`);
       } finally {
         setIsLoading(false);
       }
     };
-
     fetchAllData();
   }, [symbol]);
 
-  // --- Final Render Logic ---
-
+  // --- (Render logic for loading/error states remains the same) ---
   if (isLoading) {
     return <LoadingContainer><p>Loading Financial Universe for {symbol}...</p></LoadingContainer>;
   }
-
   if (error) {
     return (
       <ErrorContainer>
         <h2>An Error Occurred</h2>
         <p>{error}</p>
-        <BackButton style={{marginTop: '2rem'}} onClick={() => navigate('/')}>
-            Go Back to Search
-        </BackButton>
+        <BackButton style={{ marginTop: '2rem' }} onClick={() => navigate('/')}>Go Back to Search</BackButton>
       </ErrorContainer>
     );
   }
-
   if (!stockData) {
     return null;
   }
 
   return (
     <StockDetailPageContainer>
-        <BackButton onClick={() => navigate('/')}>
-            &larr; Back to Search
-        </BackButton>
-        
-        <StockHeader profile={stockData.profile} quote={stockData.quote} />
-        
-        <MainGrid>
-          <LeftColumn>
-            <TradingViewChart symbol={symbol} />
-            <Technicals analystRatings={stockData.analyst_ratings} technicalIndicators={stockData.technical_indicators} />
+      <BackButton onClick={() => navigate('/')}>
+        &larr; Back to Search
+      </BackButton>
 
-            <Financials financialData={stockData.annual_revenue_and_profit} />
-          </LeftColumn>
+      <StockHeader profile={stockData.profile} quote={stockData.quote} />
 
-          <RightColumn>
-            <SwotAnalysis symbol={symbol} profile={stockData.profile} />
+      {/* --- FINAL TABS IMPLEMENTATION --- */}
+      <Tabs>
+        <TabPanel label="Overview">
+          <TabContentGrid>
+            <LeftColumn>
+              <TradingViewChart symbol={symbol} />
+              <Technicals 
+                analystRatings={stockData.analyst_ratings} 
+                technicalIndicators={stockData.technical_indicators} 
+              />
+            </LeftColumn>
+            <RightColumn>
+              <SwotAnalysis symbol={symbol} profile={stockData.profile} />
+              <NewsList newsArticles={stockData.news} />
+            </RightColumn>
+          </TabContentGrid>
+        </TabPanel>
+
+        <TabPanel label="Financials">
+          <Financials 
+            profile={stockData.profile}
+            keyStats={stockData.keyStats}
+            financialData={stockData.annual_revenue_and_profit} 
+          />
+        </TabPanel>
+        
+        {/* --- THIS IS THE UPDATED PART --- */}
+        <TabPanel label="Forecasts">
+            <Forecasts 
+                symbol={symbol}
+                quote={stockData.quote}
+                analystRatings={stockData.analyst_ratings}
+                priceTarget={stockData.price_target_consensus}
+                keyStats={stockData.keyStats}
+                news={stockData.news}
+            />
+        </TabPanel>
+
+        <TabPanel label="Shareholding">
             <Shareholding shareholdingData={stockData.shareholding} />
-            
-            {/* --- FINAL ADDITION --- */}
-            {/* The NewsList component completes our page */}
-            {/* The data comes from the `news` key in our API response */}
-            <NewsList newsArticles={stockData.news} />
-            
-          </RightColumn>
-        </MainGrid>
+        </TabPanel>
 
+        <TabPanel label="Technicals">
+            {/* We can move the detailed technicals table here in the future if we want */}
+            <div>More Detailed Technicals Coming Soon...</div>
+        </TabPanel>
+
+      </Tabs>
     </StockDetailPageContainer>
   );
 };

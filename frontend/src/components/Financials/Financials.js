@@ -1,29 +1,51 @@
 import React from 'react';
+import styled from 'styled-components';
+
+// --- Import all our components ---
 import Card from '../common/Card';
 import RevenueChart from './RevenueChart';
+import KeyStats from './KeyStats';
+import AboutCompany from './AboutCompany';
 
-// This component is currently a simple wrapper, but it's designed for future expansion.
-// We could easily add tabs here for "Income Statement," "Balance Sheet," "Cash Flow," etc.
-// to show different charts or tables within the same card.
+// --- Styled Components ---
 
-const Financials = ({ financialData }) => {
-  // Defensive check: If there's no data or the data is not an array, don't render anything.
-  if (!financialData || !Array.isArray(financialData) || financialData.length === 0) {
+const FinancialsContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2rem; /* Adds space between each section */
+`;
+
+// --- The Refactored React Component ---
+
+const Financials = ({ profile, quote, keyMetrics, keyStats, financialData }) => {
+  // Defensive check: If we don't have the core profile data, show a generic message.
+  if (!profile) {
     return (
-      <Card title="Financials">
-        <p>Financial statement data is not available for this stock.</p>
+      <Card>
+        <p>Financial data is not available for this stock.</p>
       </Card>
     );
   }
 
   return (
-    // We use our reusable Card component and give it a title.
-    <Card title="Financials Overview">
-      {/* 
-        The content inside this Card is the RevenueChart component.
-        We pass the financial data down to the chart as a prop.
-      */}
-      <RevenueChart data={financialData} />
+    // We use a single, borderless Card for a cleaner, integrated look within the tab
+    <Card>
+      <FinancialsContainer>
+
+        {/* --- Section 1: Key Stats --- */}
+        {/* Pass the consolidated keyStats object we created in the backend */}
+        <KeyStats stats={keyStats} />
+
+        {/* --- Section 2: Financials Overview Chart --- */}
+        <div>
+            <h3 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.5rem' }}>Financials Overview</h3>
+            <RevenueChart data={financialData} />
+        </div>
+
+        {/* --- Section 3: About the Company --- */}
+        <AboutCompany profile={profile} />
+
+      </FinancialsContainer>
     </Card>
   );
 };

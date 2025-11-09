@@ -2,69 +2,74 @@ import React from 'react';
 import styled from 'styled-components';
 import GaugeChart from 'react-gauge-chart';
 
-// --- Styled Components ---
+// --- Styled Components (No changes here) ---
 
 const DialContainer = styled.div`
   width: 100%;
-  max-width: 400px; /* Control the max size of the dial */
-  margin: 0 auto; /* Center the dial within its container */
+  max-width: 400px;
+  margin: 0 auto;
 `;
 
 const RatingText = styled.div`
   font-size: 2rem;
   font-weight: 700;
   text-align: center;
-  margin-top: -30px; /* Pull the text up to overlap with the gauge */
-  color: ${({ ratingColor }) => ratingColor}; /* Dynamic color based on rating */
+  margin-top: -30px;
+  color: ${({ ratingColor }) => ratingColor};
 `;
 
-// --- React Component ---
+// --- The React Component (Logic is now more robust) ---
 
 const RatingDial = ({ rating }) => {
-  // We need to convert the text rating (e.g., "Bullish") into a percentage for the dial.
-  // We also determine the color for the text.
   const getRatingDetails = () => {
+    // --- THIS IS THE CRITICAL FIX ---
+    // We add a "guard clause". If the rating prop is missing or not a string,
+    // we default to a Neutral state immediately. This prevents the .toLowerCase() error.
+    if (!rating || typeof rating !== 'string') {
+      return { percent: 0.5, color: 'var(--color-text-secondary)', text: 'Neutral' };
+    }
+
+    // The rest of the logic remains the same
     switch (rating.toLowerCase()) {
       case 'strong buy':
       case 'bullish':
       case 'very bullish':
-        return { percent: 0.9, color: 'var(--color-success)' };
+        return { percent: 0.9, color: 'var(--color-success)', text: 'Strong Buy' };
       case 'buy':
       case 'outperform':
-        return { percent: 0.7, color: 'var(--color-success)' };
+        return { percent: 0.7, color: 'var(--color-success)', text: 'Buy' };
       case 'hold':
       case 'neutral':
-        return { percent: 0.5, color: '#EDBB5A' }; // A neutral yellow/orange
+        return { percent: 0.5, color: '#EDBB5A', text: 'Hold' };
       case 'sell':
       case 'underperform':
-        return { percent: 0.3, color: 'var(--color-danger)' };
+        return { percent: 0.3, color: 'var(--color-danger)', text: 'Sell' };
       case 'strong sell':
       case 'bearish':
-        return { percent: 0.1, color: 'var(--color-danger)' };
+        return { percent: 0.1, color: 'var(--color-danger)', text: 'Strong Sell' };
       default:
-        return { percent: 0.5, color: 'var(--color-text-secondary)' };
+        return { percent: 0.5, color: 'var(--color-text-secondary)', text: 'Neutral' };
     }
   };
 
-  const { percent, color } = getRatingDetails();
-  const capitalizedRating = rating.charAt(0).toUpperCase() + rating.slice(1);
+  const { percent, color, text } = getRatingDetails();
 
   return (
     <DialContainer>
       <GaugeChart
         id="technical-rating-gauge"
         nrOfLevels={30}
-        colors={['#F85149', '#EDBB5A', '#3FB950']} // Red, Yellow, Green
+        colors={['#F85149', '#EDBB5A', '#3FB950']}
         arcWidth={0.3}
         percent={percent}
-        textColor={'transparent'} // Hide the default percentage text
+        textColor={'transparent'}
         needleBaseColor={'#FFFFFF'}
         needleColor={'#C9D1D9'}
         animate={true}
         animDelay={500}
       />
       <RatingText ratingColor={color}>
-        {capitalizedRating}
+        {text}
       </RatingText>
     </DialContainer>
   );

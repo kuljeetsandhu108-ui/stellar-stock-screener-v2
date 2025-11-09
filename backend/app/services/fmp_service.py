@@ -119,3 +119,41 @@ def get_technical_indicators(symbol: str, period: int = 14):
     except requests.exceptions.RequestException as e:
         print(f"Error fetching technical indicators for {symbol}: {e}")
         return {}
+# (Keep all the existing functions like get_company_profile, get_quote, etc.)
+
+# --- ADD THIS NEW FUNCTION AT THE END OF THE FILE ---
+
+def get_analyst_estimates(symbol: str, limit: int = 1):
+    """
+    Fetches analyst earnings estimates for the upcoming quarter from FMP.
+    """
+    if not FMP_API_KEY:
+        return {"error": "FMP API key not found."}
+    try:
+        url = f"{BASE_URL}/analyst-estimates/{symbol}?limit={limit}&apikey={FMP_API_KEY}"
+        response = requests.get(url)
+        response.raise_for_status()
+        # Return the most recent estimate, which is the first item
+        return response.json()[0] if response.json() else {}
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching analyst estimates for {symbol}: {e}")
+        return {}
+# (Keep all the existing functions)
+
+# --- ADD THIS NEW FUNCTION AT THE END OF THE FILE ---
+
+def get_price_target_consensus(symbol: str):
+    """
+    Fetches the price target consensus (high, low, average) from FMP.
+    """
+    if not FMP_API_KEY:
+        return {"error": "FMP API key not found."}
+    try:
+        url = f"{BASE_URL}/price-target-consensus/{symbol}?apikey={FMP_API_KEY}"
+        response = requests.get(url)
+        response.raise_for_status()
+        # The API returns a list, we only need the first (and only) item.
+        return response.json()[0] if response.json() else {}
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching price target consensus for {symbol}: {e}")
+        return {}
