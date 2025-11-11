@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
+// --- NEW: Import our new banner component ---
+import IndicesBanner from '../components/Indices/IndicesBanner';
 
-// --- Styled Components ---
+// --- Styled Components & Animations ---
 
-// A subtle animation for the title
 const fadeIn = keyframes`
   from {
     opacity: 0;
@@ -17,14 +18,23 @@ const fadeIn = keyframes`
   }
 `;
 
+// We change the container to accommodate the new banner at the top
 const HomePageContainer = styled.div`
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  height: 100vh;
+  /* We remove justify-content: center and change height to min-height */
+  min-height: 100vh; 
   padding: 2rem;
-  text-align: center;
+  width: 100%;
+`;
+
+const MainContent = styled.div`
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    margin-top: 5vh; /* Add some space from the top banner */
 `;
 
 const Title = styled.h1`
@@ -69,10 +79,10 @@ const SearchInput = styled.input`
 const LoadingText = styled.p`
   color: var(--color-primary);
   margin-top: 1rem;
-  height: 20px; /* Reserve space to prevent layout shift */
+  height: 20px;
 `;
 
-// --- React Component ---
+// --- The React Component ---
 
 const HomePage = () => {
   const [query, setQuery] = useState('');
@@ -81,15 +91,12 @@ const HomePage = () => {
   const navigate = useNavigate();
 
   const handleSearch = async (event) => {
-    // Only trigger search on "Enter" key press
     if (event.key === 'Enter' && query.trim() !== '') {
       setIsLoading(true);
       setError('');
       try {
-        // Call our backend's AI-powered search endpoint
         const response = await axios.get(`/api/stocks/search?query=${query}`);
         const symbol = response.data.symbol;
-        // Navigate to the detail page for the found symbol
         navigate(`/stock/${symbol}`);
       } catch (err) {
         setError('Could not find a stock for that query. Please try again.');
@@ -102,22 +109,27 @@ const HomePage = () => {
 
   return (
     <HomePageContainer>
-      <Title>Stellar Stock Screener</Title>
-      <Subtitle>
-        Leveraging AI to provide comprehensive financial insights.
-        Enter a company name like "Tesla" or "Reliance India" to begin.
-      </Subtitle>
-      <SearchInput
-        type="text"
-        placeholder="Search for a company..."
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyPress={handleSearch}
-        disabled={isLoading}
-      />
-      <LoadingText>
-        {isLoading ? 'Searching with AI...' : error || ''}
-      </LoadingText>
+      {/* --- NEW BANNER PLACED HERE --- */}
+      <IndicesBanner />
+
+      <MainContent>
+        <Title>Stellar Stock Screener</Title>
+        <Subtitle>
+          Leveraging AI to provide comprehensive financial insights.
+          Enter a company name like "Tesla" or "Reliance India" to begin.
+        </Subtitle>
+        <SearchInput
+          type="text"
+          placeholder="Search for a company..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyPress={handleSearch}
+          disabled={isLoading}
+        />
+        <LoadingText>
+          {isLoading ? 'Searching with AI...' : error || ''}
+        </LoadingText>
+      </MainContent>
     </HomePageContainer>
   );
 };

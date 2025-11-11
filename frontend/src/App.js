@@ -3,6 +3,8 @@ import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import { GlobalStyles } from './styles/GlobalStyles';
 import HomePage from './pages/HomePage';
 import StockDetailPage from './pages/StockDetailPage';
+// --- NEW: Import our new Index Detail Page ---
+import IndexDetailPage from './pages/IndexDetailPage';
 
 function App() {
   return (
@@ -16,10 +18,14 @@ function App() {
           {/* Route for the main landing/search page */}
           <Route path="/" element={<HomePage />} />
 
-          {/* Route for the detailed stock analysis page. 
-              The ":symbol" part is a dynamic parameter that will hold the stock ticker. 
-              e.g., /stock/AAPL or /stock/MSFT */}
+          {/* Route for the detailed stock analysis page */}
           <Route path="/stock/:symbol" element={<StockDetailPage />} />
+
+          {/* --- NEW ROUTE ADDED HERE --- */}
+          {/* Route for the detailed index analysis page. 
+              The ":encodedSymbol" will hold the URL-safe version of the index symbol. */}
+          <Route path="/index/:encodedSymbol" element={<IndexDetailPage />} />
+
         </Routes>
       </Router>
     </>

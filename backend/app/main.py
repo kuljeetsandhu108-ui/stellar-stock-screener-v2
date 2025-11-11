@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
 
-from .routers import stocks
+from .routers import stocks, indices
 
 app = FastAPI(
     title="Stellar Stock Screener API",
@@ -11,19 +11,16 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# 1. First, we include our API router.
-# Any request starting with /api will be handled by our stocks.py file.
+# We include both of our API routers first.
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])
+app.include_router(indices.router, prefix="/api/indices", tags=["indices"])
 
-# 2. Next, we mount the specific '/static' directory from our React build.
-# This is where all the compiled JavaScript and CSS files live.
-# This ensures that requests for these files are handled correctly.
+# This serves the compiled JavaScript and CSS files.
 app.mount("/static", StaticFiles(directory="frontend/build/static"), name="static_assets")
 
-# 3. Finally, we create a "catch-all" route that MUST BE LAST.
-# This route will match ANY other path that is not /api/... or /static/...
-# For any such path (like /stock/TSLA or / or /financials), it will
-# always serve the main index.html file. React Router will then handle the rest.
+# This catch-all route is the key for a Single-Page Application.
+# It ensures that any request not matching the API or static files
+# will be served the main index.html file, allowing React Router to work.
 @app.get("/{full_path:path}")
 async def serve_react_app(full_path: str):
     return FileResponse("frontend/build/index.html")

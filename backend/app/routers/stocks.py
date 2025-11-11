@@ -1,6 +1,6 @@
 import asyncio
 from fastapi import APIRouter, HTTPException, Query, Body
-from ..services import fmp_service, yahoo_service, news_service, gemini_service
+from ..services import fmp_service, yahoo_service, news_service, gemini_service, fundamental_service
 from pydantic import BaseModel
 from typing import List, Dict, Any
 
@@ -14,6 +14,10 @@ class ForecastRequest(BaseModel):
     priceTarget: Dict[str, Any]
     keyStats: Dict[str, Any]
     newsHeadlines: List[str]
+
+class FundamentalRequest(BaseModel):
+    companyName: str
+    keyMetrics: Dict[str, Any]
 
 router = APIRouter()
 
@@ -50,51 +54,65 @@ async def get_forecast_analysis(symbol: str, request_data: ForecastRequest = Bod
     )
     return {"analysis": analysis}
 
+@router.post("/{symbol}/fundamental-analysis")
+async def get_fundamental_analysis(symbol: str, request_data: FundamentalRequest = Body(...)):
+    print(f"Received AI Fundamental Analysis request for {symbol}...")
+    assessment = await asyncio.to_thread(
+        gemini_service.generate_investment_philosophy_assessment,
+        company_name=request_data.companyName,
+        key_metrics=request_data.keyMetrics
+    )
+    return {"assessment": assessment}
 
 @router.get("/{symbol}/all")
 async def get_all_stock_data(symbol: str):
-    """
-    DEFINITIVE VERSION: Uses yfinance as the primary source for robust forecast data.
-    """
-    # Define all the data fetching tasks we need to run.
     tasks = {
-        # FMP is still our primary source for these items.
         "profile": asyncio.to_thread(fmp_service.get_company_profile, symbol),
         "quote": asyncio.to_thread(fmp_service.get_quote, symbol),
         "key_metrics": asyncio.to_thread(fmp_service.get_key_metrics, symbol, "annual", 1),
         "analyst_estimates": asyncio.to_thread(fmp_service.get_analyst_estimates, symbol),
         "shareholding": asyncio.to_thread(fmp_service.get_shareholding_data, symbol),
-        "annual_revenue_and_profit": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "income-statement", "annual", 5),
         "news": asyncio.to_thread(news_service.get_company_news, symbol),
-
-        # --- YFINANCE IS NOW OUR RELIABLE SOURCE FOR FORECASTS ---
         "analyst_ratings": asyncio.to_thread(yahoo_service.get_analyst_recommendations, symbol),
         "price_target_consensus": asyncio.to_thread(yahoo_service.get_price_target_data, symbol),
+        "annual_income_statements": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "income-statement", "annual", 3),
+        "annual_balance_sheets": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "balance-sheet-statement", "annual", 3),
+        "annual_cash_flow_statements": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "cash-flow-statement", "annual", 3),
     }
-
-    # Run all tasks concurrently.
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     data = dict(zip(tasks.keys(), results))
-
-    # --- Technical Indicator calculation is now 100% yfinance-based for reliability ---
-    print(f"Calculating technical indicators for {symbol} via Yahoo Finance.")
-    hist_df = await asyncio.to_thread(yahoo_service.get_historical_data, symbol, "1y")
-    calculated_technicals = await asyncio.to_thread(yahoo_service.calculate_technical_indicators, hist_df)
-    data['technical_indicators'] = calculated_technicals
+    data['annual_revenue_and_profit'] = data.pop('annual_income_statements')
     
-    # Handle any errors that may have occurred during the async calls.
+    hist_df = await asyncio.to_thread(yahoo_service.get_historical_data, symbol, "1y")
+    data['technical_indicators'] = await asyncio.to_thread(yahoo_service.calculate_technical_indicators, hist_df)
+    
     for key, value in data.items():
         if isinstance(value, Exception):
-            print(f"Error fetching '{key}' for {symbol}: {value}")
-            data[key] = {} if isinstance(data[key], dict) else []
+            data[key] = {} if isinstance(data.get(key), dict) else []
+
+    piotroski_data = fundamental_service.calculate_piotroski_f_score(
+        data.get("annual_revenue_and_profit", []),
+        data.get("annual_balance_sheets", []),
+        data.get("annual_cash_flow_statements", [])
+    )
+    data['piotroski_f_score'] = piotroski_data
+
+    profile_data = data.get('profile', [{}])[0] if isinstance(data.get('profile'), list) else data.get('profile', {})
+    tv_symbol = symbol
+    if symbol.endswith(".NS"):
+        tv_symbol = "NSE:" + symbol.replace(".NS", "")
+    elif symbol.endswith(".BO"):
+        tv_symbol = "BSE:" + symbol.replace(".BO", "")
+    profile_data['tradingview_symbol'] = tv_symbol
+    data['profile'] = profile_data
     
-    # Clean up data that comes back as a list.
-    data['profile'] = data['profile'][0] if isinstance(data['profile'], list) and data['profile'] else data.get('profile', {})
     data['quote'] = data['quote'][0] if isinstance(data['quote'], list) and data['quote'] else data.get('quote', {})
+    
+    # --- THIS IS THE CRITICAL FIX ---
+    # We must clean the key_metrics data and ensure the clean version is in the final object.
+    # This provides the correct data to the 'Fundamentals' tab.
     data['key_metrics'] = data['key_metrics'][0] if isinstance(data['key_metrics'], list) and data['key_metrics'] else data.get('key_metrics', {})
     
-    # Consolidate Key Stats into a single, clean object for the frontend.
-    profile_data = data.get('profile', {})
     quote_data = data.get('quote', {})
     metrics_data = data.get('key_metrics', {})
     estimates_data = data.get('analyst_estimates', {})
