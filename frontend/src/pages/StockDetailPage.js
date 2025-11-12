@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
 
-// --- (All imports are unchanged) ---
+// --- Imports for all our high-end components ---
 import StockHeader from '../components/Header/StockHeader';
 import Financials from '../components/Financials/Financials';
 import Shareholding from '../components/Shareholding/Shareholding';
@@ -14,29 +14,103 @@ import NewsList from '../components/News/NewsList';
 import { Tabs, TabPanel } from '../components/common/Tabs/Tabs';
 import Forecasts from '../components/Forecasts/Forecasts';
 import Fundamentals from '../components/Fundamentals/Fundamentals';
+import OverallSentiment from '../components/Sentiment/OverallSentiment';
 
-// --- (All styled components are unchanged) ---
-const fadeIn = keyframes`from {opacity: 0;} to {opacity: 1;}`;
-const StockDetailPageContainer = styled.div`padding: 2rem 3rem; max-width: 1800px; margin: 0 auto; animation: ${fadeIn} 0.5s ease-in;`;
-const TabContentGrid = styled.div`display: grid; grid-template-columns: 2fr 1fr; gap: 2rem; @media (max-width: 1200px) {grid-template-columns: 1fr;}`;
-const LeftColumn = styled.div`display: flex; flex-direction: column; gap: 2rem;`;
-const RightColumn = styled.div`display: flex; flex-direction: column; gap: 2rem;`;
-const LoadingContainer = styled.div`display: flex; flex-direction: column; align-items: center; justify-content: center; height: 90vh; color: var(--color-primary); font-size: 1.5rem;`;
-const ErrorContainer = styled(LoadingContainer)`color: var(--color-danger);`;
-const BackButton = styled.button`background: none; border: 1px solid var(--color-border); color: var(--color-text-secondary); padding: 8px 16px; border-radius: 20px; cursor: pointer; font-size: 0.9rem; margin-bottom: 2rem; transition: all 0.2s ease; &:hover {background-color: var(--color-secondary); color: var(--color-text-primary);}`;
+// --- Styled Components for the page layout ---
 
-// --- (The main React component logic is unchanged) ---
+const fadeIn = keyframes`
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+`;
+
+const StockDetailPageContainer = styled.div`
+  padding: 2rem 3rem;
+  max-width: 1800px;
+  margin: 0 auto;
+  animation: ${fadeIn} 0.5s ease-in;
+`;
+
+const TabContentGrid = styled.div`
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 2rem;
+
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const LeftColumn = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+`;
+
+const RightColumn = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+`;
+
+const LoadingContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 90vh;
+  color: var(--color-primary);
+  font-size: 1.5rem;
+`;
+
+const ErrorContainer = styled(LoadingContainer)`
+  color: var(--color-danger);
+`;
+
+const BackButton = styled.button`
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  padding: 8px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  margin-bottom: 2rem;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background-color: var(--color-secondary);
+    color: var(--color-text-primary);
+  }
+`;
+
+// --- The Final, Architecturally Correct Page Component ---
+
 const StockDetailPage = () => {
   const { symbol } = useParams();
   const navigate = useNavigate();
+  
   const [stockData, setStockData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const [swotAnalysis, setSwotAnalysis] = useState('');
+  const [isLoadingSwot, setIsLoadingSwot] = useState(true);
+  const [philosophyAssessment, setPhilosophyAssessment] = useState('');
+  const [canslimAssessment, setCanslimAssessment] = useState('');
+  const [isLoadingPhilosophy, setIsLoadingPhilosophy] = useState(true);
+  const [isLoadingCanslim, setIsLoadingCanslim] = useState(true);
 
   useEffect(() => {
     const fetchAllData = async () => {
       setIsLoading(true);
       setError(null);
+      setSwotAnalysis('');
+      setPhilosophyAssessment('');
+      setCanslimAssessment('');
       try {
         const response = await axios.get(`/api/stocks/${symbol}/all`);
         setStockData(response.data);
@@ -50,9 +124,76 @@ const StockDetailPage = () => {
     fetchAllData();
   }, [symbol]);
 
-  if (isLoading) { return <LoadingContainer><p>Loading Financial Universe for {symbol}...</p></LoadingContainer>; }
-  if (error) { return (<ErrorContainer><h2>An Error Occurred</h2><p>{error}</p><BackButton style={{ marginTop: '2rem' }} onClick={() => navigate('/')}>Go Back to Search</BackButton></ErrorContainer>); }
-  if (!stockData) { return null; }
+  useEffect(() => {
+    if (!stockData) return;
+
+    const fetchSwotAnalysis = async () => {
+      if (!stockData.profile?.description) { setIsLoadingSwot(false); return; }
+      setIsLoadingSwot(true);
+      try {
+        const payload = { companyName: stockData.profile.companyName, description: stockData.profile.description };
+        const response = await axios.post(`/api/stocks/${symbol}/swot`, payload);
+        setSwotAnalysis(response.data.swot_analysis);
+      } catch (error) { setSwotAnalysis("Could not generate SWOT analysis."); } finally { setIsLoadingSwot(false); }
+    };
+
+    const fetchPhilosophyAssessment = async () => {
+      if (!stockData.profile || !stockData.key_metrics) { setIsLoadingPhilosophy(false); return; }
+      setIsLoadingPhilosophy(true);
+      try {
+        const payload = { companyName: stockData.profile.companyName, keyMetrics: stockData.key_metrics };
+        const response = await axios.post(`/api/stocks/${symbol}/fundamental-analysis`, payload);
+        setPhilosophyAssessment(response.data.assessment);
+      } catch (error) { setPhilosophyAssessment("Could not generate AI assessment."); } finally { setIsLoadingPhilosophy(false); }
+    };
+    
+    const fetchCanslimAssessment = async () => {
+      if (!stockData.profile || !stockData.quote || !stockData.quarterly_income_statements) { setIsLoadingCanslim(false); return; }
+      setIsLoadingCanslim(true);
+      try {
+        const payload = {
+          companyName: stockData.profile.companyName, quote: stockData.quote, quarterlyEarnings: stockData.quarterly_income_statements,
+          annualEarnings: stockData.annual_revenue_and_profit, institutionalHolders: stockData.shareholding.length,
+        };
+        const response = await axios.post(`/api/stocks/${symbol}/canslim-analysis`, payload);
+        setCanslimAssessment(response.data.assessment);
+      } catch (error) { setCanslimAssessment("Could not generate CANSLIM assessment."); } finally { setIsLoadingCanslim(false); }
+    };
+
+    const swotTimer = setTimeout(fetchSwotAnalysis, 100);
+    const philosophyTimer = setTimeout(fetchPhilosophyAssessment, 300);
+    const canslimTimer = setTimeout(fetchCanslimAssessment, 500);
+
+    return () => {
+      clearTimeout(swotTimer);
+      clearTimeout(philosophyTimer);
+      clearTimeout(canslimTimer);
+    };
+  }, [stockData, symbol]);
+
+  if (isLoading) {
+    return (
+      <LoadingContainer>
+        <p>Loading Financial Universe for {symbol}...</p>
+      </LoadingContainer>
+    );
+  }
+
+  if (error) {
+    return (
+      <ErrorContainer>
+        <h2>An Error Occurred</h2>
+        <p>{error}</p>
+        <BackButton style={{ marginTop: '2rem' }} onClick={() => navigate('/')}>
+          Go Back to Search
+        </BackButton>
+      </ErrorContainer>
+    );
+  }
+
+  if (!stockData) {
+    return null;
+  }
 
   const tradingViewSymbol = stockData.profile?.tradingview_symbol || symbol;
 
@@ -67,13 +208,13 @@ const StockDetailPage = () => {
           <TabContentGrid>
             <LeftColumn>
               <TradingViewChart symbol={tradingViewSymbol} />
-              <Technicals 
-                analystRatings={stockData.analyst_ratings} 
-                technicalIndicators={stockData.technical_indicators} 
+              <SwotAnalysis
+                analysisText={swotAnalysis}
+                isLoading={isLoadingSwot}
               />
             </LeftColumn>
             <RightColumn>
-              <SwotAnalysis symbol={symbol} profile={stockData.profile} delay={100} />
+              <OverallSentiment sentimentData={stockData.overall_sentiment} />
               <NewsList newsArticles={stockData.news} />
             </RightColumn>
           </TabContentGrid>
@@ -82,14 +223,20 @@ const StockDetailPage = () => {
         <TabPanel label="Fundamentals">
             <Fundamentals
                 symbol={symbol}
-    profile={stockData.profile}
-    quote={stockData.quote}
-    keyMetrics={stockData.key_metrics}
-    piotroskiData={stockData.piotroski_f_score}
-    quarterlyEarnings={stockData.quarterly_income_statements}
-    annualEarnings={stockData.annual_revenue_and_profit}
-    shareholding={stockData.shareholding}
-    delay={300} 
+                profile={stockData.profile}
+                quote={stockData.quote}
+                keyMetrics={stockData.key_metrics}
+                piotroskiData={stockData.piotroski_f_score}
+                darvasScanData={stockData.darvas_scan}
+                grahamScanData={stockData.graham_scan}
+                quarterlyEarnings={stockData.quarterly_income_statements}
+                annualEarnings={stockData.annual_revenue_and_profit}
+                shareholding={stockData.shareholding}
+                delay={300}
+                philosophyAssessment={philosophyAssessment}
+                canslimAssessment={canslimAssessment}
+                isLoadingPhilosophy={isLoadingPhilosophy}
+                isLoadingCanslim={isLoadingCanslim}
             />
         </TabPanel>
 
@@ -113,7 +260,6 @@ const StockDetailPage = () => {
             />
         </TabPanel>
         
-        {/* --- THIS IS THE UPDATED PART --- */}
         <TabPanel label="Shareholding">
             <Shareholding 
                 shareholdingData={stockData.shareholding}
@@ -122,7 +268,10 @@ const StockDetailPage = () => {
         </TabPanel>
         
         <TabPanel label="Technicals">
-            <div>More Detailed Technicals Coming Soon...</div>
+            <Technicals 
+              analystRatings={stockData.analyst_ratings} 
+              technicalIndicators={stockData.technical_indicators} 
+            />
         </TabPanel>
       </Tabs>
     </StockDetailPageContainer>

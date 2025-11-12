@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import styled from 'styled-components';
 
-// --- Styled Components ---
+// --- (Styled Components are mostly unchanged) ---
 
 const TabsContainer = styled.div`
   width: 100%;
@@ -27,11 +27,10 @@ const TabButton = styled.button`
     color: var(--color-text-primary);
   }
 
-  /* The active tab indicator line, just like the reference */
   &::after {
     content: '';
     position: absolute;
-    bottom: -2px; /* Sits perfectly on top of the container's border */
+    bottom: -2px;
     left: 0;
     width: 100%;
     height: 2px;
@@ -42,14 +41,20 @@ const TabButton = styled.button`
   }
 `;
 
-const TabContent = styled.div`
-  padding: 2rem 0; /* Add some space above and below the tab content */
+const TabContentContainer = styled.div`
+  padding: 2rem 0;
 `;
 
-// --- The Main Tabs Component ---
+// --- THIS IS THE NEW, INTELLIGENT TAB PANEL WRAPPER ---
+const TabPanelWrapper = styled.div`
+  /* If this panel is not the active one, we HIDE it instead of destroying it. */
+  display: ${({ active }) => (active ? 'block' : 'none')};
+`;
+
+
+// --- The Upgraded Tabs Component ---
 
 const Tabs = ({ children }) => {
-  // Use the first child's label as the default active tab
   const [activeTab, setActiveTab] = useState(children[0].props.label);
 
   const handleClick = (e, newActiveTab) => {
@@ -60,7 +65,6 @@ const Tabs = ({ children }) => {
   return (
     <TabsContainer>
       <TabList>
-        {/* Map over the children to create the tab buttons */}
         {children.map(child => (
           <TabButton
             key={child.props.label}
@@ -71,21 +75,22 @@ const Tabs = ({ children }) => {
           </TabButton>
         ))}
       </TabList>
-      <TabContent>
-        {/* Map over the children again to display the content of the active tab */}
-        {children.map(child => {
-          if (child.props.label === activeTab) {
-            return <div key={child.props.label}>{child.props.children}</div>;
-          }
-          return null;
-        })}
-      </TabContent>
+      <TabContentContainer>
+        {/* We now map over the children and wrap each one in our new intelligent wrapper */}
+        {children.map(child => (
+          <TabPanelWrapper
+            key={child.props.label}
+            active={activeTab === child.props.label}
+          >
+            {child.props.children}
+          </TabPanelWrapper>
+        ))}
+      </TabContentContainer>
     </TabsContainer>
   );
 };
 
-// This is a simple "dummy" component that just holds content.
-// We export it from here for convenience.
+// The TabPanel component remains a simple "dummy" component.
 const TabPanel = ({ label, children }) => {
   return <div label={label}>{children}</div>;
 };

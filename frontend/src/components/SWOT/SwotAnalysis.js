@@ -1,112 +1,170 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
-import Card from '../common/Card';
-import axios from 'axios';
+import Card from '../common/Card'; // We will now use our master Card component for each quadrant.
 
-// --- (Styled Components are unchanged) ---
-const fadeIn = keyframes`from { opacity: 0; } to { opacity: 1; }`;
-const Loader = styled.div`display: flex; align-items: center; justify-content: center; height: 200px; color: var(--color-primary); animation: ${fadeIn} 0.5s ease-in;`;
-const TabContainer = styled.div`display: flex; margin-bottom: 1.5rem; border-bottom: 1px solid var(--color-border);`;
-const TabButton = styled.button`padding: 10px 20px; border: none; background-color: transparent; color: ${({ active }) => (active ? 'var(--color-primary)' : 'var(--color-text-secondary)')}; font-size: 1rem; font-weight: 600; cursor: pointer; position: relative; transition: color 0.3s ease; &::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 100%; height: 2px; background-color: var(--color-primary); transform: ${({ active }) => (active ? 'scaleX(1)' : 'scaleX(0)')}; transition: transform 0.3s ease; }`;
-const ContentContainer = styled.div`min-height: 200px; animation: ${fadeIn} 0.5s ease-in;`;
-const SwotList = styled.ul`list-style-type: none; padding-left: 0;`;
-const SwotListItem = styled.li`margin-bottom: 0.75rem; color: var(--color-text-primary); line-height: 1.6; &::before { content: '✓'; color: var(--color-success); margin-right: 10px; font-weight: bold; }`;
+// --- Styled Components & Animations for the new design ---
 
+const fadeIn = keyframes`
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+`;
 
-// --- The Updated React Component ---
+const Loader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--color-primary);
+  animation: ${fadeIn} 0.5s ease-in;
+`;
 
-// The component now accepts the 'delay' prop
-const SwotAnalysis = ({ symbol, profile, delay }) => {
-  const [analysisText, setAnalysisText] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('Strengths');
+// This grid will hold our four individual Card components, creating the quadrant effect.
+const SwotCardGrid = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  animation: ${fadeIn} 0.5s ease-in;
 
-  useEffect(() => {
-    const fetchSwotData = async () => {
-      if (!symbol || !profile || !profile.companyName || !profile.description) {
-        setIsLoading(false);
-        return;
-      }
-      
-      setIsLoading(true);
-      try {
-        const payload = {
-            companyName: profile.companyName,
-            description: profile.description,
-        };
-        const response = await axios.post(`/api/stocks/${symbol}/swot`, payload);
-        setAnalysisText(response.data.swot_analysis);
-      } catch (error) {
-        console.error("Failed to fetch SWOT analysis:", error);
-        setAnalysisText('');
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  /* On smaller screens, stack the cards vertically */
+  @media (max-width: 992px) {
+    grid-template-columns: 1fr;
+  }
+`;
 
-    // --- NEW DELAY LOGIC ---
-    // We wrap the API call in a setTimeout to stagger the request.
-    const timer = setTimeout(() => {
-        fetchSwotData();
-    }, delay || 0); // Use the delay prop, or default to 0ms.
+// We no longer need the custom QuadrantTitle, as our Card component has its own title prop.
+const SwotList = styled.ul`
+  list-style-type: none;
+  padding-left: 0;
+  margin-top: 0; /* Adjusted for better spacing inside the card */
+`;
 
-    // This is a cleanup function to prevent errors if the component unmounts.
-    return () => clearTimeout(timer);
+const SwotListItem = styled.li`
+  margin-bottom: 0.75rem;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  padding-left: 1.5rem;
+  position: relative;
 
-  }, [symbol, profile, delay]); // Added 'delay' to the dependency array
+  &::before {
+    content: '•';
+    color: var(--color-primary);
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-size: 1.2rem;
+    line-height: 1.6;
+  }
 
-  // --- (The rest of the component logic is unchanged) ---
+  &:last-child {
+      margin-bottom: 0;
+  }
+`;
+
+// --- The Final, Redesigned "Display Only" Component ---
+
+const SwotAnalysis = ({ analysisText, isLoading }) => {
+
+  // useMemo ensures this complex parsing only runs when the AI text changes.
   const swotData = useMemo(() => {
-    if (!analysisText) return {};
+    if (!analysisText) {
+      return null;
+    }
+
     const sections = ['Strengths', 'Weaknesses', 'Opportunities', 'Threats'];
-    const data = {};
-    const parts = analysisText.split(/\n(?=Strengths|Weaknesses|Opportunities|Threats)/);
-    parts.forEach(part => {
-      const trimmedPart = part.trim();
-      for (const section of sections) {
-        if (trimmedPart.startsWith(section)) {
-          data[section] = trimmedPart.replace(new RegExp(`^${section}:?`, 'i'), '').trim().split(/-\s|\*\s|\n/).map(item => item.trim()).filter(Boolean);
+    const data = {
+      Strengths: [],
+      Weaknesses: [],
+      Opportunities: [],
+      Threats: []
+    };
+    
+    // Split the entire text block into individual lines for robust processing.
+    const lines = analysisText.split('\n');
+    let currentSection = null;
+
+    // We iterate through each line of the AI's response.
+    lines.forEach(line => {
+      const trimmedLine = line.trim();
+
+      // Check if the current line is a new section header.
+      const foundSection = sections.find(section => trimmedLine.includes(`**${section}**`));
+      
+      if (foundSection) {
+        // If it's a header, we update our state to know which section we are in.
+        currentSection = foundSection;
+      } else if (currentSection && (trimmedLine.startsWith('*') || trimmedLine.startsWith('-'))) {
+        // If we are inside a section and the line is a bullet point, we clean and add it.
+        const point = trimmedLine
+            .replace(/^[\*\-]\s?/, '') // Remove the leading '*' or '-'
+            .replace(/\*\*.*?\*\*/g, '') // Remove any extra bolded text
+            .trim();
+        
+        if (point) {
+          data[currentSection].push(point);
         }
       }
     });
+
     return data;
   }, [analysisText]);
 
-  const tabs = Object.keys(swotData);
+  // --- RENDER LOGIC ---
 
   if (isLoading) {
     return (
-        <Card title="AI-Powered SWOT Analysis">
-            <Loader>Generating AI analysis...</Loader>
-        </Card>
+      <Card title="AI-Powered SWOT Analysis">
+        <Loader>Generating AI analysis...</Loader>
+      </Card>
     );
   }
 
-  if (tabs.length === 0) {
+  // If parsing failed or the AI returned no valid points, show the raw text as a safe fallback.
+  if (!swotData || Object.values(swotData).every(arr => arr.length === 0)) {
     return (
-        <Card title="AI-Powered SWOT Analysis">
-            <p>Could not generate SWOT analysis for this stock.</p>
-        </Card>
+      <Card title="AI-Powered SWOT Analysis">
+        <p style={{ lineHeight: 1.7, color: 'var(--color-text-secondary)' }}>
+          {analysisText || "Could not generate SWOT analysis for this stock."}
+        </p>
+      </Card>
     );
   }
 
+  // If we have data, render the new, robust, and beautiful four-card layout.
   return (
-    <Card title="AI-Powered SWOT Analysis">
-      <TabContainer>
-        {tabs.map(tab => (
-          <TabButton key={tab} active={activeTab === tab} onClick={() => setActiveTab(tab)}>
-            {tab}
-          </TabButton>
-        ))}
-      </TabContainer>
-      <ContentContainer>
-        <SwotList>
-          {swotData[activeTab] && swotData[activeTab].map((item, index) => (
-            <SwotListItem key={index}>{item}</SwotListItem>
-          ))}
-        </SwotList>
-      </ContentContainer>
-    </Card>
+    <div>
+      <h2 style={{ fontSize: '1.8rem', fontWeight: 600, marginBottom: '1.5rem', color: 'var(--color-text-primary)' }}>
+        AI-Powered SWOT Analysis
+      </h2>
+      <SwotCardGrid>
+        <Card title="Strengths">
+          <SwotList>
+            {swotData.Strengths.map((item, index) => <SwotListItem key={`s-${index}`}>{item}</SwotListItem>)}
+          </SwotList>
+        </Card>
+        
+        <Card title="Weaknesses">
+          <SwotList>
+            {swotData.Weaknesses.map((item, index) => <SwotListItem key={`w-${index}`}>{item}</SwotListItem>)}
+          </SwotList>
+        </Card>
+        
+        <Card title="Opportunities">
+          <SwotList>
+            {swotData.Opportunities.map((item, index) => <SwotListItem key={`o-${index}`}>{item}</SwotListItem>)}
+          </SwotList>
+        </Card>
+        
+        <Card title="Threats">
+          <SwotList>
+            {swotData.Threats.map((item, index) => <SwotListItem key={`t-${index}`}>{item}</SwotListItem>)}
+          </SwotList>
+        </Card>
+      </SwotCardGrid>
+    </div>
   );
 };
 

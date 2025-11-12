@@ -1,15 +1,25 @@
 import asyncio
 from fastapi import APIRouter, HTTPException, Query, Body
-from ..services import fmp_service, yahoo_service, news_service, gemini_service, fundamental_service
+from ..services import fmp_service, yahoo_service, news_service, gemini_service, fundamental_service, technical_service, sentiment_service
 from pydantic import BaseModel
 from typing import List, Dict, Any
 
-# --- (All models are unchanged, just adding a new one) ---
-class SwotRequest(BaseModel): companyName: str; description: str
-class ForecastRequest(BaseModel): companyName: str; analystRatings: List[Dict[str, Any]]; priceTarget: Dict[str, Any]; keyStats: Dict[str, Any]; newsHeadlines: List[str]
-class FundamentalRequest(BaseModel): companyName: str; keyMetrics: Dict[str, Any]
+# --- Data Models for all POST requests ---
+class SwotRequest(BaseModel):
+    companyName: str
+    description: str
 
-# --- NEW DATA MODEL for CANSLIM ---
+class ForecastRequest(BaseModel):
+    companyName: str
+    analystRatings: List[Dict[str, Any]]
+    priceTarget: Dict[str, Any]
+    keyStats: Dict[str, Any]
+    newsHeadlines: List[str]
+
+class FundamentalRequest(BaseModel):
+    companyName: str
+    keyMetrics: Dict[str, Any]
+
 class CanslimRequest(BaseModel):
     companyName: str
     quote: Dict[str, Any]
@@ -19,42 +29,53 @@ class CanslimRequest(BaseModel):
 
 router = APIRouter()
 
-# --- (search, swot, forecast, fundamental endpoints are unchanged) ---
+# --- All lazy-loading endpoints ---
 @router.get("/search")
 async def search_stock_ticker(query: str = Query(..., min_length=2)):
-    # ... code unchanged
     ticker = gemini_service.get_ticker_from_query(query)
-    if ticker in ["NOT_FOUND", "ERROR"]: raise HTTPException(status_code=404, detail=f"Could not find a ticker for '{query}'")
+    if ticker in ["NOT_FOUND", "ERROR"]:
+        raise HTTPException(status_code=404, detail=f"Could not find a ticker for '{query}'")
     return {"symbol": ticker}
+
 @router.post("/{symbol}/swot")
 async def get_swot_analysis(symbol: str, request_data: SwotRequest = Body(...)):
-    # ... code unchanged
     print(f"Received SWOT request for {symbol}...")
     news_articles = await asyncio.to_thread(news_service.get_company_news, request_data.companyName)
     news_headlines = [article.get('title', '') for article in news_articles[:10]]
-    swot_analysis = await asyncio.to_thread(gemini_service.generate_swot_analysis, request_data.companyName, request_data.description, news_headlines)
+    swot_analysis = await asyncio.to_thread(
+        gemini_service.generate_swot_analysis,
+        request_data.companyName,
+        request_data.description,
+        news_headlines
+    )
     return {"swot_analysis": swot_analysis}
+
 @router.post("/{symbol}/forecast-analysis")
 async def get_forecast_analysis(symbol: str, request_data: ForecastRequest = Body(...)):
-    # ... code unchanged
     print(f"Received AI Forecast Analysis request for {symbol}...")
-    analysis = await asyncio.to_thread(gemini_service.generate_forecast_analysis, company_name=request_data.companyName, analyst_ratings=request_data.analystRatings, price_target=request_data.priceTarget, key_stats=request_data.keyStats, news_headlines=request_data.newsHeadlines)
+    analysis = await asyncio.to_thread(
+        gemini_service.generate_forecast_analysis,
+        company_name=request_data.companyName,
+        analyst_ratings=request_data.analystRatings,
+        price_target=request_data.priceTarget,
+        key_stats=request_data.keyStats,
+        news_headlines=request_data.newsHeadlines
+    )
     return {"analysis": analysis}
+
 @router.post("/{symbol}/fundamental-analysis")
 async def get_fundamental_analysis(symbol: str, request_data: FundamentalRequest = Body(...)):
-    # ... code unchanged
     print(f"Received AI Fundamental Analysis request for {symbol}...")
-    assessment = await asyncio.to_thread(gemini_service.generate_investment_philosophy_assessment, company_name=request_data.companyName, key_metrics=request_data.keyMetrics)
+    assessment = await asyncio.to_thread(
+        gemini_service.generate_investment_philosophy_assessment,
+        company_name=request_data.companyName,
+        key_metrics=request_data.keyMetrics
+    )
     return {"assessment": assessment}
 
-# --- NEW DEDICATED ENDPOINT FOR AI CANSLIM ANALYSIS ---
 @router.post("/{symbol}/canslim-analysis")
 async def get_canslim_analysis(symbol: str, request_data: CanslimRequest = Body(...)):
-    """
-    This endpoint is dedicated to generating the AI-powered CANSLIM assessment.
-    """
     print(f"Received AI CANSLIM Analysis request for {symbol}...")
-    
     assessment = await asyncio.to_thread(
         gemini_service.generate_canslim_assessment,
         company_name=request_data.companyName,
@@ -66,63 +87,109 @@ async def get_canslim_analysis(symbol: str, request_data: CanslimRequest = Body(
     return {"assessment": assessment}
 
 
+# --- THE ULTIMATE DATA FETCHING ENDPOINT, CORRECTED ---
 @router.get("/{symbol}/all")
 async def get_all_stock_data(symbol: str):
     """
-    Main endpoint, now upgraded to fetch QUARTERLY financial data for CANSLIM analysis.
+    This definitive endpoint fetches all required data from FMP and Yahoo Finance
+    concurrently, intelligently merges it, and runs all necessary calculations.
     """
+    # Step 1: Define all data fetching tasks from all sources
     tasks = {
-        "profile": asyncio.to_thread(fmp_service.get_company_profile, symbol),
-        "quote": asyncio.to_thread(fmp_service.get_quote, symbol),
-        "key_metrics": asyncio.to_thread(fmp_service.get_key_metrics, symbol, "annual", 1),
-        "analyst_estimates": asyncio.to_thread(fmp_service.get_analyst_estimates, symbol),
+        "fmp_profile": asyncio.to_thread(fmp_service.get_company_profile, symbol),
+        "fmp_quote": asyncio.to_thread(fmp_service.get_quote, symbol),
+        # THIS IS THE CRITICAL FIX: Requesting 1 year of key_metrics is reliable.
+        "fmp_key_metrics": asyncio.to_thread(fmp_service.get_key_metrics, symbol, "annual", 1),
+        "fmp_income_5y": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "income-statement", "annual", 5),
+        "fmp_balance_5y": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "balance-sheet-statement", "annual", 5),
+        "fmp_cash_flow_3y": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "cash-flow-statement", "annual", 3),
+        "fmp_quarterly_income": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "income-statement", "quarter", 5),
         "shareholding": asyncio.to_thread(fmp_service.get_shareholding_data, symbol),
         "news": asyncio.to_thread(news_service.get_company_news, symbol),
-        "analyst_ratings": asyncio.to_thread(yahoo_service.get_analyst_recommendations, symbol),
-        "price_target_consensus": asyncio.to_thread(yahoo_service.get_price_target_data, symbol),
-        "annual_income_statements": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "income-statement", "annual", 3),
-        "annual_balance_sheets": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "balance-sheet-statement", "annual", 3),
-        "annual_cash_flow_statements": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "cash-flow-statement", "annual", 3),
-        # --- NEW TASK FOR CANSLIM ---
-        "quarterly_income_statements": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "income-statement", "quarter", 5),
+        "yf_recommendations": asyncio.to_thread(yahoo_service.get_analyst_recommendations, symbol),
+        "yf_price_target": asyncio.to_thread(yahoo_service.get_price_target_data, symbol),
+        "yf_historical_financials": asyncio.to_thread(yahoo_service.get_historical_financials, symbol),
+        "yf_key_fundamentals": asyncio.to_thread(yahoo_service.get_key_fundamentals, symbol),
     }
-    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-    data = dict(zip(tasks.keys(), results))
-    data['annual_revenue_and_profit'] = data.pop('annual_income_statements')
-    
-    # ... (Fallback, Error Handling, and all other processing is unchanged) ...
-    for key, value in data.items():
-        if isinstance(value, Exception): data[key] = {} if isinstance(data[key], dict) else []
-    
-    key_metrics = data.get('key_metrics', [{}])[0] if isinstance(data.get('key_metrics'), list) else data.get('key_metrics', {})
-    if not key_metrics or not key_metrics.get('peRatioTTM') or not key_metrics.get('earningsYieldTTM'):
-        yahoo_fundamentals = await asyncio.to_thread(yahoo_service.get_key_fundamentals, symbol)
-        key_metrics.update(yahoo_fundamentals)
-    data['key_metrics'] = key_metrics
-    
-    hist_df = await asyncio.to_thread(yahoo_service.get_historical_data, symbol, "1y")
-    data['technical_indicators'] = await asyncio.to_thread(yahoo_service.calculate_technical_indicators, hist_df)
-    
-    piotroski_data = fundamental_service.calculate_piotroski_f_score(data.get("annual_revenue_and_profit", []), data.get("annual_balance_sheets", []), data.get("annual_cash_flow_statements", []))
-    data['piotroski_f_score'] = piotroski_data
 
-    profile_data = data.get('profile', [{}])[0] if isinstance(data.get('profile'), list) else data.get('profile', {})
+    # Step 2: Run all tasks concurrently
+    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+    raw_data = dict(zip(tasks.keys(), results))
+
+    # Step 3: Intelligent Merging and Data Assembly
+    final_data = {}
+
+    # Handle any errors that may have occurred during the async calls.
+    for key, value in raw_data.items():
+        if isinstance(value, Exception):
+            print(f"Error during async fetch for '{key}': {value}")
+            raw_data[key] = {} if isinstance(raw_data.get(key), dict) else []
+    
+    # Merge Profile and Quote
+    final_data['profile'] = raw_data.get('fmp_profile', [{}])[0] if isinstance(raw_data.get('fmp_profile'), list) else raw_data.get('fmp_profile', {})
+    final_data['quote'] = raw_data.get('fmp_quote', [{}])[0] if isinstance(raw_data.get('fmp_quote'), list) else raw_data.get('fmp_quote', {})
+    
+    # Merge Key Metrics (Prioritize YF, fill with FMP)
+    fmp_metrics_latest = raw_data.get('fmp_key_metrics', [{}])[0] if isinstance(raw_data.get('fmp_key_metrics'), list) else raw_data.get('fmp_key_metrics', {})
+    yf_fundamentals = raw_data.get('yf_key_fundamentals', {})
+    merged_metrics = yf_fundamentals.copy()
+    merged_metrics.update(fmp_metrics_latest)
+    final_data['key_metrics'] = merged_metrics
+
+    # Merge Financial Statements for calculations (Prioritize FMP, fill with YF)
+    fmp_income = raw_data.get('fmp_income_5y', [])
+    yf_income = raw_data.get('yf_historical_financials', {}).get('income', [])
+    income_statements = fmp_income if len(fmp_income) >= 3 else yf_income
+    final_data['annual_revenue_and_profit'] = income_statements
+    
+    fmp_balance = raw_data.get('fmp_balance_5y', [])
+    yf_balance = raw_data.get('yf_historical_financials', {}).get('balance', [])
+    balance_sheets = fmp_balance if len(fmp_balance) >= 2 else yf_balance
+    
+    fmp_cash_flow = raw_data.get('fmp_cash_flow_3y', [])
+    yf_cash_flow = raw_data.get('yf_historical_financials', {}).get('cash_flow', [])
+    cash_flow_statements = fmp_cash_flow if len(fmp_cash_flow) >= 2 else yf_cash_flow
+    
+    final_data['quarterly_income_statements'] = raw_data.get('fmp_quarterly_income', [])
+
+    # Step 4: Run All Calculations on the Final, Merged Data
+    final_data['piotroski_f_score'] = fundamental_service.calculate_piotroski_f_score(income_statements, balance_sheets, cash_flow_statements)
+    final_data['graham_scan'] = fundamental_service.calculate_graham_scan(final_data['profile'], final_data['key_metrics'], income_statements)
+
+    hist_df = await asyncio.to_thread(yahoo_service.get_historical_data, symbol, "1y")
+    final_data['technical_indicators'] = await asyncio.to_thread(yahoo_service.calculate_technical_indicators, hist_df)
+    final_data['darvas_scan'] = technical_service.calculate_darvas_box(hist_df, final_data['quote'])
+    
+    final_data['overall_sentiment'] = sentiment_service.calculate_overall_sentiment(
+        piotroski_score=final_data['piotroski_f_score'].get('score'),
+        pe_ratio=final_data['key_metrics'].get('peRatioTTM'),
+        analyst_ratings=raw_data.get('yf_recommendations', []),
+        rsi=final_data['technical_indicators'].get('rsi')
+    )
+
+    # Step 5: Add Remaining Data and Finalize
+    final_data['shareholding'] = raw_data.get('shareholding', [])
+    final_data['news'] = raw_data.get('news', [])
+    final_data['analyst_ratings'] = raw_data.get('yf_recommendations', [])
+    final_data['price_target_consensus'] = raw_data.get('yf_price_target', {})
+
     tv_symbol = symbol
-    if symbol.endswith(".NS"): tv_symbol = "BSE:" + symbol.replace(".NS", "")
+    if symbol.endswith(".NS"): tv_symbol = "NSE:" + symbol.replace(".NS", "")
     elif symbol.endswith(".BO"): tv_symbol = "BSE:" + symbol.replace(".BO", "")
-    profile_data['tradingview_symbol'] = tv_symbol
-    data['profile'] = profile_data
-    
-    data['quote'] = data['quote'][0] if isinstance(data['quote'], list) and data['quote'] else data.get('quote', {})
-    
-    quote_data, metrics_data, estimates_data = data.get('quote',{}), data.get('key_metrics',{}), data.get('analyst_estimates',{})
-    data['keyStats'] = {
-        "marketCap": profile_data.get('mktCap'), "dividendYield": metrics_data.get('dividendYieldTTM'),
-        "peRatio": metrics_data.get('peRatioTTM'), "basicEPS": metrics_data.get('epsTTM'),
-        "netIncome": metrics_data.get('netIncomePerShareTTM'), "revenue": metrics_data.get('revenuePerShareTTM'),
-        "sharesFloat": quote_data.get('sharesOutstanding'), "beta": profile_data.get('beta'),
-        "employees": profile_data.get('fullTimeEmployees'), "nextReportDate": estimates_data.get('date'),
-        "epsEstimate": estimates_data.get('estimatedEpsAvg'), "revenueEstimate": estimates_data.get('estimatedRevenueAvg'),
+    final_data['profile']['tradingview_symbol'] = tv_symbol
+
+    keyStats_metrics = final_data.get('key_metrics', {})
+    keyStats_profile = final_data.get('profile', {})
+    keyStats_quote = final_data.get('quote', {})
+    keyStats_estimates = raw_data.get('analyst_estimates', {})
+
+    final_data['keyStats'] = {
+        "marketCap": keyStats_profile.get('mktCap'), "dividendYield": keyStats_metrics.get('dividendYieldTTM'),
+        "peRatio": keyStats_metrics.get('peRatioTTM'), "basicEPS": keyStats_metrics.get('epsTTM'),
+        "netIncome": keyStats_metrics.get('netIncomePerShareTTM'), "revenue": keyStats_metrics.get('revenuePerShareTTM'),
+        "sharesFloat": keyStats_quote.get('sharesOutstanding'), "beta": keyStats_profile.get('beta'),
+        "employees": keyStats_profile.get('fullTimeEmployees'), "nextReportDate": keyStats_estimates.get('date'),
+        "epsEstimate": keyStats_estimates.get('estimatedEpsAvg'), "revenueEstimate": keyStats_estimates.get('estimatedRevenueAvg'),
     }
     
-    return data
+    return final_data
