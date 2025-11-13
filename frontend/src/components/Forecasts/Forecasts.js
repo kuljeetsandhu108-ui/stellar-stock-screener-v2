@@ -5,26 +5,69 @@ import Card from '../common/Card';
 import PriceTarget from './PriceTarget';
 import AnalystRating from './AnalystRating';
 
-// --- (Styled Components are unchanged) ---
-const fadeIn = keyframes`from { opacity: 0; } to { opacity: 1; }`;
-const ForecastGrid = styled.div`display: grid; grid-template-columns: 1.5fr 1fr; gap: 3rem; @media (max-width: 1200px) { grid-template-columns: 1fr; }`;
+// --- Styled Components ---
+
+const fadeIn = keyframes`
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+`;
+
+const ForecastGrid = styled.div`
+  display: grid;
+  grid-template-columns: 1.5fr 1fr; /* Make the left column (Price Target) wider */
+  gap: 3rem;
+
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr;
+  }
+`;
+
 const LeftColumn = styled.div``;
 const RightColumn = styled.div``;
-const AiAnalysisContainer = styled.div`margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--color-border);`;
-const SectionTitle = styled.h3`font-size: 1.5rem; font-weight: 600; margin-bottom: 1rem; color: var(--color-text-primary);`;
-const AiSummaryText = styled.p`font-size: 1rem; color: var(--color-text-secondary); line-height: 1.8; white-space: pre-wrap; animation: ${fadeIn} 0.5s ease-in;`;
-const Loader = styled.div`display: flex; align-items: center; justify-content: center; height: 150px; color: var(--color-primary);`;
 
+const AiAnalysisContainer = styled.div`
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--color-border);
+`;
 
-// --- The Updated React Component ---
+const SectionTitle = styled.h3`
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: var(--color-text-primary);
+`;
 
-// The component now accepts the 'delay' prop
-const Forecasts = ({ symbol, quote, analystRatings, priceTarget, keyStats, news, delay }) => {
+const AiSummaryText = styled.p`
+  font-size: 1rem;
+  color: var(--color-text-secondary);
+  line-height: 1.8;
+  white-space: pre-wrap; /* Respects newlines from the AI's response */
+  animation: ${fadeIn} 0.5s ease-in;
+`;
+
+const Loader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 150px;
+  color: var(--color-primary);
+`;
+
+// --- The Upgraded React Component ---
+
+// The component now accepts the 'currency' prop to pass down to its children.
+const Forecasts = ({ symbol, quote, analystRatings, priceTarget, keyStats, news, currency, delay }) => {
   const [aiAnalysis, setAiAnalysis] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const fetchAiAnalysis = async () => {
+      // Guard clause to ensure all necessary data is present before making the API call.
       if (!symbol || !analystRatings || !priceTarget || !keyStats || !news || !quote) {
         setIsLoading(false);
         return;
@@ -49,19 +92,18 @@ const Forecasts = ({ symbol, quote, analystRatings, priceTarget, keyStats, news,
       }
     };
 
-    // --- NEW DELAY LOGIC ---
-    // We wrap the API call in a setTimeout to stagger the request.
+    // Use a setTimeout to stagger this lazy-loaded API call.
     const timer = setTimeout(() => {
         fetchAiAnalysis();
     }, delay || 0);
 
+    // Cleanup function to prevent memory leaks.
     return () => clearTimeout(timer);
+  }, [symbol, quote, analystRatings, priceTarget, keyStats, news, delay]); // Dependency array
 
-  }, [symbol, quote, analystRatings, priceTarget, keyStats, news, delay]); // Added 'delay' to the dependency array
 
-
-  // --- (The rest of the component logic is unchanged) ---
-  if (!priceTarget || !analystRatings) {
+  // Main render check: if there's no analyst or price target data, show a clear message.
+  if (!priceTarget || !analystRatings || Object.keys(priceTarget).length === 0) {
     return (
       <Card>
         <p>Forecast data is not available for this stock.</p>
@@ -73,7 +115,8 @@ const Forecasts = ({ symbol, quote, analystRatings, priceTarget, keyStats, news,
     <Card>
       <ForecastGrid>
         <LeftColumn>
-          <PriceTarget consensus={priceTarget} quote={quote} />
+          {/* We now pass the 'currency' prop down to the PriceTarget component */}
+          <PriceTarget consensus={priceTarget} quote={quote} currency={currency} />
         </LeftColumn>
         <RightColumn>
           <AnalystRating ratingsData={analystRatings} />

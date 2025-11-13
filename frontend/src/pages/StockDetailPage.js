@@ -262,6 +262,7 @@ const StockDetailPage = () => {
                 priceTarget={stockData.price_target_consensus}
                 keyStats={stockData.keyStats}
                 news={stockData.news}
+                currency={stockData.profile?.currency}
                 delay={200}
             />
         </TabPanel>

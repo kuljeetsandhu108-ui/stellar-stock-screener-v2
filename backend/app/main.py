@@ -47,12 +47,12 @@ app.mount("/static", StaticFiles(directory="frontend/build/static"), name="stati
 # allows browser refreshes and direct navigation to work on a live server.
 @app.get("/{full_path:path}")
 async def serve_react_app(full_path: str):
-    # We must construct the path to the index.html file within our Docker container.
+    # We construct the path to the index.html file within our Docker container.
     # The 'frontend/build' directory will be at the root of our application.
     build_dir = "frontend/build"
     index_path = os.path.join(build_dir, "index.html")
 
-    # Check if the file exists to prevent server errors.
+    # This is a safety check to ensure the file exists before we try to serve it.
     if not os.path.exists(index_path):
         return {"error": "index.html not found in build directory"}, 500
 
