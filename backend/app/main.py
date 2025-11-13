@@ -15,8 +15,7 @@ app = FastAPI(
 )
 
 # --- ROUTER INCLUSION ---
-# The order here is critical for production.
-# We must include our specific API routers BEFORE the generic static file routes.
+# It is critical that the API routers are included BEFORE the static file routes.
 # This ensures that a request like '/api/stocks/AAPL/all' is handled by our API logic
 # and not misinterpreted as a request for a file on the server.
 
@@ -28,8 +27,8 @@ app.include_router(indices.router, prefix="/api/indices", tags=["indices"])
 
 
 # --- STATIC FILE SERVING (FOR REACT FRONTEND) ---
-# This block of code tells our single Python server to also act as a web server
-# for our compiled React application. This is a clean, self-contained deployment strategy.
+# This code block tells our single Python server to also act as a web server
+# for our compiled React application when in production.
 
 # 1. Mount the '/static' directory from our React 'build' folder.
 # This is where all the compiled JavaScript (main.[hash].js), CSS (main.[hash].css),
@@ -48,4 +47,13 @@ app.mount("/static", StaticFiles(directory="frontend/build/static"), name="stati
 # allows browser refreshes and direct navigation to work on a live server.
 @app.get("/{full_path:path}")
 async def serve_react_app(full_path: str):
-    return FileResponse("frontend/build/index.html")
+    # We must construct the path to the index.html file within our Docker container.
+    # The 'frontend/build' directory will be at the root of our application.
+    build_dir = "frontend/build"
+    index_path = os.path.join(build_dir, "index.html")
+
+    # Check if the file exists to prevent server errors.
+    if not os.path.exists(index_path):
+        return {"error": "index.html not found in build directory"}, 500
+
+    return FileResponse(index_path)

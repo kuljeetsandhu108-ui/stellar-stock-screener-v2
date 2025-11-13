@@ -6,8 +6,9 @@ import Card from '../common/Card';
 import RevenueChart from './RevenueChart';
 import KeyStats from './KeyStats';
 import AboutCompany from './AboutCompany';
-// --- NEW: Import our new Balance Sheet component ---
 import BalanceSheet from './BalanceSheet';
+// --- NEW: Import our new Financial Statements viewer ---
+import FinancialStatements from './FinancialStatements';
 
 // --- Styled Components ---
 
@@ -17,10 +18,20 @@ const FinancialsContainer = styled.div`
   gap: 2rem; /* Adds space between each section */
 `;
 
-// --- The Refactored React Component ---
+// --- The Final, Upgraded React Component ---
 
-// It now accepts the new 'balanceSheetData' prop
-const Financials = ({ profile, keyStats, financialData, balanceSheetData }) => {
+const Financials = ({
+  profile,
+  keyStats,
+  financialData,
+  balanceSheetData,
+  // --- NEW: Accepting all the new data props ---
+  annualCashFlow,
+  quarterlyIncome,
+  quarterlyBalance,
+  quarterlyCashFlow
+}) => {
+  // Defensive check: If we don't have the core profile data, show a generic message.
   if (!profile) {
     return (
       <Card>
@@ -36,17 +47,28 @@ const Financials = ({ profile, keyStats, financialData, balanceSheetData }) => {
         {/* --- Section 1: Key Stats (Unchanged) --- */}
         <KeyStats stats={keyStats} />
         
-        {/* --- Section 2: Balance Sheet (NEW!) --- */}
-        {/* We add our new component here, passing the balance sheet data down to it */}
+        {/* --- Section 2: Balance Sheet Charts (Unchanged) --- */}
         <BalanceSheet balanceSheetData={balanceSheetData} />
 
-        {/* --- Section 3: Financials Overview Chart (Unchanged) --- */}
+        {/* --- Section 3: Income Statement Chart (Unchanged) --- */}
         <div>
             <h3 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.5rem' }}>Income Statement (5-Year Trend)</h3>
             <RevenueChart data={financialData} />
         </div>
 
-        {/* --- Section 4: About the Company (Unchanged) --- */}
+        {/* --- Section 4: Detailed Financial Statements Viewer (NEW!) --- */}
+        {/* We add our new component here, passing all the necessary annual and quarterly data down to it. */}
+        <FinancialStatements
+          currency={profile.currency}
+          annualIncome={financialData}
+          annualBalance={balanceSheetData}
+          annualCashFlow={annualCashFlow}
+          quarterlyIncome={quarterlyIncome}
+          quarterlyBalance={quarterlyBalance}
+          quarterlyCashFlow={quarterlyCashFlow}
+        />
+
+        {/* --- Section 5: About the Company (Unchanged) --- */}
         <AboutCompany profile={profile} />
 
       </FinancialsContainer>
