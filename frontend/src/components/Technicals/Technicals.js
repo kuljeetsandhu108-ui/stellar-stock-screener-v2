@@ -4,7 +4,6 @@ import Card from '../common/Card';
 import RatingDial from './RatingDial';
 import PivotLevels from './PivotLevels';
 import MovingAverages from './MovingAverages';
-// --- NEW IMPORT ---
 import TechnicalIndicatorsTable from './TechnicalIndicatorsTable';
 
 // --- Styled Components ---
@@ -24,21 +23,38 @@ const TopSectionGrid = styled.div`
 `;
 
 const BottomSection = styled.div`
-  /* This section will hold the pivot levels table and the new indicators table */
+  /* This section will hold our tables */
 `;
 
-// --- React Component ---
+// --- The Final, Upgraded React Component ---
 
-// The component now accepts the new 'technicalIndicators' data prop
-const Technicals = ({ analystRatings, technicalIndicators }) => {
+// The component now accepts all the new data props from its parent, StockDetailPage.
+const Technicals = ({ analystRatings, technicalIndicators, movingAverages, pivotPoints }) => {
 
-  // We need to get the latest analyst rating to feed into our dial.
-  // The FMP API provides an array of ratings, with the most recent first.
+  // This logic intelligently determines the overall analyst consensus for the dial.
   let latestRating = "Neutral"; // Default value
 
   if (analystRatings && Array.isArray(analystRatings) && analystRatings.length > 0) {
-    // We'll use the 'rating' field, e.g., "Buy", "Hold", "Strong Sell"
-    latestRating = analystRatings[0].rating;
+    // We use the reliable yfinance data structure.
+    const ratingData = analystRatings[0];
+    const strongBuy = ratingData.ratingStrongBuy || 0;
+    const buy = ratingData.ratingBuy || 0;
+    const hold = ratingData.ratingHold || 0;
+    const sell = ratingData.ratingSell || 0;
+    const strongSell = ratingData.ratingStrongSell || 0;
+
+    // A simple but effective algorithm to find the dominant rating.
+    if (strongBuy > (sell + strongSell) && strongBuy > hold) {
+        latestRating = "Strong Buy";
+    } else if ((strongBuy + buy) > (strongSell + sell)) {
+        latestRating = "Buy";
+    } else if (strongSell > (buy + strongBuy) && strongSell > hold) {
+        latestRating = "Strong Sell";
+    } else if ((strongSell + sell) > (strongBuy + buy)) {
+        latestRating = "Sell";
+    } else {
+        latestRating = "Hold";
+    }
   }
 
   return (
@@ -46,20 +62,20 @@ const Technicals = ({ analystRatings, technicalIndicators }) => {
       
       {/* --- Top Section --- */}
       <TopSectionGrid>
-        {/* Left column */}
+        {/* The dial now receives a dynamically calculated rating */}
         <RatingDial rating={latestRating} />
-        {/* Right column */}
-        <MovingAverages />
+        {/* This component now receives real, dynamic moving average data */}
+        <MovingAverages maData={movingAverages} />
       </TopSectionGrid>
 
       {/* --- Bottom Section --- */}
       <BottomSection>
-        {/* The new indicators table is added here, passing the data down */}
+        {/* This component receives real, dynamic indicator data */}
         <TechnicalIndicatorsTable indicators={technicalIndicators} />
         
-        {/* The PivotLevels table is now below the new table */}
+        {/* This component now receives real, dynamic pivot point data */}
         <div style={{ marginTop: '2rem' }}>
-          <PivotLevels />
+          <PivotLevels pivotData={pivotPoints} />
         </div>
       </BottomSection>
 

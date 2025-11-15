@@ -243,14 +243,14 @@ const StockDetailPage = () => {
 
         <TabPanel label="Financials">
           <Financials 
-             profile={stockData.profile}
-  keyStats={stockData.keyStats}
-  financialData={stockData.annual_revenue_and_profit} 
-  balanceSheetData={stockData.annual_balance_sheets}
-  annualCashFlow={stockData.annual_cash_flow_statements}
-  quarterlyIncome={stockData.quarterly_income_statements}
-  quarterlyBalance={stockData.quarterly_balance_sheets}
-  quarterlyCashFlow={stockData.quarterly_cash_flow_statements}
+            profile={stockData.profile}
+            keyStats={stockData.keyStats}
+            financialData={stockData.annual_revenue_and_profit} 
+            balanceSheetData={stockData.annual_balance_sheets}
+            annualCashFlow={stockData.annual_cash_flow_statements}
+            quarterlyIncome={stockData.quarterly_income_statements}
+            quarterlyBalance={stockData.quarterly_balance_sheets}
+            quarterlyCashFlow={stockData.quarterly_cash_flow_statements}
           />
         </TabPanel>
         
@@ -281,7 +281,9 @@ const StockDetailPage = () => {
         <TabPanel label="Technicals">
             <Technicals 
               analystRatings={stockData.analyst_ratings} 
-              technicalIndicators={stockData.technical_indicators} 
+              technicalIndicators={stockData.technical_indicators}
+              movingAverages={stockData.moving_averages}
+              pivotPoints={stockData.pivot_points}
             />
         </TabPanel>
       </Tabs>

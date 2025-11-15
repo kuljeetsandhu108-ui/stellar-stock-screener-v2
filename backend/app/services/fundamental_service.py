@@ -78,9 +78,7 @@ def calculate_piotroski_f_score(income_statements, balance_sheets, cash_flow_sta
             criteria_met.append("Higher Gross Margin")
 
         # 9. Asset Turnover Trend (Operating Efficiency)
-        # Using previous year's assets as the denominator for the current year's turnover
         asset_turnover_cy = income_df.loc[cy, 'revenue'] / total_assets_py
-        # Use a safe fallback for the year before the previous year
         asset_turnover_py = income_df.loc[py, 'revenue'] / (balance_df.iloc[-3]['totalAssets'] if len(balance_df) > 2 else total_assets_py)
         if asset_turnover_cy > asset_turnover_py:
             score += 1
@@ -100,13 +98,11 @@ def calculate_graham_scan(profile: dict, key_metrics: dict, income_statements: l
     score = 0
     criteria_met = []
 
-    # Ensure we have the basic data needed to perform the scan.
-    # Graham's method requires a long history, so we'll check for 5 years of income statements.
     if not profile or not key_metrics or len(income_statements) < 5:
         return {"score": 0, "criteria": ["Not enough historical data for a full Graham scan."]}
 
     try:
-        # Tenet 1: Adequate Size (Market Cap > $2 Billion as a modern equivalent)
+        # Tenet 1: Adequate Size (Market Cap > $2 Billion)
         market_cap = profile.get('mktCap')
         if market_cap and market_cap > 2_000_000_000:
             score += 1
@@ -119,22 +115,20 @@ def calculate_graham_scan(profile: dict, key_metrics: dict, income_statements: l
             criteria_met.append(f"Strong Financials (Current Ratio: {current_ratio:.2f})")
 
         # Tenet 3: Earnings Stability (Positive earnings for the last 5 years)
-        # We check if 'netIncome' is positive in all 5 historical statements.
         earnings_stable = all(stmt.get('netIncome', 0) > 0 for stmt in income_statements)
         if earnings_stable:
             score += 1
             criteria_met.append("Earnings Stability (5 consecutive years of profit)")
 
         # Tenet 4: Dividend Record (Consistent dividends for the last 5 years)
-        # Check if dividends were paid in all 5 historical statements.
         dividend_record = all(stmt.get('dividendsPaid', 0) != 0 for stmt in income_statements)
         if dividend_record:
             score += 1
             criteria_met.append("Consistent Dividend Record (5 years)")
         
-        # Tenet 5: Earnings Growth (At least 33% growth over the 5-year period)
-        eps_start = income_statements[-1].get('eps') # Oldest EPS in our 5-year data
-        eps_end = income_statements[0].get('eps')   # Newest EPS
+        # Tenet 5: Earnings Growth (At least 33% growth over 5 years)
+        eps_start = income_statements[-1].get('eps')
+        eps_end = income_statements[0].get('eps')
         if eps_start is not None and eps_end is not None and eps_start > 0:
             growth = ((eps_end / eps_start) - 1) * 100
             if growth >= 33:
@@ -143,7 +137,7 @@ def calculate_graham_scan(profile: dict, key_metrics: dict, income_statements: l
 
         # Tenet 6: Moderate P/E Ratio (P/E < 15)
         pe_ratio = key_metrics.get('peRatioTTM')
-        if pe_ratio and 0 < pe_ratio < 15: # Also check that P/E is positive
+        if pe_ratio and 0 < pe_ratio < 15:
             score += 1
             criteria_met.append(f"Moderate P/E Ratio (< 15, actual: {pe_ratio:.2f})")
 
@@ -155,7 +149,6 @@ def calculate_graham_scan(profile: dict, key_metrics: dict, income_statements: l
 
     except Exception as e:
         print(f"Error calculating Graham Scan: {e}")
-        # Return the score up to the point of failure
         return {"score": score, "criteria": criteria_met + [f"Calculation error: {e}"]}
 
     return {"score": score, "criteria": criteria_met}

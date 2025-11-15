@@ -1,7 +1,7 @@
 import React from 'react';
 import styled, { keyframes } from 'styled-components';
 
-// --- Styled Components & Animations (No changes here) ---
+// --- Styled Components & Animations ---
 
 const fadeInRow = keyframes`
   from {
@@ -33,13 +33,18 @@ const TableHeader = styled.th`
   font-size: 0.9rem;
   text-align: left;
   
-  &:nth-child(2) { text-align: right; }
-  &:last-child { text-align: right; }
+  &:nth-child(2) {
+    text-align: right;
+  }
+  &:last-child {
+    text-align: right;
+  }
 `;
 
 const TableRow = styled.tr`
-  opacity: 0;
+  opacity: 0; /* Start hidden for animation */
   animation: ${fadeInRow} 0.5s ease-out forwards;
+  /* Stagger the animation for each row for a beautiful effect */
   animation-delay: ${({ delay }) => delay * 0.05}s;
   
   &:not(:last-child) {
@@ -51,7 +56,7 @@ const TableCell = styled.td`
   padding: 14px 12px;
   font-size: 0.95rem;
   font-weight: 500;
-  white-space: pre-wrap;
+  white-space: pre-wrap; /* Allows the multiline content for Bollinger Bands */
 
   &:first-child {
     font-weight: 600;
@@ -72,29 +77,33 @@ const TableCell = styled.td`
 const Indication = styled.span`
   color: ${({ type }) => {
     switch (type) {
-      case 'Bullish': return 'var(--color-success)';
-      case 'Oversold': return 'var(--color-success)';
-      case 'Bearish': return 'var(--color-danger)';
-      case 'Overbought': return 'var(--color-danger)';
-      default: return 'var(--color-text-secondary)';
+      case 'Bullish':
+      case 'Oversold':
+        return 'var(--color-success)';
+      case 'Bearish':
+      case 'Overbought':
+        return 'var(--color-danger)';
+      default:
+        return 'var(--color-text-secondary)';
     }
   }};
 `;
 
-// --- React Component (Logic Updated and Finalized) ---
+// --- The Corrected React Component ---
 
 const TechnicalIndicatorsTable = ({ indicators }) => {
-  // A more robust check to ensure the indicators object and its properties exist.
-  if (!indicators || Object.keys(indicators).length === 0 || !indicators.rsi) {
-      return (
-          <TableContainer>
-              <p>Technical indicator data is not available.</p>
-          </TableContainer>
-      );
+  if (!indicators || Object.keys(indicators).length === 0) {
+    return (
+      <TableContainer>
+        <p>Technical indicator data is not available.</p>
+      </TableContainer>
+    );
   }
 
-  // --- THIS IS THE FINAL AND CORRECT DATA MAPPING ---
-  // It correctly reads the structure from our new Yahoo Finance calculator.
+  // --- THIS IS THE CRITICAL FIX FOR BOLLINGER BANDS ---
+  // We now safely access the nested 'bollingerBands' object, providing an empty object as a fallback.
+  const bb = indicators.bollingerBands || {};
+
   const indicatorList = [
     { name: 'RSI(14)', level: indicators.rsi, indication: indicators.rsi < 30 ? 'Oversold' : indicators.rsi > 70 ? 'Overbought' : (indicators.rsi < 50 ? 'Bearish' : 'Bullish') },
     { name: 'MACD(12,26,9)', level: indicators.macd, indication: indicators.macd > indicators.macdsignal ? 'Bullish' : 'Bearish' },
@@ -102,7 +111,8 @@ const TechnicalIndicatorsTable = ({ indicators }) => {
     { name: 'ADX(14)', level: indicators.adx, indication: indicators.adx > 25 ? 'Strong Trend' : 'Weak Trend' },
     { name: 'Williams %R(14)', level: indicators.williamsr, indication: indicators.williamsr < -80 ? 'Oversold' : indicators.williamsr > -20 ? 'Overbought' : 'Neutral' },
     { name: 'ATR(14)', level: indicators.atr, indication: 'Volatility' },
-    { name: 'Bollinger Band(20,2)', level: `UB: ${indicators.bollingerBands?.upperBand?.toFixed(2)}\nLB: ${indicators.bollingerBands?.lowerBand?.toFixed(2)}\nSMA: ${indicators.bollingerBands?.middleBand?.toFixed(2)}`, indication: '--' },
+    // We now correctly and safely access the properties from our 'bb' object.
+    { name: 'Bollinger Band(20,2)', level: `UB: ${bb.upperBand?.toFixed(2) ?? 'N/A'}\nLB: ${bb.lowerBand?.toFixed(2) ?? 'N/A'}\nSMA: ${bb.middleBand?.toFixed(2) ?? 'N/A'}`, indication: '--' },
   ];
   
   return (
