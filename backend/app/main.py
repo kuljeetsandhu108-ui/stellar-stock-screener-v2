@@ -4,7 +4,7 @@ from fastapi.responses import FileResponse
 import os
 
 # We must import both of our routers to make their endpoints available.
-from .routers import stocks, indices
+from .routers import stocks, indices, charts
 
 # Create the main FastAPI application instance.
 app = FastAPI(
