@@ -1,12 +1,17 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
-import axios from 'axios';
 
-// --- Styled Components & Animations ---
+// --- Styled Components & Animations for our "Extreme Graphics" UI ---
 
 const fadeIn = keyframes`
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 `;
 
 const SectionContainer = styled.div`
@@ -18,16 +23,6 @@ const SectionTitle = styled.h3`
   font-weight: 600;
   margin-bottom: 1.5rem;
   color: var(--color-text-primary);
-`;
-
-const Loader = styled.div`
-  color: var(--color-primary);
-  animation: ${fadeIn} 0.5s ease-in;
-  height: 250px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.2rem;
 `;
 
 const ConclusionGrid = styled.div`
@@ -49,8 +44,11 @@ const GradeCircle = styled.div`
   width: 200px;
   height: 200px;
   border-radius: 50%;
+  // A beautiful gradient background for the inner circle
   background: radial-gradient(circle, var(--color-secondary) 60%, transparent 61%);
+  // A thick, vibrant border whose color is determined by the grade
   border: 8px solid ${({ color }) => color};
+  // A subtle glow effect that matches the border color
   box-shadow: 0 0 25px ${({ color }) => color}33;
   margin: 0 auto;
   transition: all 0.5s ease-in-out;
@@ -68,8 +66,10 @@ const ThesisText = styled.p`
   font-weight: 500;
   color: var(--color-text-primary);
   line-height: 1.6;
-  margin-bottom: 1.5rem;
+  margin-bottom: 2rem;
   text-align: center;
+  border-left: 3px solid var(--color-primary);
+  padding-left: 1.5rem;
 `;
 
 const TakeawaysList = styled.ul`
@@ -93,87 +93,42 @@ const TakeawayItem = styled.li`
   }
 `;
 
-// --- The New Lazy-Loading React Component ---
+// --- The New "Display-Only" React Component ---
 
-const FundamentalConclusion = ({
-  symbol,
-  companyName,
-  piotroskiData,
-  grahamData,
-  darvasData,
-  canslimAssessment,
-  philosophyAssessment
-}) => {
-  const [conclusion, setConclusion] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+const FundamentalConclusion = ({ conclusionData }) => {
 
-  useEffect(() => {
-    const fetchConclusion = async () => {
-      // Guard clause: Don't run if the essential input data is missing
-      if (!symbol || !piotroskiData || !grahamData || !darvasData || !canslimAssessment || !philosophyAssessment) {
-        setIsLoading(false);
-        return;
-      }
-      setIsLoading(true);
-      try {
-        const payload = {
-          companyName: companyName,
-          piotroskiData: piotroskiData,
-          grahamData: grahamData,
-          darvasData: darvasData,
-          canslimAssessment: canslimAssessment,
-          philosophyAssessment: philosophyAssessment,
-        };
-        const response = await axios.post(`/api/stocks/${symbol}/conclusion-analysis`, payload);
-        setConclusion(response.data.conclusion);
-      } catch (error) {
-        console.error("Failed to fetch AI conclusion:", error);
-        setConclusion("GRADE: N/A\nTHESIS: Could not generate AI conclusion.\nTAKEAWAYS:\n- Error communicating with the analysis engine.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    // We add a longer delay to ensure all other AI calls have finished
-    const timer = setTimeout(fetchConclusion, 800);
-    return () => clearTimeout(timer);
-  }, [symbol, companyName, piotroskiData, grahamData, darvasData, canslimAssessment, philosophyAssessment]);
-
-  // This parser is the "brain" of our display logic
+  // The parser and color logic is now the only "brain" in this component.
   const parsedConclusion = useMemo(() => {
-    if (!conclusion) return { grade: 'N/A', thesis: 'Loading...', takeaways: [] };
+    if (!conclusionData) {
+      return { grade: 'N/A', thesis: 'Synthesizing data...', takeaways: [] };
+    }
     
-    const lines = conclusion.split('\n');
+    const lines = conclusionData.split('\n');
     const grade = lines.find(l => l.startsWith('GRADE:'))?.replace('GRADE:', '').trim() || 'N/A';
     const thesis = lines.find(l => l.startsWith('THESIS:'))?.replace('THESIS:', '').trim() || 'No thesis available.';
     const takeaways = lines.filter(l => l.startsWith('- ')).map(l => l.replace('- ', '').trim());
 
     return { grade, thesis, takeaways };
-  }, [conclusion]);
+  }, [conclusionData]);
 
   const getGradeColor = (grade) => {
     if (grade.startsWith('A')) return 'var(--color-success)';
-    if (grade.startsWith('B')) return '#34D399'; // Lighter Green
-    if (grade.startsWith('C')) return '#EDBB5A'; // Yellow
-    if (grade.startsWith('D')) return '#F88149'; // Orange
+    if (grade.startsWith('B')) return '#34D399';
+    if (grade.startsWith('C')) return '#EDBB5A';
+    if (grade.startsWith('D')) return '#F88149';
     if (grade.startsWith('F')) return 'var(--color-danger)';
     return 'var(--color-text-secondary)';
   };
   const gradeColor = getGradeColor(parsedConclusion.grade);
 
-  if (isLoading) {
-    return (
-      <SectionContainer>
-        <SectionTitle>Analyst's Conclusion</SectionTitle>
-        <Loader>Synthesizing all fundamental data...</Loader>
-      </SectionContainer>
-    );
-  }
+  // --- All useEffect and isLoading logic has been REMOVED ---
 
   return (
     <SectionContainer>
       <SectionTitle>Analyst's Conclusion</SectionTitle>
+      
       <ThesisText>"{parsedConclusion.thesis}"</ThesisText>
+      
       <ConclusionGrid>
         <GradeCircle color={gradeColor}>
           <GradeText color={gradeColor}>{parsedConclusion.grade}</GradeText>

@@ -16,105 +16,46 @@ import Forecasts from '../components/Forecasts/Forecasts';
 import Fundamentals from '../components/Fundamentals/Fundamentals';
 import OverallSentiment from '../components/Sentiment/OverallSentiment';
 import PeersComparison from '../components/Peers/PeersComparison';
+import { useLocation } from 'react-router-dom';
+import ChartAnalysis from '../components/StockDetailPage/ChartAnalysis';
 
 // --- Styled Components for the page layout ---
-
-const fadeIn = keyframes`
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-`;
-
-const StockDetailPageContainer = styled.div`
-  padding: 2rem 3rem;
-  max-width: 1800px;
-  margin: 0 auto;
-  animation: ${fadeIn} 0.5s ease-in;
-`;
-
-const TabContentGrid = styled.div`
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 2rem;
-
-  @media (max-width: 1200px) {
-    grid-template-columns: 1fr;
-  }
-`;
-
-const LeftColumn = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
-`;
-
-const RightColumn = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
-`;
-
-const LoadingContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 90vh;
-  color: var(--color-primary);
-  font-size: 1.5rem;
-`;
-
-const ErrorContainer = styled(LoadingContainer)`
-  color: var(--color-danger);
-`;
-
-const BackButton = styled.button`
-  background: none;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-secondary);
-  padding: 8px 16px;
-  border-radius: 20px;
-  cursor: pointer;
-  font-size: 0.9rem;
-  margin-bottom: 2rem;
-  transition: all 0.2s ease;
-
-  &:hover {
-    background-color: var(--color-secondary);
-    color: var(--color-text-primary);
-  }
-`;
+const fadeIn = keyframes`from { opacity: 0; } to { opacity: 1; }`;
+const StockDetailPageContainer = styled.div`padding: 2rem 3rem; max-width: 1800px; margin: 0 auto; animation: ${fadeIn} 0.5s ease-in;`;
+const TabContentGrid = styled.div`display: grid; grid-template-columns: 2fr 1fr; gap: 2rem; @media (max-width: 1200px) { grid-template-columns: 1fr; }`;
+const LeftColumn = styled.div`display: flex; flex-direction: column; gap: 2rem;`;
+const RightColumn = styled.div`display: flex; flex-direction: column; gap: 2rem;`;
+const LoadingContainer = styled.div`display: flex; flex-direction: column; align-items: center; justify-content: center; height: 90vh; color: var(--color-primary); font-size: 1.5rem;`;
+const ErrorContainer = styled(LoadingContainer)`color: var(--color-danger);`;
+const BackButton = styled.button`background: none; border: 1px solid var(--color-border); color: var(--color-text-secondary); padding: 8px 16px; border-radius: 20px; cursor: pointer; font-size: 0.9rem; margin-bottom: 2rem; transition: all 0.2s ease; &:hover { background-color: var(--color-secondary); color: var(--color-text-primary); }`;
 
 // --- The Final, Architecturally Correct Page Component ---
-
 const StockDetailPage = () => {
   const { symbol } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const chartAnalysisData = location.state?.chartAnalysis;
   
   const [stockData, setStockData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // State for all our "lazy-loading" AI components is managed here in the parent.
   const [swotAnalysis, setSwotAnalysis] = useState('');
   const [isLoadingSwot, setIsLoadingSwot] = useState(true);
   const [philosophyAssessment, setPhilosophyAssessment] = useState('');
   const [canslimAssessment, setCanslimAssessment] = useState('');
+  const [conclusion, setConclusion] = useState('');
   const [isLoadingPhilosophy, setIsLoadingPhilosophy] = useState(true);
   const [isLoadingCanslim, setIsLoadingCanslim] = useState(true);
-  // --- Add these lines with the other state variables ---
-  const [conclusion, setConclusion] = useState('');
   const [isLoadingConclusion, setIsLoadingConclusion] = useState(true);
 
+  // This hook fetches the main, non-AI data once per stock.
   useEffect(() => {
     const fetchAllData = async () => {
       setIsLoading(true);
       setError(null);
-      setSwotAnalysis('');
-      setPhilosophyAssessment('');
-      setCanslimAssessment('');
+      setSwotAnalysis(''); setPhilosophyAssessment(''); setCanslimAssessment(''); setConclusion('');
       try {
         const response = await axios.get(`/api/stocks/${symbol}/all`);
         setStockData(response.data);
@@ -128,124 +69,95 @@ const StockDetailPage = () => {
     fetchAllData();
   }, [symbol]);
 
+  // This single, powerful hook handles all the separate, staggered AI data fetches.
   useEffect(() => {
     if (!stockData) return;
 
-    const fetchSwotAnalysis = async () => {
-      if (!stockData.profile?.description) { setIsLoadingSwot(false); return; }
+    // --- Define all our individual AI fetch functions ---
+    const fetchSwotAnalysis = () => {
+      if (!stockData.profile?.description) { setIsLoadingSwot(false); return Promise.resolve(); }
       setIsLoadingSwot(true);
-      try {
-        const payload = { companyName: stockData.profile.companyName, description: stockData.profile.description };
-        const response = await axios.post(`/api/stocks/${symbol}/swot`, payload);
-        setSwotAnalysis(response.data.swot_analysis);
-      } catch (error) { setSwotAnalysis("Could not generate SWOT analysis."); } finally { setIsLoadingSwot(false); }
+      const payload = { companyName: stockData.profile.companyName, description: stockData.profile.description };
+      return axios.post(`/api/stocks/${symbol}/swot`, payload)
+        .then(res => setSwotAnalysis(res.data.swot_analysis))
+        .catch(() => setSwotAnalysis("Could not generate SWOT analysis."))
+        .finally(() => setIsLoadingSwot(false));
     };
-
-    // --- Add this entire function inside the main useEffect ---
-    const fetchConclusionAnalysis = async () => {
-      if (!stockData || !stockData.piotroski_f_score || !stockData.graham_scan || !stockData.darvas_scan || !canslimAssessment || !philosophyAssessment) {
-        setIsLoadingConclusion(false);
-        return;
-      }
-      setIsLoadingConclusion(true);
-      try {
-        const payload = {
-          companyName: stockData.profile.companyName,
-          piotroskiData: stockData.piotroski_f_score,
-          grahamData: stockData.graham_scan,
-          darvasData: stockData.darvas_scan,
-          canslimAssessment: canslimAssessment,
-          philosophyAssessment: philosophyAssessment,
-        };
-        const response = await axios.post(`/api/stocks/${symbol}/conclusion-analysis`, payload);
-        setConclusion(response.data.conclusion);
-      } catch (error) {
-        console.error("Failed to fetch AI conclusion:", error);
-        setConclusion("GRADE: N/A\nTHESIS: Could not generate AI conclusion.\nTAKEAWAYS:\n- Error communicating with the analysis engine.");
-      } finally {
-        setIsLoadingConclusion(false);
-      }
-    };
-
-    const fetchPhilosophyAssessment = async () => {
-      if (!stockData.profile || !stockData.key_metrics) { setIsLoadingPhilosophy(false); return; }
+    const fetchPhilosophyAssessment = () => {
+      if (!stockData.profile || !stockData.key_metrics) { setIsLoadingPhilosophy(false); return Promise.resolve(); }
       setIsLoadingPhilosophy(true);
-      try {
-        const payload = { companyName: stockData.profile.companyName, keyMetrics: stockData.key_metrics };
-        const response = await axios.post(`/api/stocks/${symbol}/fundamental-analysis`, payload);
-        setPhilosophyAssessment(response.data.assessment);
-      } catch (error) { setPhilosophyAssessment("Could not generate AI assessment."); } finally { setIsLoadingPhilosophy(false); }
+      const payload = { companyName: stockData.profile.companyName, keyMetrics: stockData.key_metrics };
+      return axios.post(`/api/stocks/${symbol}/fundamental-analysis`, payload)
+        .then(res => setPhilosophyAssessment(res.data.assessment))
+        .catch(() => setPhilosophyAssessment("Could not generate AI assessment."))
+        .finally(() => setIsLoadingPhilosophy(false));
     };
-    
-    const fetchCanslimAssessment = async () => {
+    const fetchCanslimAssessment = () => {
       if (!stockData.profile || !stockData.quote || !stockData.quarterly_income_statements) { setIsLoadingCanslim(false); return; }
       setIsLoadingCanslim(true);
-      try {
-        const payload = {
-          companyName: stockData.profile.companyName, quote: stockData.quote, quarterlyEarnings: stockData.quarterly_income_statements,
-          annualEarnings: stockData.annual_revenue_and_profit, institutionalHolders: stockData.shareholding.length,
-        };
-        const response = await axios.post(`/api/stocks/${symbol}/canslim-analysis`, payload);
-        setCanslimAssessment(response.data.assessment);
-      } catch (error) { setCanslimAssessment("Could not generate CANSLIM assessment."); } finally { setIsLoadingCanslim(false); }
+      const payload = {
+        companyName: stockData.profile.companyName, quote: stockData.quote, quarterlyEarnings: stockData.quarterly_income_statements,
+        annualEarnings: stockData.annual_revenue_and_profit, institutionalHolders: stockData.shareholding.length,
+      };
+      return axios.post(`/api/stocks/${symbol}/canslim-analysis`, payload)
+        .then(res => setCanslimAssessment(res.data.assessment))
+        .catch(() => setCanslimAssessment("Could not generate CANSLIM assessment."))
+        .finally(() => setIsLoadingCanslim(false));
+    };
+    const fetchConclusionAnalysis = (philosophyRes, canslimRes) => {
+      if (!stockData.piotroski_f_score || !stockData.graham_scan || !stockData.darvas_scan) { setIsLoadingConclusion(false); return; }
+      setIsLoadingConclusion(true);
+      const payload = {
+        companyName: stockData.profile.companyName, piotroskiData: stockData.piotroski_f_score,
+        grahamData: stockData.graham_scan, darvasData: stockData.darvas_scan,
+        canslimAssessment: canslimRes, philosophyAssessment: philosophyRes,
+      };
+      axios.post(`/api/stocks/${symbol}/conclusion-analysis`, payload)
+        .then(res => setConclusion(res.data.conclusion))
+        .catch(() => setConclusion("GRADE: N/A\nTHESIS: Could not generate AI conclusion."))
+        .finally(() => setIsLoadingConclusion(false));
     };
 
-    const swotTimer = setTimeout(fetchSwotAnalysis, 100);
-    const philosophyTimer = setTimeout(fetchPhilosophyAssessment, 300);
-    const canslimTimer = setTimeout(fetchCanslimAssessment, 500);
-    const conclusionTimer = setTimeout(fetchConclusionAnalysis, 800); // Runs last
+    // --- Execute the calls in a logical chain ---
+    // We run the first three in parallel.
+    Promise.all([
+      fetchSwotAnalysis(),
+      fetchPhilosophyAssessment(),
+      fetchCanslimAssessment()
+    ]).then(() => {
+      // The conclusion runs ONLY after the others have finished.
+      // We use the state callback to get the most up-to-date values for the final call.
+      setPhilosophyAssessment(currentPhilosophy => {
+        setCanslimAssessment(currentCanslim => {
+          setTimeout(() => fetchConclusionAnalysis(currentPhilosophy, currentCanslim), 200);
+          return currentCanslim;
+        });
+        return currentPhilosophy;
+      });
+    });
 
-
-    return () => {
-      clearTimeout(swotTimer);
-      clearTimeout(philosophyTimer);
-      clearTimeout(canslimTimer);
-      clearTimeout(conclusionTimer);
-
-    };
   }, [stockData, symbol]);
 
-  if (isLoading) {
-    return (
-      <LoadingContainer>
-        <p>Loading Financial Universe for {symbol}...</p>
-      </LoadingContainer>
-    );
-  }
-
-  if (error) {
-    return (
-      <ErrorContainer>
-        <h2>An Error Occurred</h2>
-        <p>{error}</p>
-        <BackButton style={{ marginTop: '2rem' }} onClick={() => navigate('/')}>
-          Go Back to Search
-        </BackButton>
-      </ErrorContainer>
-    );
-  }
-
-  if (!stockData) {
-    return null;
-  }
-
+  if (isLoading) { return <LoadingContainer><p>Loading Financial Universe for {symbol}...</p></LoadingContainer>; }
+  if (error) { return (<ErrorContainer><h2>An Error Occurred</h2><p>{error}</p><BackButton onClick={() => navigate('/')}>Go Back</BackButton></ErrorContainer>); }
+  if (!stockData) { return null; }
   const tradingViewSymbol = stockData.profile?.tradingview_symbol || symbol;
 
   return (
     <StockDetailPageContainer>
       <BackButton onClick={() => navigate('/')}>&larr; Back to Search</BackButton>
-      
       <StockHeader profile={stockData.profile} quote={stockData.quote} />
-      
       <Tabs>
+        {chartAnalysisData && (
+          <TabPanel label="Chart AI">
+            <ChartAnalysis analysisData={chartAnalysisData} />
+          </TabPanel>
+        )}
         <TabPanel label="Overview">
           <TabContentGrid>
             <LeftColumn>
               <TradingViewChart symbol={tradingViewSymbol} />
-              <SwotAnalysis
-                analysisText={swotAnalysis}
-                isLoading={isLoadingSwot}
-              />
+              <SwotAnalysis analysisText={swotAnalysis} isLoading={isLoadingSwot} />
             </LeftColumn>
             <RightColumn>
               <OverallSentiment sentimentData={stockData.overall_sentiment} />
@@ -253,30 +165,20 @@ const StockDetailPage = () => {
             </RightColumn>
           </TabContentGrid>
         </TabPanel>
-        
         <TabPanel label="Fundamentals">
             <Fundamentals
-                symbol={symbol}
-                profile={stockData.profile}
-                quote={stockData.quote}
-                keyMetrics={stockData.key_metrics}
                 piotroskiData={stockData.piotroski_f_score}
                 darvasScanData={stockData.darvas_scan}
                 grahamScanData={stockData.graham_scan}
-                quarterlyEarnings={stockData.quarterly_income_statements}
-                annualEarnings={stockData.annual_revenue_and_profit}
-                shareholding={stockData.shareholding}
-                delay={300}
                 philosophyAssessment={philosophyAssessment}
                 canslimAssessment={canslimAssessment}
+                conclusion={conclusion}
                 isLoadingPhilosophy={isLoadingPhilosophy}
                 isLoadingCanslim={isLoadingCanslim}
-                conclusion={conclusion} // <-- ADD THIS LINE
-    isLoadingConclusion={isLoadingConclusion} // <-- ADD THIS LINE
-
+                isLoadingConclusion={isLoadingConclusion}
+                profile={stockData.profile}
             />
         </TabPanel>
-
         <TabPanel label="Financials">
           <Financials 
             profile={stockData.profile}
@@ -289,24 +191,16 @@ const StockDetailPage = () => {
             quarterlyCashFlow={stockData.quarterly_cash_flow_statements}
           />
         </TabPanel>
-        
         <TabPanel label="Forecasts">
             <Forecasts 
-                symbol={symbol}
-                quote={stockData.quote}
-                analystRatings={stockData.analyst_ratings}
-                priceTarget={stockData.price_target_consensus}
-                keyStats={stockData.keyStats}
-                news={stockData.news}
-                currency={stockData.profile?.currency}
-                delay={200}
+                symbol={symbol} quote={stockData.quote} analystRatings={stockData.analyst_ratings}
+                priceTarget={stockData.price_target_consensus} keyStats={stockData.keyStats}
+                news={stockData.news} currency={stockData.profile?.currency}
             />
         </TabPanel>
-
         <TabPanel label="Peers">
             <PeersComparison symbol={symbol} />
         </TabPanel>
-        
         <TabPanel label="Shareholding">
             <Shareholding 
                 shareholdingData={stockData.shareholding}
@@ -314,7 +208,6 @@ const StockDetailPage = () => {
                 shareholdingBreakdown={stockData.shareholding_breakdown}
             />
         </TabPanel>
-        
         <TabPanel label="Technicals">
             <Technicals 
               analystRatings={stockData.analyst_ratings} 
@@ -327,5 +220,4 @@ const StockDetailPage = () => {
     </StockDetailPageContainer>
   );
 };
-
 export default StockDetailPage;

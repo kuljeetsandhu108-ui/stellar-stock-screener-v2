@@ -1,3 +1,4 @@
+import ChartUploader from '../components/HomePage/ChartUploader';
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
@@ -129,6 +130,9 @@ const HomePage = () => {
         <LoadingText>
           {isLoading ? 'Searching with AI...' : error || ''}
         </LoadingText>
+        <p style={{ color: 'var(--color-text-secondary)', margin: '2rem 0' }}>OR</p>
+        <ChartUploader />
+
       </MainContent>
     </HomePageContainer>
   );

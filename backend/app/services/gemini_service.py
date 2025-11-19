@@ -223,3 +223,63 @@ def generate_fundamental_conclusion(
         print(f"An error occurred while generating fundamental conclusion: {e}")
         # Provide a structured error message that our frontend can still parse gracefully.
         return "GRADE: N/A\nTHESIS: The AI analysis could not be completed at this time.\nTAKEAWAYS:\n- An error occurred while communicating with the AI engine."
+
+def identify_ticker_from_image(image_bytes: bytes):
+    """
+    Uses the Gemini Vision model to identify the stock ticker symbol from a chart image.
+    """
+    try:
+        configure_gemini_for_request()
+        
+        # We use the powerful Gemini 1.5 Flash model which can handle images
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        
+        image_part = {"mime_type": "image/jpeg", "data": image_bytes}
+        
+        prompt = """
+        Analyze this stock chart image. Your only task is to identify the stock ticker symbol.
+        The symbol might be at the top, like "AAPL", or in the legend, like "NSE:RELIANCE".
+        
+        Return ONLY the official Yahoo Finance ticker symbol (e.g., "AAPL", "RELIANCE.NS").
+        If an Indian stock ends in .NS or .BO, preserve that suffix.
+        If you cannot find a ticker, return the text "NOT_FOUND".
+        """
+        
+        response = model.generate_content([prompt, image_part])
+        return response.text.strip().upper()
+
+    except Exception as e:
+        print(f"An error occurred during AI ticker identification from image: {e}")
+        return "NOT_FOUND"
+
+def analyze_chart_technicals_from_image(image_bytes: bytes):
+    """
+    Uses the Gemini Vision model to perform an in-depth technical analysis of a chart image.
+    """
+    try:
+        configure_gemini_for_request()
+        
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        
+        image_part = {"mime_type": "image/jpeg", "data": image_bytes}
+        
+        prompt = """
+        Act as an expert Chartered Market Technician. You have been given a stock chart image.
+        Perform a comprehensive technical analysis based ONLY on what you can visually see in the image.
+
+        Your analysis MUST be structured in the following format:
+        
+        TREND: [Identify the primary trend: Uptrend, Downtrend, or Sideways/Consolidation. Explain your reasoning in one sentence.]
+        PATTERNS: [Identify up to 3 key chart patterns visible (e.g., Head and Shoulders, Double Top, Bullish Flag, Triangle). If none, state "No clear patterns identified."]
+        LEVELS: [Identify the most obvious key support and resistance levels visible on the chart.]
+        VOLUME: [Analyze the volume bars. Is volume confirming the trend? Are there any significant volume spikes? If volume is not visible, state "Volume not analyzed."]
+        INDICATORS: [If indicators like RSI or MACD are visible, describe their state (e.g., "RSI is in overbought territory above 70," "MACD is showing a bullish crossover"). If none, state "No indicators visible."]
+        CONCLUSION: [Provide a single, powerful sentence summarizing the overall technical picture and what it suggests for the near future, using probabilistic language (e.g., "suggests a high probability of...", "indicates potential for...").]
+        """
+        
+        response = model.generate_content([prompt, image_part])
+        return response.text.strip()
+        
+    except Exception as e:
+        print(f"An error occurred during AI technical analysis of image: {e}")
+        return "TREND: Analysis Failed\nPATTERNS: N/A\nLEVELS: N/A\nVOLUME: N/A\nINDICATORS: N/A\nCONCLUSION: The AI analysis could not be completed at this time due to a server error."

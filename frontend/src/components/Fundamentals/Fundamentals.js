@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
 import Card from '../common/Card';
-import axios from 'axios';
 import { NestedTabs, NestedTabPanel } from '../common/Tabs/NestedTabs';
 import DarvasScan from './DarvasScan';
 import BenjaminGrahamScan from './BenjaminGrahamScan';
@@ -129,22 +128,18 @@ const Loader = styled.div`
 
 // --- The Final Master Fundamentals Component ---
 
+// This is now a pure "display" component. It receives all data and loading states as props.
 const Fundamentals = ({
-  symbol,
-  profile,
-  quote,
-  keyMetrics,
   piotroskiData,
   darvasScanData,
   grahamScanData,
-  quarterlyEarnings,
-  annualEarnings,
-  shareholding,
-  delay,
   philosophyAssessment,
   canslimAssessment,
+  conclusion,
   isLoadingPhilosophy,
-  isLoadingCanslim
+  isLoadingCanslim,
+  isLoadingConclusion,
+  profile
 }) => {
 
   // --- Data Processing for Piotroski Score ---
@@ -173,15 +168,12 @@ const Fundamentals = ({
         
         <NestedTabPanel label="Conclusion">
           <SectionContainer>
-            <FundamentalConclusion
-              symbol={symbol}
-              companyName={profile?.companyName}
-              piotroskiData={piotroskiData}
-              grahamData={grahamScanData}
-              darvasData={darvasScanData}
-              canslimAssessment={canslimAssessment}
-              philosophyAssessment={philosophyAssessment}
-            />
+            {/* The conclusion component is now "display only" */}
+            {isLoadingConclusion ? (
+              <Loader>Synthesizing all fundamental data...</Loader>
+            ) : (
+              <FundamentalConclusion conclusionData={conclusion} />
+            )}
           </SectionContainer>
         </NestedTabPanel>
 
