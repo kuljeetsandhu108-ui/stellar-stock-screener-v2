@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
 
-# We must import ALL our routers
+# We must import ALL our routers to make their endpoints available.
 from .routers import stocks, indices, charts
 
 # Create the main FastAPI application instance.
@@ -14,7 +14,7 @@ app = FastAPI(
 )
 
 # --- ROUTER INCLUSION ---
-# Include all specific API routers BEFORE the static file routes.
+# It is critical that the API routers are included BEFORE the static file routes.
 
 # 1. Stocks Router (Search, Details, Fundamentals, AI)
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])

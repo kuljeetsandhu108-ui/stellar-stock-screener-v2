@@ -89,31 +89,130 @@ const CriteriaListItem = styled.li`
 // --- Generic Table/Grid Styles ---
 const AssessmentTable = styled.div`
   display: grid;
-  /* Flexible grid that adapts based on content presence */
-  grid-template-columns: 1fr 3fr;
   gap: 1px;
   background-color: var(--color-border);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   overflow: hidden;
+
+  /* Mobile: Stack vertically (1 column) */
+  grid-template-columns: 100%;
+
+  /* Desktop: Side-by-side (2 columns) */
+  @media (min-width: 768px) {
+    grid-template-columns: 1fr 3fr;
+  }
+
   & > div {
     background-color: var(--color-secondary);
     padding: 1rem;
     line-height: 1.5;
   }
+
+  /* Special styling for headers to look good when stacked */
   & > .header {
     font-weight: 600;
-    color: var(--color-text-secondary);
+    color: var(--color-primary); /* Make headers pop on mobile */
     background-color: var(--color-background);
+    
+    /* On mobile, headers might look odd in the grid flow, 
+       but we'll keep them for context or you can hide them with: 
+       @media (max-width: 768px) { display: none; } 
+       if you prefer a cleaner look. For now, color distinction is enough. */
   }
 `;
 
-const CanslimTable = styled(AssessmentTable)`
-  grid-template-columns: 1fr 3fr 1fr;
+// --- NEW RESPONSIVE STYLES ---
+
+// 1. The Container for the rows
+const CanslimContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+
+  /* On Mobile: Remove border and add gap for card look */
+  @media (max-width: 768px) {
+    border: none;
+    gap: 1rem;
+    overflow: visible;
+    border-radius: 0;
+  }
 `;
 
-const ResultCell = styled.div`
-  font-weight: 700;
+// 2. The Header Row (Visible on Desktop, Hidden on Mobile)
+const DesktopHeader = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 3fr 1fr;
+  background-color: var(--color-background);
+  padding: 1rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border);
+
+  @media (max-width: 768px) {
+    display: none; /* Hide on mobile */
+  }
+`;
+
+// 3. The Data Row (Table Row on Desktop, Card on Mobile)
+const CanslimRow = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 3fr 1fr;
+  background-color: var(--color-secondary);
+  
+  /* Desktop: Align items center */
+  & > div {
+    padding: 1rem;
+    display: flex;
+    align-items: center;
+  }
+
+  /* --- MOBILE TRANSFORMATION --- */
+  @media (max-width: 768px) {
+    display: flex;
+    flex-direction: column;
+    background-color: var(--color-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    padding: 0; /* Reset padding for internal layout */
+    position: relative;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+
+    /* Criteria (Header of the Card) */
+    & > div:nth-child(1) {
+      font-weight: 700;
+      color: var(--color-primary);
+      border-bottom: 1px solid var(--color-border);
+      background-color: rgba(88, 166, 255, 0.05);
+      padding: 1rem;
+    }
+
+    /* Assessment (Body of the Card) */
+    & > div:nth-child(2) {
+      color: var(--color-text-secondary);
+      line-height: 1.6;
+      padding: 1rem;
+    }
+
+    /* Result (Footer Badge of the Card) */
+    & > div:nth-child(3) {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      padding: 0;
+      font-size: 0.9rem;
+      background: none;
+    }
+  }
+`;
+
+// 4. The Result Text Colorer
+const ResultText = styled.span`
+  font-weight: 800;
+  text-transform: uppercase;
   color: ${({ result }) => {
     if (!result) return 'var(--color-text-secondary)';
     const res = result.toLowerCase();
@@ -122,6 +221,7 @@ const ResultCell = styled.div`
     return 'var(--color-text-secondary)';
   }};
 `;
+
 
 const Loader = styled.div`
   color: var(--color-primary);
@@ -259,20 +359,36 @@ const Fundamentals = ({
         <NestedTabPanel label="CANSLIM">
           <SectionContainer>
             <SectionTitle>CANSLIM Analysis (William J. O'Neil)</SectionTitle>
-            {isLoadingCanslim ? ( <Loader>Generating CANSLIM assessment...</Loader> ) : (
+            {isLoadingCanslim ? ( 
+              <Loader>Generating CANSLIM assessment...</Loader> 
+            ) : (
               parsedCanslim.length > 0 ? (
-                <CanslimTable>
-                  <div className="header">Criteria</div>
-                  <div className="header">Assessment</div>
-                  <div className="header">Result</div>
+                <CanslimContainer>
+                  {/* Header only shows on Desktop */}
+                  <DesktopHeader>
+                    <div>Criteria</div>
+                    <div>Assessment</div>
+                    <div>Result</div>
+                  </DesktopHeader>
+                  
+                  {/* Rows map to Cards on Mobile */}
                   {parsedCanslim.map((row, rowIndex) => (
-                    <React.Fragment key={rowIndex}>
-                      <div>{row[0] === 'Point' ? '' : row[1]}</div> {/* Handle fallback format */}
+                    <CanslimRow key={rowIndex}>
+                      {/* Criteria Name */}
+                      <div>{row[0] === 'Point' ? '' : row[1]}</div>
+                      
+                      {/* Assessment Text */}
                       <div>{row[0] === 'Point' ? row[1] : row[2]}</div>
-                      <ResultCell result={row[3] || row[2]}>{row[3] || ''}</ResultCell>
-                    </React.Fragment>
+                      
+                      {/* Result (Pass/Fail) */}
+                      <div>
+                        <ResultText result={row[3] || row[2]}>
+                            {row[3] || ''}
+                        </ResultText>
+                      </div>
+                    </CanslimRow>
                   ))}
-                </CanslimTable>
+                </CanslimContainer>
               ) : <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{canslimAssessment || "Data insufficient for CANSLIM analysis."}</p>
             )}
           </SectionContainer>

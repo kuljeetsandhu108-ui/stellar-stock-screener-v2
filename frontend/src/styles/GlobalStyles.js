@@ -26,6 +26,13 @@ export const GlobalStyles = createGlobalStyle`
   html {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    /* Mobile First: Slightly smaller base size */
+    font-size: 14px; 
+    
+    /* Tablet & Desktop: Scale up */
+    @media (min-width: 768px) {
+      font-size: 16px;
+    }
   }
 
   body {

@@ -6,9 +6,18 @@ const CardContainer = styled.div`
   background-color: var(--color-secondary);
   border: 1px solid var(--color-border);
   border-radius: 12px;
-  padding: 24px;
-  margin-bottom: 2rem; /* Provides spacing between cards */
+  margin-bottom: 1.5rem; 
   width: 100%;
+  
+  /* Mobile: Tight padding */
+  padding: 1rem; 
+
+  /* Desktop: Luxurious padding */
+  @media (min-width: 768px) {
+    padding: 2rem;
+    margin-bottom: 2rem;
+    
+  }
 `;
 
 const CardHeader = styled.div`
