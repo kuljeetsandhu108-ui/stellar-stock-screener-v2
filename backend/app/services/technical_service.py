@@ -147,4 +147,4 @@ def calculate_pivot_points(hist_df: pd.DataFrame):
         }
     except Exception as e:
         print(f"Error calculating pivot points: {e}")
-        return {}
+        return {}  
