@@ -56,8 +56,7 @@ const TableHeader = styled.th`
 
 const TableRow = styled.tr`
   /* Highlight the row for the main symbol being analyzed */
-  background-color: ${({ isMainSymbol }) => isMainSymbol ? 'rgba(88, 166, 255, 0.1)' : 'transparent'};
-  
+background-color: ${({ $isMainSymbol }) => $isMainSymbol ? 'rgba(88, 166, 255, 0.1)' : 'transparent'};  
   &:not(:last-child) {
     border-bottom: 1px solid var(--color-border);
   }
@@ -187,7 +186,7 @@ const PeersComparison = ({ symbol }) => {
           </thead>
           <tbody>
             {sortedPeers.map(peer => (
-              <TableRow key={peer.symbol} isMainSymbol={peer.symbol === symbol}>
+<TableRow key={peer.symbol} $isMainSymbol={peer.symbol === symbol}>
                 <TableCell>{peer.symbol}</TableCell>
                 {/* This is the ultimate robust display logic, checking for both FMP's key and Yahoo's key for every cell */}
                 <TableCell>{formatMarketCap(peer.marketCapTTM || peer.marketCap)}</TableCell>

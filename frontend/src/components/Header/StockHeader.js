@@ -45,7 +45,7 @@ const CurrentPrice = styled.div`
 const PriceChange = styled.div`
   font-size: 1.2rem;
   font-weight: 500;
-  color: ${({ isPositive }) => (isPositive ? 'var(--color-success)' : 'var(--color-danger)')};
+  color: ${({ $isPositive }) => ($isPositive ? 'var(--color-success)' : 'var(--color-danger)')};
 `;
 
 // --- NEW HELPER FUNCTION TO GET CURRENCY SYMBOL ---
@@ -93,7 +93,7 @@ const StockHeader = ({ profile, quote }) => {
       <PriceInfo>
         {/* --- NEW: Use the dynamic currency symbol --- */}
         <CurrentPrice>{currencySymbol}{formattedPrice}</CurrentPrice>
-        <PriceChange isPositive={isPositive}>
+        <PriceChange $isPositive={isPositive}>
             {changeText}
         </PriceChange>
       </PriceInfo>

@@ -1,8 +1,8 @@
 import React, { useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
-import Card from '../common/Card'; // We will now use our master Card component for each quadrant.
+import Card from '../common/Card';
 
-// --- Styled Components & Animations for the new design ---
+// --- Styled Components & Animations ---
 
 const fadeIn = keyframes`
   from {
@@ -22,24 +22,43 @@ const Loader = styled.div`
   animation: ${fadeIn} 0.5s ease-in;
 `;
 
-// This grid will hold our four individual Card components, creating the quadrant effect.
-const SwotCardGrid = styled.div`
+// The 4-quadrant grid layout
+const SwotGrid = styled.div`
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
+  gap: 1px; /* Creates the thin border lines */
+  background-color: var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
   animation: ${fadeIn} 0.5s ease-in;
 
-  /* On smaller screens, stack the cards vertically */
-  @media (max-width: 992px) {
+  /* Stack vertically on mobile */
+  @media (max-width: 768px) {
     grid-template-columns: 1fr;
   }
 `;
 
-// We no longer need the custom QuadrantTitle, as our Card component has its own title prop.
+const SwotQuadrant = styled.div`
+  background-color: var(--color-secondary);
+  padding: 1.5rem;
+  min-height: 200px;
+`;
+
+const QuadrantTitle = styled.h4`
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: ${({ color }) => color};
+  border-bottom: 2px solid ${({ color }) => color};
+  padding-bottom: 0.5rem;
+  display: inline-block;
+`;
+
 const SwotList = styled.ul`
   list-style-type: none;
   padding-left: 0;
-  margin-top: 0; /* Adjusted for better spacing inside the card */
+  margin-top: 0;
 `;
 
 const SwotListItem = styled.li`
@@ -60,111 +79,104 @@ const SwotListItem = styled.li`
   }
 
   &:last-child {
-      margin-bottom: 0;
+    margin-bottom: 0;
   }
 `;
 
-// --- The Final, Redesigned "Display Only" Component ---
+// --- The Component ---
 
 const SwotAnalysis = ({ analysisText, isLoading }) => {
 
-  // useMemo ensures this complex parsing only runs when the AI text changes.
+  // --- ROBUST PARSING LOGIC ---
+  // This logic is designed to be "fuzzy" and forgiving. 
+  // It catches section headers even if the AI changes capitalization or formatting.
   const swotData = useMemo(() => {
-    if (!analysisText) {
-      return null;
-    }
+    if (!analysisText) return null;
 
-    const sections = ['Strengths', 'Weaknesses', 'Opportunities', 'Threats'];
-    const data = {
-      Strengths: [],
-      Weaknesses: [],
-      Opportunities: [],
-      Threats: []
-    };
-    
-    // Split the entire text block into individual lines for robust processing.
+    const data = { Strengths: [], Weaknesses: [], Opportunities: [], Threats: [] };
     const lines = analysisText.split('\n');
     let currentSection = null;
 
-    // We iterate through each line of the AI's response.
     lines.forEach(line => {
-      const trimmedLine = line.trim();
+      const cleanLine = line.trim();
+      const lowerLine = cleanLine.toLowerCase();
 
-      // Check if the current line is a new section header.
-      const foundSection = sections.find(section => trimmedLine.includes(`**${section}**`));
+      // Fuzzy matching for headers
+      if (lowerLine.includes('strength')) currentSection = 'Strengths';
+      else if (lowerLine.includes('weakness')) currentSection = 'Weaknesses';
+      else if (lowerLine.includes('opportunit')) currentSection = 'Opportunities';
+      else if (lowerLine.includes('threat')) currentSection = 'Threats';
       
-      if (foundSection) {
-        // If it's a header, we update our state to know which section we are in.
-        currentSection = foundSection;
-      } else if (currentSection && (trimmedLine.startsWith('*') || trimmedLine.startsWith('-'))) {
-        // If we are inside a section and the line is a bullet point, we clean and add it.
-        const point = trimmedLine
-            .replace(/^[\*\-]\s?/, '') // Remove the leading '*' or '-'
-            .replace(/\*\*.*?\*\*/g, '') // Remove any extra bolded text
+      // Check for bullet points
+      else if (currentSection && (cleanLine.startsWith('-') || cleanLine.startsWith('*') || cleanLine.startsWith('•'))) {
+        // Clean up the content: remove the bullet char and any bold markdown
+        const content = cleanLine
+            .replace(/^[\-\*\•]\s?/, '') 
+            .replace(/\*\*.*?\*\*/g, '') 
             .trim();
         
-        if (point) {
-          data[currentSection].push(point);
+        // Only add if it's not an empty string
+        if (content.length > 2) {
+            data[currentSection].push(content);
         }
       }
     });
-
     return data;
   }, [analysisText]);
 
-  // --- RENDER LOGIC ---
+  // --- Render Logic ---
 
   if (isLoading) {
     return (
-      <Card title="AI-Powered SWOT Analysis">
-        <Loader>Generating AI analysis...</Loader>
-      </Card>
+        <Card title="AI-Powered SWOT Analysis">
+            <Loader>Generating AI analysis...</Loader>
+        </Card>
     );
   }
 
-  // If parsing failed or the AI returned no valid points, show the raw text as a safe fallback.
+  // Fallback: If parsing produced no data (or analysisText was empty), show raw text or message
   if (!swotData || Object.values(swotData).every(arr => arr.length === 0)) {
     return (
       <Card title="AI-Powered SWOT Analysis">
-        <p style={{ lineHeight: 1.7, color: 'var(--color-text-secondary)' }}>
+        <p style={{ lineHeight: 1.7, color: 'var(--color-text-secondary)', whiteSpace: 'pre-wrap' }}>
           {analysisText || "Could not generate SWOT analysis for this stock."}
         </p>
       </Card>
     );
   }
 
-  // If we have data, render the new, robust, and beautiful four-card layout.
   return (
-    <div>
-      <h2 style={{ fontSize: '1.8rem', fontWeight: 600, marginBottom: '1.5rem', color: 'var(--color-text-primary)' }}>
-        AI-Powered SWOT Analysis
-      </h2>
-      <SwotCardGrid>
-        <Card title="Strengths">
+    <Card title="AI-Powered SWOT Analysis">
+      <SwotGrid>
+        <SwotQuadrant>
+          <QuadrantTitle color="var(--color-success)">Strengths</QuadrantTitle>
           <SwotList>
-            {swotData.Strengths.map((item, index) => <SwotListItem key={`s-${index}`}>{item}</SwotListItem>)}
+            {swotData.Strengths.map((item, i) => <SwotListItem key={`s-${i}`}>{item}</SwotListItem>)}
           </SwotList>
-        </Card>
+        </SwotQuadrant>
         
-        <Card title="Weaknesses">
+        <SwotQuadrant>
+          <QuadrantTitle color="var(--color-danger)">Weaknesses</QuadrantTitle>
           <SwotList>
-            {swotData.Weaknesses.map((item, index) => <SwotListItem key={`w-${index}`}>{item}</SwotListItem>)}
+            {swotData.Weaknesses.map((item, i) => <SwotListItem key={`w-${i}`}>{item}</SwotListItem>)}
           </SwotList>
-        </Card>
+        </SwotQuadrant>
         
-        <Card title="Opportunities">
+        <SwotQuadrant>
+          <QuadrantTitle color="var(--color-primary)">Opportunities</QuadrantTitle>
           <SwotList>
-            {swotData.Opportunities.map((item, index) => <SwotListItem key={`o-${index}`}>{item}</SwotListItem>)}
+            {swotData.Opportunities.map((item, i) => <SwotListItem key={`o-${i}`}>{item}</SwotListItem>)}
           </SwotList>
-        </Card>
+        </SwotQuadrant>
         
-        <Card title="Threats">
+        <SwotQuadrant>
+          <QuadrantTitle color="#EDBB5A">Threats</QuadrantTitle>
           <SwotList>
-            {swotData.Threats.map((item, index) => <SwotListItem key={`t-${index}`}>{item}</SwotListItem>)}
+            {swotData.Threats.map((item, i) => <SwotListItem key={`t-${i}`}>{item}</SwotListItem>)}
           </SwotList>
-        </Card>
-      </SwotCardGrid>
-    </div>
+        </SwotQuadrant>
+      </SwotGrid>
+    </Card>
   );
 };
 

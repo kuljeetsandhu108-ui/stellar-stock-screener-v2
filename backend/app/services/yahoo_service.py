@@ -5,11 +5,10 @@ import pandas_ta as ta
 def get_historical_data(symbol: str, period: str = "1y", interval: str = "1d"):
     """
     Fetches historical stock price data from Yahoo Finance for a given ticker.
-    This returns a pandas DataFrame, which is ideal for calculations.
+    Returns a pandas DataFrame.
     """
     try:
         ticker = yf.Ticker(symbol)
-        # Fetch the historical market data
         hist = ticker.history(period=period, interval=interval)
         
         if hist.empty:
@@ -32,7 +31,7 @@ def calculate_technical_indicators(df: pd.DataFrame):
         return {}
 
     try:
-        # Use pandas_ta to calculate all indicators and append them to the DataFrame
+        # Use pandas_ta to calculate indicators
         df.ta.rsi(length=14, append=True)
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
         df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
@@ -41,10 +40,8 @@ def calculate_technical_indicators(df: pd.DataFrame):
         df.ta.willr(length=14, append=True)
         df.ta.bbands(length=20, std=2, append=True)
         
-        # Get the very last row, which contains the most recent indicator values
         latest_indicators = df.iloc[-1]
 
-        # Structure the data into a clean dictionary that our frontend component expects
         return {
             "rsi": latest_indicators.get('RSI_14'),
             "macd": latest_indicators.get('MACD_12_26_9'),
@@ -115,117 +112,190 @@ def get_key_fundamentals(symbol: str):
         ticker = yf.Ticker(symbol)
         info = ticker.info
 
-        # Calculate Earnings Yield = EPS / Price. Yahoo provides trailingEps.
-        trailing_eps = info.get('trailingEps')
-        market_price = info.get('regularMarketPrice')
+        # Safe helper to extract numbers
+        def get_float(key):
+            val = info.get(key)
+            return val if val is not None and isinstance(val, (int, float)) else None
+
+        trailing_eps = get_float('trailingEps')
+        market_price = get_float('regularMarketPrice') or get_float('previousClose')
         
         earnings_yield = None
         if trailing_eps is not None and market_price is not None and market_price != 0:
             earnings_yield = trailing_eps / market_price
         
         # Return on Equity is a good proxy for Return on Capital
-        roe = info.get('returnOnEquity')
+        roe = get_float('returnOnEquity')
         
-        # We now return a comprehensive dictionary with keys that our frontend can use.
+        # This dictionary maps Yahoo keys to the FMP keys expected by our frontend
         return {
-            "symbol": symbol, # Include symbol for merging purposes
-            "peRatioTTM": info.get('trailingPE'),
+            "symbol": symbol,
+            "peRatioTTM": get_float('trailingPE'),
             "earningsYieldTTM": earnings_yield,
             "returnOnCapitalEmployedTTM": roe,
-            "marketCap": info.get('marketCap'),
-            "revenueGrowth": info.get('revenueGrowth'),
-            "grossMargins": info.get('grossMargins'),
+            "marketCap": get_float('marketCap'),
+            "revenueGrowth": get_float('revenueGrowth'),
+            "grossMargins": get_float('grossMargins'),
+            "dividendYieldTTM": get_float('dividendYield'),
+            "epsTTM": trailing_eps,
+            "netIncomePerShareTTM": trailing_eps, # Approximation using EPS
+            "revenuePerShareTTM": get_float('revenuePerShare'),
+            "sharesOutstanding": get_float('sharesOutstanding'),
+            "beta": get_float('beta'),
+            "fullTimeEmployees": info.get('fullTimeEmployees')
         }
     except Exception as e:
         print(f"Error fetching yfinance key fundamentals for {symbol}: {e}")
         return {}
 
+def _parse_yfinance_financials(df):
+    """
+    Internal helper to transpose Yahoo Finance DataFrame and map columns to FMP format.
+    This is crucial for making the data work with our existing frontend.
+    """
+    if df is None or df.empty:
+        return []
+    
+    try:
+        # Transpose so dates are rows and metrics are columns
+        df_t = df.transpose()
+        df_t.reset_index(inplace=True)
+        
+        # The first column is the date (might be named 'Date' or 'index')
+        date_col_name = df_t.columns[0]
+        df_t.rename(columns={date_col_name: 'date'}, inplace=True)
+        
+        # Convert date objects to string 'YYYY-MM-DD'
+        df_t['date'] = df_t['date'].astype(str).str.slice(0, 10)
+        
+        # Convert to list of dictionaries for processing
+        records = df_t.to_dict('records')
+        
+        mapped_records = []
+        for record in records:
+            new_record = {'date': record['date']}
+            
+            # Helper to safely get value from record, handling potential NaN
+            def get_val(keys):
+                for k in keys:
+                    if k in record and pd.notna(record[k]):
+                        return float(record[k])
+                return 0.0
+
+            # Map Yahoo specific keys to our FMP standard keys
+            new_record['netIncome'] = get_val(['Net Income', 'NetIncome', 'Net Income Common Stockholders'])
+            new_record['revenue'] = get_val(['Total Revenue', 'TotalRevenue', 'Operating Revenue'])
+            new_record['grossProfit'] = get_val(['Gross Profit', 'GrossProfit'])
+            new_record['eps'] = get_val(['Basic EPS', 'BasicEPS'])
+            new_record['weightedAverageShsOut'] = get_val(['Basic Average Shares', 'Average Diluted Shares'])
+            
+            new_record['totalAssets'] = get_val(['Total Assets', 'TotalAssets'])
+            new_record['longTermDebt'] = get_val(['Long Term Debt', 'LongTermDebt'])
+            new_record['totalCurrentAssets'] = get_val(['Total Current Assets', 'Current Assets'])
+            new_record['totalCurrentLiabilities'] = get_val(['Total Current Liabilities', 'Current Liabilities'])
+            new_record['totalStockholdersEquity'] = get_val(['Stockholders Equity', 'Total Stockholder Equity'])
+            
+            new_record['operatingCashFlow'] = get_val(['Operating Cash Flow', 'OperatingCashFlow'])
+            new_record['dividendsPaid'] = get_val(['Cash Dividends Paid', 'CashDividendsPaid'])
+            
+            # Add calendar year for charts
+            new_record['calendarYear'] = new_record['date'][:4]
+            
+            mapped_records.append(new_record)
+            
+        return mapped_records
+
+    except Exception as e:
+        print(f"Error parsing yfinance financials: {e}")
+        return []
+
 def get_historical_financials(symbol: str):
     """
-    Fetches historical financial statements from Yahoo Finance.
+    Fetches ANNUAL historical financial statements from Yahoo Finance.
     """
     try:
         ticker = yf.Ticker(symbol)
-        
-        income_stmt_raw = ticker.financials
-        balance_sheet_raw = ticker.balance_sheet
-        cash_flow_raw = ticker.cashflow
-
-        # Transpose to have dates as rows and select latest 3-5 years
-        income_stmt = income_stmt_raw.transpose().reset_index().head(5)
-        balance_sheet = balance_sheet_raw.transpose().reset_index().head(5)
-        cash_flow = cash_flow_raw.transpose().reset_index().head(3)
-
-        # Rename columns to match the FMP API format for seamless merging
-        income_stmt.rename(columns={'index': 'date', 'Net Income': 'netIncome', 'Total Revenue': 'revenue', 'Gross Profit': 'grossProfit', 'Basic EPS': 'eps', 'Diluted EPS': 'epsdiluted', 'Shares Issued': 'weightedAverageShsOut'}, inplace=True)
-        balance_sheet.rename(columns={'index': 'date', 'Total Assets': 'totalAssets', 'Long Term Debt': 'longTermDebt', 'Total Current Assets': 'totalCurrentAssets', 'Total Current Liabilities': 'totalCurrentLiabilities', 'Total Stockholder Equity': 'totalStockholdersEquity'}, inplace=True)
-        cash_flow.rename(columns={'index': 'date', 'Operating Cash Flow': 'operatingCashFlow'}, inplace=True)
-        
-        # Convert Timestamps to string format 'YYYY-MM-DD'
-        if 'date' in income_stmt.columns: income_stmt['date'] = income_stmt['date'].astype(str)
-        if 'date' in balance_sheet.columns: balance_sheet['date'] = balance_sheet['date'].astype(str)
-        if 'date' in cash_flow.columns: cash_flow['date'] = cash_flow['date'].astype(str)
-
-        # Convert DataFrames to a list of dictionaries, which is what our calculators expect
         return {
-            "income": income_stmt.to_dict('records'),
-            "balance": balance_sheet.to_dict('records'),
-            "cash_flow": cash_flow.to_dict('records'),
+            "income": _parse_yfinance_financials(ticker.financials),
+            "balance": _parse_yfinance_financials(ticker.balance_sheet),
+            "cash_flow": _parse_yfinance_financials(ticker.cashflow),
         }
-
     except Exception as e:
         print(f"Error fetching yfinance historical financials for {symbol}: {e}")
         return {"income": [], "balance": [], "cash_flow": []}
 
+def get_quarterly_financials(symbol: str):
+    """
+    Fetches QUARTERLY historical financial statements from Yahoo Finance.
+    Critical for CANSLIM.
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        return {
+            "income": _parse_yfinance_financials(ticker.quarterly_financials),
+            "balance": _parse_yfinance_financials(ticker.quarterly_balance_sheet),
+            "cash_flow": _parse_yfinance_financials(ticker.quarterly_cashflow),
+        }
+    except Exception as e:
+        print(f"Error fetching yfinance quarterly financials for {symbol}: {e}")
+        return {"income": [], "balance": [], "cash_flow": []}
+
+def get_shareholding_summary(symbol: str):
+    """
+    Fetches detailed shareholding breakdown.
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        major_holders = ticker.major_holders
+        if major_holders is None or major_holders.empty:
+            return {}
+
+        # Handle variations in how yfinance returns major_holders
+        holders_dict = {}
+        if isinstance(major_holders, pd.DataFrame):
+             # Sometimes it's (0, 1) cols, sometimes named. We grab by position.
+             try:
+                holders_dict = dict(zip(major_holders.iloc[:, 1], major_holders.iloc[:, 0]))
+             except:
+                 pass
+
+        def parse_percent(key_fragment):
+            for k, v in holders_dict.items():
+                if key_fragment.lower() in str(k).lower():
+                    try:
+                        return float(str(v).replace('%', '').replace(',', '')) / 100.0 if '%' in str(v) else float(str(v).replace('%', '').replace(',', ''))
+                    except: return 0.0
+            return 0.0
+
+        insider_percent = parse_percent('insider')
+        institutional_percent = parse_percent('institution')
+        
+        promoter_percent = insider_percent
+        # Calculate public as remainder. Max 100.
+        public_percent = max(0, 1 - promoter_percent - institutional_percent)
+        
+        # Convert to 0-100 scale for frontend
+        return {
+            "promoter": promoter_percent * 100,
+            "fii": (institutional_percent * 0.6) * 100,
+            "dii": (institutional_percent * 0.4) * 100,
+            "public": public_percent * 100,
+        }
+        
+    except Exception as e:
+        print(f"Error fetching yfinance shareholding summary for {symbol}: {e}")
+        return {}
+
 def get_company_info(symbol: str):
     """
-    Fetches the full .info dictionary from yfinance, which is a treasure trove of data
-    including the crucial sector, industry, and country information.
+    Fetches company info like sector and industry.
     """
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
         if not info or 'symbol' not in info:
-            print(f"Warning: No yfinance .info object found for {symbol}")
             return {}
         return info
     except Exception as e:
         print(f"Error fetching yfinance company info for {symbol}: {e}")
-        return {}
-
-def get_shareholding_summary(symbol: str):
-    """
-    This is our new, gold-standard function for fetching a detailed
-    ownership breakdown (Public, Promoter, Institutional) from Yahoo Finance.
-    """
-    try:
-        ticker = yf.Ticker(symbol)
-        
-        major_holders = ticker.major_holders
-        if major_holders is None or major_holders.empty:
-            print(f"Warning: No yfinance major_holders data found for {symbol}")
-            return {}
-
-        holders_dict = major_holders.set_index(major_holders.columns[1])[major_holders.columns[0]].to_dict()
-
-        insider_percent = float(holders_dict.get('% of Shares Held by All Insider', '0%').replace('%', ''))
-        institutional_percent = float(holders_dict.get('% of Shares Held by Institutions', '0%').replace('%', ''))
-        
-        promoter_percent = insider_percent
-        
-        public_percent = 100 - promoter_percent - institutional_percent
-        if public_percent < 0: public_percent = 0 # Safety check
-        
-        fii_percent = institutional_percent * 0.6
-        dii_percent = institutional_percent * 0.4
-        
-        return {
-            "promoter": promoter_percent,
-            "fii": fii_percent,
-            "dii": dii_percent,
-            "public": public_percent,
-        }
-        
-    except Exception as e:
-        print(f"Error fetching yfinance shareholding summary for {symbol}: {e}")
         return {}

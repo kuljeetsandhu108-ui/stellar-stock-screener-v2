@@ -15,7 +15,7 @@ const RatingText = styled.div`
   font-weight: 700;
   text-align: center;
   margin-top: -30px;
-  color: ${({ ratingColor }) => ratingColor};
+  color: ${({ $ratingColor }) => $ratingColor};
 `;
 
 // --- The React Component (Logic is now more robust) ---
@@ -68,7 +68,7 @@ const RatingDial = ({ rating }) => {
         animate={true}
         animDelay={500}
       />
-      <RatingText ratingColor={color}>
+        <RatingText $ratingColor={color}>
         {text}
       </RatingText>
     </DialContainer>

@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
 
-// --- Styled Components & Animations for our "Extreme Graphics" UI ---
+// --- Styled Components & Animations ---
 
 const fadeIn = keyframes`
   from {
@@ -93,35 +93,73 @@ const TakeawayItem = styled.li`
   }
 `;
 
-// --- The New "Display-Only" React Component ---
+// --- The Component ---
 
 const FundamentalConclusion = ({ conclusionData }) => {
-
-  // The parser and color logic is now the only "brain" in this component.
+  
+  // --- ROBUST PARSING LOGIC ---
+  // This parser handles variations in the AI's output format.
   const parsedConclusion = useMemo(() => {
+    // Default state if data is missing
     if (!conclusionData) {
-      return { grade: 'N/A', thesis: 'Synthesizing data...', takeaways: [] };
+      return { grade: 'N/A', thesis: 'Waiting for analysis...', takeaways: [] };
     }
     
     const lines = conclusionData.split('\n');
-    const grade = lines.find(l => l.startsWith('GRADE:'))?.replace('GRADE:', '').trim() || 'N/A';
-    const thesis = lines.find(l => l.startsWith('THESIS:'))?.replace('THESIS:', '').trim() || 'No thesis available.';
-    const takeaways = lines.filter(l => l.startsWith('- ')).map(l => l.replace('- ', '').trim());
+    let grade = 'N/A';
+    let thesis = 'No thesis generated.';
+    let takeaways = [];
+
+    lines.forEach(line => {
+      const cleanLine = line.trim();
+      const upperLine = cleanLine.toUpperCase();
+
+      // Robust detection of the Grade
+      if (upperLine.startsWith('GRADE:')) {
+        // Extract just the grade letter (e.g., "B+")
+        const parts = cleanLine.split(':');
+        if (parts.length > 1) {
+            grade = parts[1].trim().split(' ')[0]; 
+        }
+      } 
+      // Robust detection of the Thesis
+      else if (upperLine.startsWith('THESIS:')) {
+        const parts = cleanLine.split(':');
+        if (parts.length > 1) {
+            thesis = parts[1].trim();
+        }
+      } 
+      // Robust detection of Takeaways (bullets)
+      else if (cleanLine.startsWith('-') || cleanLine.startsWith('•') || cleanLine.startsWith('*')) {
+         const point = cleanLine.replace(/^[\-\•\*]\s?/, '').trim();
+         if (point.length > 5) { // Filter out empty or tiny lines
+             takeaways.push(point);
+         }
+      }
+    });
+    
+    // Fallback: If the AI returned text but our parser missed the bullets,
+    // try to grab the last few significant lines as takeaways.
+    if (takeaways.length === 0 && conclusionData.length > 50) {
+       takeaways = lines.slice(-3).filter(l => l.length > 10);
+    }
 
     return { grade, thesis, takeaways };
   }, [conclusionData]);
 
+  // Helper to pick a color based on the grade letter
   const getGradeColor = (grade) => {
-    if (grade.startsWith('A')) return 'var(--color-success)';
-    if (grade.startsWith('B')) return '#34D399';
-    if (grade.startsWith('C')) return '#EDBB5A';
-    if (grade.startsWith('D')) return '#F88149';
-    if (grade.startsWith('F')) return 'var(--color-danger)';
+    if (!grade) return 'var(--color-text-secondary)';
+    const g = grade.toUpperCase();
+    if (g.includes('A')) return 'var(--color-success)';
+    if (g.includes('B')) return '#34D399'; // Lighter Green
+    if (g.includes('C')) return '#EDBB5A'; // Yellow
+    if (g.includes('D')) return '#F88149'; // Orange
+    if (g.includes('F')) return 'var(--color-danger)';
     return 'var(--color-text-secondary)';
   };
+  
   const gradeColor = getGradeColor(parsedConclusion.grade);
-
-  // --- All useEffect and isLoading logic has been REMOVED ---
 
   return (
     <SectionContainer>

@@ -174,3 +174,22 @@ def get_peers_with_metrics(symbols: list):
     except requests.exceptions.RequestException as e:
         print(f"Error fetching peers metrics for symbols {symbols_str}: {e}")
         return []
+
+# ... (keep all existing functions)
+
+def search_ticker(query: str, limit: int = 10):
+    """
+    Searches for a stock ticker based on a query string.
+    Used for the frontend autocomplete dropdown.
+    """
+    if not FMP_API_KEY:
+        return []
+    try:
+        # The search endpoint is very fast and lightweight
+        url = f"{BASE_URL}/search?query={query}&limit={limit}&apikey={FMP_API_KEY}"
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error searching for ticker '{query}': {e}")
+        return []

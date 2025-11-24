@@ -1,25 +1,33 @@
-import React, { useState, Children, isValidElement } from 'react';
+import React, { useState, useRef, Children, isValidElement } from 'react';
 import styled from 'styled-components';
+import { FaChevronLeft, FaChevronRight } from 'react-icons/fa';
 
 // --- Styled Components ---
 
 const TabsContainer = styled.div`
   width: 100%;
+  position: relative; /* Needed for absolute positioning of arrows */
+`;
+
+const TabListWrapper = styled.div`
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-bottom: 2px solid var(--color-border);
 `;
 
 const TabList = styled.div`
   display: flex;
-  border-bottom: 2px solid var(--color-border);
-  /* Allows tabs to be scrollable on small screens if they overflow */
   overflow-x: auto;
-
-  /* Hide scrollbar for a cleaner look, but keep functionality */
+  scroll-behavior: smooth;
+  width: 100%;
+  
+  /* Hide scrollbar for a clean, native-app feel */
   &::-webkit-scrollbar {
-    height: 2px;
+    display: none;
   }
-  &::-webkit-scrollbar-thumb {
-    background: var(--color-border);
-  }
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
 `;
 
 const TabButton = styled.button`
@@ -32,7 +40,8 @@ const TabButton = styled.button`
   cursor: pointer;
   position: relative;
   transition: color 0.3s ease;
-  white-space: nowrap; /* Prevents tab names from wrapping */
+  white-space: nowrap; /* Critical: prevents text from wrapping */
+  flex-shrink: 0; /* Critical: prevents buttons from squishing */
 
   &:hover {
     color: var(--color-text-primary);
@@ -41,7 +50,7 @@ const TabButton = styled.button`
   &::after {
     content: '';
     position: absolute;
-    bottom: -2px; /* Sits perfectly on top of the container's border */
+    bottom: -2px;
     left: 0;
     width: 100%;
     height: 2px;
@@ -52,52 +61,107 @@ const TabButton = styled.button`
   }
 `;
 
+// --- The Scroll Arrow Buttons ---
+const ScrollButton = styled.button`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40px;
+  border: none;
+  cursor: pointer;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-primary);
+  font-size: 1rem;
+  transition: opacity 0.2s;
+  
+  /* High-end gradient effect to fade content behind the arrow */
+  &.left {
+    left: 0;
+    background: linear-gradient(to right, var(--color-background) 40%, transparent 100%);
+  }
+  
+  &.right {
+    right: 0;
+    background: linear-gradient(to left, var(--color-background) 40%, transparent 100%);
+  }
+
+  &:hover {
+    color: var(--color-text-primary);
+  }
+
+  /* Only show arrows on devices where scrolling might be needed */
+  @media (min-width: 768px) {
+     /* Optional: You can hide them on large desktop if you prefer, 
+        but keeping them ensures usability everywhere */
+  }
+`;
+
 const TabContentContainer = styled.div`
   padding: 2rem 0;
 `;
 
-// This is the intelligent wrapper that hides inactive tabs instead of destroying them.
 const TabPanelWrapper = styled.div`
   display: ${({ active }) => (active ? 'block' : 'none')};
 `;
 
 
-// --- THIS IS THE NEW, ROBUST, AND PROFESSIONALLY ARCHITECTED TABS COMPONENT ---
-const Tabs = ({ children }) => {
-  // --- THIS IS THE CRITICAL FIX ---
-  
-  // 1. We use React's built-in 'Children.toArray' and 'isValidElement' utilities.
-  // This is the professional way to handle 'children' props. It automatically
-  // filters out any null, false, or undefined values that result from
-  // conditional rendering (like our `{chartAnalysisData && <TabPanel.../>}`).
-  const validChildren = Children.toArray(children).filter(isValidElement);
+// --- The Logic ---
 
-  // 2. We can now safely get the label of the *first valid* child to set our
-  // initial active tab. This prevents the "Cannot read properties of undefined" crash.
+const Tabs = ({ children }) => {
+  const validChildren = Children.toArray(children).filter(isValidElement);
   const [activeTab, setActiveTab] = useState(validChildren[0]?.props.label);
+  const scrollRef = useRef(null);
 
   const handleClick = (e, newActiveTab) => {
     e.preventDefault();
     setActiveTab(newActiveTab);
+    
+    // Optional: Auto-scroll the active tab into view
+    e.target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  };
+
+  const scroll = (direction) => {
+    if (scrollRef.current) {
+      const { current } = scrollRef;
+      const scrollAmount = 200; // Adjust scroll speed
+      if (direction === 'left') {
+        current.scrollLeft -= scrollAmount;
+      } else {
+        current.scrollLeft += scrollAmount;
+      }
+    }
   };
 
   return (
     <TabsContainer>
-      <TabList>
-        {/* We map over our new, clean array of only valid <TabPanel> components */}
-        {validChildren.map(child => (
-          <TabButton
-            key={child.props.label}
-            active={activeTab === child.props.label}
-            onClick={e => handleClick(e, child.props.label)}
-          >
-            {child.props.label}
-          </TabButton>
-        ))}
-      </TabList>
+      <TabListWrapper>
+        {/* Left Arrow */}
+        <ScrollButton className="left" onClick={() => scroll('left')} aria-label="Scroll Left">
+          <FaChevronLeft />
+        </ScrollButton>
+
+        <TabList ref={scrollRef}>
+          {validChildren.map(child => (
+            <TabButton
+              key={child.props.label}
+              active={activeTab === child.props.label}
+              onClick={e => handleClick(e, child.props.label)}
+            >
+              {child.props.label}
+            </TabButton>
+          ))}
+        </TabList>
+
+        {/* Right Arrow */}
+        <ScrollButton className="right" onClick={() => scroll('right')} aria-label="Scroll Right">
+          <FaChevronRight />
+        </ScrollButton>
+      </TabListWrapper>
+
       <TabContentContainer>
-        {/* We map over the children again and wrap each one in our intelligent wrapper */}
-        {/* The wrapper uses CSS 'display: none' to hide inactive tabs, preserving their state. */}
         {validChildren.map(child => (
           <TabPanelWrapper
             key={child.props.label}
@@ -111,8 +175,6 @@ const Tabs = ({ children }) => {
   );
 };
 
-// The TabPanel component remains a simple "dummy" component whose only job
-// is to hold a 'label' prop and its own children.
 const TabPanel = ({ label, children }) => {
   return <div label={label}>{children}</div>;
 };

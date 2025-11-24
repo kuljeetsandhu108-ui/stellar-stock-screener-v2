@@ -1,6 +1,7 @@
-import React, { useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
 import Card from '../common/Card';
+import axios from 'axios';
 import { NestedTabs, NestedTabPanel } from '../common/Tabs/NestedTabs';
 import DarvasScan from './DarvasScan';
 import BenjaminGrahamScan from './BenjaminGrahamScan';
@@ -85,8 +86,10 @@ const CriteriaListItem = styled.li`
   }
 `;
 
+// --- Generic Table/Grid Styles ---
 const AssessmentTable = styled.div`
   display: grid;
+  /* Flexible grid that adapts based on content presence */
   grid-template-columns: 1fr 3fr;
   gap: 1px;
   background-color: var(--color-border);
@@ -96,6 +99,7 @@ const AssessmentTable = styled.div`
   & > div {
     background-color: var(--color-secondary);
     padding: 1rem;
+    line-height: 1.5;
   }
   & > .header {
     font-weight: 600;
@@ -111,8 +115,10 @@ const CanslimTable = styled(AssessmentTable)`
 const ResultCell = styled.div`
   font-weight: 700;
   color: ${({ result }) => {
-    if (result === 'Pass') return 'var(--color-success)';
-    if (result === 'Fail') return 'var(--color-danger)';
+    if (!result) return 'var(--color-text-secondary)';
+    const res = result.toLowerCase();
+    if (res.includes('pass') || res.includes('yes')) return 'var(--color-success)';
+    if (res.includes('fail') || res.includes('no')) return 'var(--color-danger)';
     return 'var(--color-text-secondary)';
   }};
 `;
@@ -126,20 +132,45 @@ const Loader = styled.div`
   justify-content: center;
 `;
 
+// --- Helper to parse "key: value" or "bullet point" formats if table parsing fails ---
+const parseTextFallback = (text) => {
+    if (!text) return [];
+    const lines = text.split('\n');
+    const items = [];
+    lines.forEach(line => {
+        const clean = line.trim();
+        // Look for "Key: Value" pattern or "- Value"
+        if (clean.includes(':')) {
+            const parts = clean.split(':');
+            items.push([parts[0].replace(/^[*-]\s*/, '').trim(), parts.slice(1).join(':').trim(), '']);
+        } else if (clean.startsWith('-') || clean.startsWith('*')) {
+             items.push(['Point', clean.replace(/^[*-]\s*/, '').trim(), '']);
+        }
+    });
+    return items;
+};
+
+
 // --- The Final Master Fundamentals Component ---
 
-// This is now a pure "display" component. It receives all data and loading states as props.
 const Fundamentals = ({
+  symbol,
+  profile,
+  quote,
+  keyMetrics,
   piotroskiData,
   darvasScanData,
   grahamScanData,
+  quarterlyEarnings,
+  annualEarnings,
+  shareholding,
+  delay,
   philosophyAssessment,
   canslimAssessment,
   conclusion,
   isLoadingPhilosophy,
   isLoadingCanslim,
-  isLoadingConclusion,
-  profile
+  isLoadingConclusion
 }) => {
 
   // --- Data Processing for Piotroski Score ---
@@ -151,15 +182,36 @@ const Fundamentals = ({
   };
   const scoreColor = getScoreColor();
   
-  // --- Parsers for AI Markdown Tables ---
+  // --- ROBUST PARSER FOR VALUE INVESTING ---
   const parsedPhilosophy = useMemo(() => {
     if (!philosophyAssessment || typeof philosophyAssessment !== 'string') return [];
-    return philosophyAssessment.split('\n').map(r => r.split('|').map(c => c.trim())).filter(r => r.length > 2 && !r[1].includes('---'));
+    
+    // 1. Try Table Parsing
+    const tableRows = philosophyAssessment.split('\n')
+      .filter(line => line.includes('|'))
+      .map(row => row.split('|').map(c => c.trim()))
+      .filter(r => r.length > 2 && !r[1].includes('---') && !r[1].toLowerCase().includes('formula'));
+    
+    if (tableRows.length > 0) return tableRows;
+
+    // 2. Fallback to Text Parsing
+    return parseTextFallback(philosophyAssessment);
   }, [philosophyAssessment]);
   
+  // --- ROBUST PARSER FOR CANSLIM ---
   const parsedCanslim = useMemo(() => {
     if (!canslimAssessment || typeof canslimAssessment !== 'string') return [];
-    return canslimAssessment.split('\n').map(r => r.split('|').map(c => c.trim())).filter(r => r.length > 3 && !r[1].includes('---'));
+    
+    // 1. Try Table Parsing
+    const tableRows = canslimAssessment.split('\n')
+      .filter(line => line.includes('|'))
+      .map(row => row.split('|').map(c => c.trim()))
+      .filter(r => r.length > 3 && !r[1].includes('---') && !r[1].toLowerCase().includes('criteria'));
+      
+    if (tableRows.length > 0) return tableRows;
+
+    // 2. Fallback to Text Parsing
+    return parseTextFallback(canslimAssessment);
   }, [canslimAssessment]);
 
   return (
@@ -168,7 +220,6 @@ const Fundamentals = ({
         
         <NestedTabPanel label="Conclusion">
           <SectionContainer>
-            {/* The conclusion component is now "display only" */}
             {isLoadingConclusion ? (
               <Loader>Synthesizing all fundamental data...</Loader>
             ) : (
@@ -186,7 +237,7 @@ const Fundamentals = ({
         <NestedTabPanel label="Piotroski Scan">
           <SectionContainer>
             <SectionTitle>Piotroski F-Score</SectionTitle>
-            {piotroskiData && piotroskiData.score > 0 ? (
+            {piotroskiData && piotroskiData.score !== undefined ? (
               <PiotroskiGrid>
                 <ScoreCard scoreColor={scoreColor}>
                   <ScoreValue scoreColor={scoreColor}>{score}</ScoreValue>
@@ -216,13 +267,13 @@ const Fundamentals = ({
                   <div className="header">Result</div>
                   {parsedCanslim.map((row, rowIndex) => (
                     <React.Fragment key={rowIndex}>
-                      <div>{row[1]}</div>
-                      <div>{row[2]}</div>
-                      <ResultCell result={row[3]}>{row[3]}</ResultCell>
+                      <div>{row[0] === 'Point' ? '' : row[1]}</div> {/* Handle fallback format */}
+                      <div>{row[0] === 'Point' ? row[1] : row[2]}</div>
+                      <ResultCell result={row[3] || row[2]}>{row[3] || ''}</ResultCell>
                     </React.Fragment>
                   ))}
                 </CanslimTable>
-              ) : <p>{canslimAssessment}</p>
+              ) : <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{canslimAssessment || "Data insufficient for CANSLIM analysis."}</p>
             )}
           </SectionContainer>
         </NestedTabPanel>
@@ -247,12 +298,12 @@ const Fundamentals = ({
                       <div className="header">Assessment</div>
                       {parsedPhilosophy.map((row, rowIndex) => (
                         <React.Fragment key={rowIndex}>
-                          <div>{row[1]}</div>
-                          <div>{row[2]}</div>
+                          <div>{row[0] === 'Point' ? '' : row[1]}</div>
+                          <div>{row[0] === 'Point' ? row[1] : row[2]}</div>
                         </React.Fragment>
                       ))}
                     </AssessmentTable>
-                  ) : <p>{philosophyAssessment}</p>
+                  ) : <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{philosophyAssessment || "Data insufficient for Investment Philosophy analysis."}</p>
                 )}
             </SectionContainer>
         </NestedTabPanel>
