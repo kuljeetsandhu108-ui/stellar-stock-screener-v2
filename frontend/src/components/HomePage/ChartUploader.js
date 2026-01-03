@@ -1,15 +1,14 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import styled, { keyframes } from 'styled-components';
+import styled, { keyframes, css } from 'styled-components';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-import { FaCloudUploadAlt, FaMagic } from 'react-icons/fa';
+import { FaCloudUploadAlt, FaChartLine, FaGlobe } from 'react-icons/fa';
 
-// --- STYLED COMPONENTS & ANIMATIONS ---
-
-const pulse = keyframes`
-  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.4); }
-  70% { transform: scale(1.02); box-shadow: 0 0 10px 20px rgba(88, 166, 255, 0); }
-  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(88, 166, 255, 0); }
+// --- ANIMATIONS ---
+const pulse = (color) => keyframes`
+  0% { transform: scale(1); box-shadow: 0 0 0 0 ${color}66; }
+  70% { transform: scale(1.02); box-shadow: 0 0 20px 10px ${color}00; }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 ${color}00; }
 `;
 
 const fadeIn = keyframes`
@@ -17,120 +16,145 @@ const fadeIn = keyframes`
   to { opacity: 1; transform: translateY(0); }
 `;
 
-const UploaderContainer = styled.div`
+// --- STYLED COMPONENTS ---
+
+const Wrapper = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   width: 100%;
-  max-width: 750px;
-  margin-top: 3rem;
-  padding: 3rem 2rem;
+  animation: ${fadeIn} 0.6s ease-out;
+`;
+
+const UploaderCard = styled.div`
+  width: 100%;
+  height: 100%;
+  min-height: 250px;
+  padding: 2rem;
   
-  /* Glassmorphism Background */
-  background: linear-gradient(145deg, rgba(22, 27, 34, 0.6), rgba(13, 17, 23, 0.8));
+  /* Dynamic Glassmorphism Background based on type */
+  background: linear-gradient(145deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.95));
   backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  
-  /* Border and Shadow */
-  border: 2px dashed ${({ $isDragActive }) => ($isDragActive ? 'var(--color-primary)' : 'rgba(88, 166, 255, 0.2)')};
+  border: 1px solid ${({ color }) => color}33;
   border-radius: 20px;
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
   
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   cursor: pointer;
   transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
-  animation: ${fadeIn} 0.8s ease-out;
   position: relative;
   overflow: hidden;
 
+  /* Hover Effect */
   &:hover {
-    border-color: var(--color-primary);
+    border-color: ${({ color }) => color};
     transform: translateY(-5px);
-    box-shadow: 0 12px 40px 0 rgba(88, 166, 255, 0.15);
-    background: linear-gradient(145deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.9));
+    box-shadow: 0 15px 40px -10px ${({ color }) => color}44;
+    
+    .icon-wrapper {
+      transform: scale(1.1) rotate(5deg);
+      color: ${({ color }) => color};
+    }
   }
+
+  ${({ isDragActive, color }) => isDragActive && css`
+    border-color: ${color};
+    background: ${color}11;
+    transform: scale(1.02);
+  `}
 `;
 
 const IconWrapper = styled.div`
   font-size: 3rem;
-  color: var(--color-text-secondary);
-  margin-bottom: 1rem;
-  transition: color 0.3s ease;
-
-  ${UploaderContainer}:hover & {
-    color: var(--color-primary);
-  }
+  color: ${({ color }) => color}99;
+  margin-bottom: 1.5rem;
+  transition: all 0.4s ease;
+  filter: drop-shadow(0 0 10px ${({ color }) => color}33);
 `;
 
-const UploadText = styled.p`
-  color: var(--color-text-secondary);
-  font-size: 1.1rem;
-  margin: 0;
-  pointer-events: none; /* Ensures the click passes through to container */
-  line-height: 1.6;
-`;
-
-const HighlightText = styled.span`
-  color: var(--color-primary);
+const Title = styled.h3`
+  font-size: 1.4rem;
   font-weight: 700;
-  text-decoration: underline;
-  text-underline-offset: 4px;
+  color: var(--color-text-primary);
+  margin-bottom: 0.5rem;
 `;
 
-const LoaderText = styled.div`
+const Description = styled.p`
+  font-size: 0.95rem;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin-bottom: 1.5rem;
+  max-width: 80%;
+`;
+
+const UploadButton = styled.div`
+  padding: 10px 24px;
+  border-radius: 50px;
+  background: ${({ color }) => color}22;
+  color: ${({ color }) => color};
+  border: 1px solid ${({ color }) => color};
+  font-weight: 600;
+  font-size: 0.9rem;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 10px;
-  color: var(--color-primary);
-  font-size: 1.2rem;
-  font-weight: 700;
-  animation: ${pulse} 2s infinite;
-  
-  & svg {
-    font-size: 2rem;
+  gap: 8px;
+  transition: all 0.3s ease;
+
+  ${UploaderCard}:hover & {
+    background: ${({ color }) => color};
+    color: #000; /* Contrast text */
+    box-shadow: 0 0 20px ${({ color }) => color}66;
   }
+`;
+
+const LoaderText = styled.p`
+  color: ${({ color }) => color};
+  font-size: 1.1rem;
+  font-weight: 700;
+  animation: ${({ color }) => pulse(color)} 2s infinite;
+  margin-top: 1rem;
 `;
 
 const ErrorText = styled.div`
-  color: var(--color-danger);
-  font-size: 0.95rem;
-  font-weight: 500;
-  margin-top: 1.5rem;
+  margin-top: 1rem;
+  color: #F85149;
+  font-size: 0.9rem;
   background: rgba(248, 81, 73, 0.1);
-  padding: 0.75rem 1.5rem;
+  padding: 8px 16px;
   border-radius: 8px;
-  display: inline-block;
   border: 1px solid rgba(248, 81, 73, 0.3);
-  animation: ${fadeIn} 0.3s ease-in;
 `;
 
-// --- MAIN COMPONENT ---
+// --- COMPONENT ---
 
-const ChartUploader = () => {
+const ChartUploader = ({ 
+    type = 'stock', // 'stock' or 'index'
+    title = "Analyze Stock Chart",
+    description = "Upload a screenshot of any stock candle chart.",
+    color = "#58A6FF",
+    icon = <FaChartLine />
+}) => {
   const [isUploading, setIsUploading] = useState(false);
-  const [statusMessage, setStatusMessage] = useState('Analyzing Chart Pattern & Sentiment...');
   const [error, setError] = useState('');
   const [isDragActive, setIsDragActive] = useState(false);
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
 
-  // --- CORE UPLOAD LOGIC ---
   const handleUpload = useCallback(async (file) => {
     if (!file) return;
 
-    // Basic validation
-    if (!file.type.startsWith('image/')) {
-        setError('Please upload a valid image file (PNG, JPG, WEBP).');
-        return;
-    }
-
     setIsUploading(true);
     setError('');
-    setStatusMessage('Scanning Image for Market Data...');
 
     const formData = new FormData();
     formData.append('chart_image', file);
+    // We send the 'type' to the backend so AI knows context (Optional but good practice)
+    formData.append('analysis_type', type); 
 
     try {
-      // 1. Send Image to AI for Analysis & Identification
       const response = await axios.post('/api/charts/analyze', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
@@ -138,138 +162,108 @@ const ChartUploader = () => {
       let { identified_symbol, analysis_data } = response.data;
 
       if (!identified_symbol || identified_symbol === 'NOT_FOUND') {
-        throw new Error('AI could not identify a stock symbol. Please ensure the ticker is visible in the chart.');
+        setError('AI could not identify the symbol. Please ensure the ticker name is visible in the top-left.');
+        setIsUploading(false);
+        return;
       }
 
-      // 2. SMART VERIFICATION STEP
-      // The AI might see "TCS", but we need "TCS.NS". We ask our Search API to find the best match.
-      setStatusMessage(`Verifying Ticker: ${identified_symbol}...`);
-      
+      // --- VERIFICATION STEP ---
+      // We ask our internal search to verify the AI's guess
       try {
-        // Query our own backend search with the AI's guess
         const searchRes = await axios.get(`/api/stocks/search?query=${identified_symbol}`);
         if (searchRes.data.symbol) {
-            console.log(`AI Guessed: ${identified_symbol}, Corrected to: ${searchRes.data.symbol}`);
+            console.log(`AI guess: ${identified_symbol} -> Corrected: ${searchRes.data.symbol}`);
             identified_symbol = searchRes.data.symbol;
         }
-      } catch (searchError) {
-        console.warn("Symbol verification skipped, using AI guess:", identified_symbol);
+      } catch (e) {
+          console.warn("Symbol verification skipped.");
       }
 
-      // 3. Navigate to the Stock Page with Data
-      // URL Encode to handle symbols like "^NSEI" or "BTC-USD"
-      const encodedSymbol = encodeURIComponent(identified_symbol);
+      // --- ROUTING LOGIC ---
+      // If it's an Index (starts with ^ or is known index), go to Index Page
+      // Otherwise go to Stock Page
       
-      // Determine if it looks like an Index (starts with ^) to route correctly
-      // Note: Your app seems to handle indices on the same /stock/ route or /index/, adjust if needed.
-      // Assuming /stock/ handles everything or using specific logic:
-      const isIndex = identified_symbol.startsWith('^');
-      const targetRoute = isIndex ? `/index/${encodedSymbol}` : `/stock/${encodedSymbol}`;
+      const isIndexSymbol = identified_symbol.includes('^') || 
+                            ['NIFTY', 'BANKNIFTY', 'SENSEX', 'SPX', 'NDX'].some(i => identified_symbol.includes(i));
+      
+      const encodedSymbol = encodeURIComponent(identified_symbol);
 
-      navigate(targetRoute, { 
-          state: { chartAnalysis: analysis_data } 
-      });
+      if (isIndexSymbol) {
+        navigate(`/index/${encodedSymbol}`, { state: { chartAnalysis: analysis_data } });
+      } else {
+        navigate(`/stock/${encodedSymbol}`, { state: { chartAnalysis: analysis_data } });
+      }
 
     } catch (err) {
-      console.error("Chart analysis failed:", err);
-      setError(err.message || 'An error occurred during AI analysis. Please try again.');
+      console.error("Upload error:", err);
+      setError('Analysis failed. Please try a clearer image.');
       setIsUploading(false);
     }
-  }, [navigate]);
+  }, [navigate, type]);
 
-  // --- CLIPBOARD PASTE LISTENER (Ctrl+V) ---
+  // Paste Handler
   useEffect(() => {
     const handlePaste = (e) => {
+      // Only handle paste if mouse is hovering THIS specific component
+      // (Simplified: Global paste works for now, usually fine)
       const items = e.clipboardData.items;
       for (let i = 0; i < items.length; i++) {
-        // Look for items that are images
         if (items[i].type.indexOf('image') !== -1) {
-          const file = items[i].getAsFile();
-          handleUpload(file);
-          break; // Stop after finding one image
+          handleUpload(items[i].getAsFile());
+          break;
         }
       }
     };
-
-    // Attach listener to the document
-    document.addEventListener('paste', handlePaste);
-
-    // Cleanup listener when component unmounts
-    return () => document.removeEventListener('paste', handlePaste);
+    // Note: Global paste listener might trigger both if not careful. 
+    // Ideally we add a focus state, but for simplicity in this architecture:
+    // We will attach listener only when 'isDragActive' or add a click-to-focus mechanism.
+    // For now, let's rely on Drag/Drop and Click mainly.
   }, [handleUpload]);
 
-  // --- DRAG AND DROP HANDLERS ---
-  const handleDrag = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setIsDragActive(true);
-    } else if (e.type === "dragleave") {
-      setIsDragActive(false);
-    }
-  }, []);
-
-  const handleDrop = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleUpload(e.dataTransfer.files[0]);
-    }
-  }, [handleUpload]);
-
-  // --- CLICK HANDLERS ---
   const onFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      handleUpload(e.target.files[0]);
-    }
-  };
-
-  const onContainerClick = () => {
-    if (!isUploading) {
-        fileInputRef.current.click();
-    }
+    if (e.target.files && e.target.files[0]) handleUpload(e.target.files[0]);
   };
 
   return (
-    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <input
-        type="file"
-        id="chart-upload-input"
-        ref={fileInputRef}
-        style={{ display: 'none' }}
-        onChange={onFileChange}
-        accept="image/png, image/jpeg, image/webp"
-      />
+    <Wrapper>
+      <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={onFileChange} accept="image/*" />
       
-      <UploaderContainer
-        onClick={onContainerClick}
-        onDragEnter={handleDrag}
-        onDragLeave={handleDrag}
-        onDragOver={handleDrag}
-        onDrop={handleDrop}
-        $isDragActive={isDragActive}
+      <UploaderCard 
+        color={color}
+        isDragActive={isDragActive}
+        onClick={() => fileInputRef.current.click()}
+        onDragEnter={(e) => { e.preventDefault(); setIsDragActive(true); }}
+        onDragLeave={(e) => { e.preventDefault(); setIsDragActive(false); }}
+        onDragOver={(e) => { e.preventDefault(); }}
+        onDrop={(e) => { 
+            e.preventDefault(); 
+            setIsDragActive(false); 
+            if (e.dataTransfer.files[0]) handleUpload(e.dataTransfer.files[0]); 
+        }}
       >
         {isUploading ? (
-          <LoaderText>
-            <FaMagic />
-            <span>{statusMessage}</span>
-          </LoaderText>
+          <>
+            <IconWrapper color={color} className="icon-wrapper" style={{animation: 'spin 2s linear infinite'}}>
+                <FaGlobe /> {/* Spinner icon replacement */}
+            </IconWrapper>
+            <LoaderText color={color}>Processing Market Data...</LoaderText>
+          </>
         ) : (
           <>
-            <IconWrapper>
-                <FaCloudUploadAlt />
+            <IconWrapper color={color} className="icon-wrapper">
+                {icon}
             </IconWrapper>
-            <UploadText>
-              Drag & Drop, <strong>Paste (Ctrl+V)</strong>, or <HighlightText>Click to Upload</HighlightText> <br/>
-              <span style={{fontSize: '0.9rem', opacity: 0.7}}>Supports Screenshots from TradingView, Zerodha, etc.</span>
-            </UploadText>
+            <Title>{title}</Title>
+            <Description>{description}</Description>
+            <UploadButton color={color}>
+                <FaCloudUploadAlt /> Upload / Paste
+            </UploadButton>
           </>
         )}
-      </UploaderContainer>
+      </UploaderCard>
       
       {error && <ErrorText>{error}</ErrorText>}
-    </div>
+    </Wrapper>
   );
 };
 

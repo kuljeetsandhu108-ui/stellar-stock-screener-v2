@@ -9,7 +9,6 @@ import {
 } from 'lightweight-charts';
 import styled from 'styled-components';
 import axios from 'axios';
-// --- MATH LIBRARY FOR INDICATORS ---
 import { RSI, MACD, StochasticRSI, SMA, EMA } from 'technicalindicators';
 import { FaLayerGroup, FaTimes, FaPlus } from 'react-icons/fa';
 
@@ -18,7 +17,7 @@ import { FaLayerGroup, FaTimes, FaPlus } from 'react-icons/fa';
 const ChartWrapper = styled.div`
   position: relative;
   width: 100%;
-  height: 600px; /* Tall enough for indicators */
+  height: 600px;
   background-color: #0D1117;
   border: 1px solid var(--color-border);
   border-radius: 12px;
@@ -94,7 +93,7 @@ const Dropdown = styled.div`
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: 200px;
+  width: 220px;
 `;
 
 const InputGroup = styled.div`
@@ -133,7 +132,6 @@ const ActiveIndicatorsList = styled.div`
   overflow-x: auto;
   padding: 4px 0;
   align-items: center;
-  
   &::-webkit-scrollbar { display: none; }
 `;
 
@@ -185,25 +183,118 @@ const PulseDot = styled.div`
   }
 `;
 
+// --- ENHANCED SMC ENGINE ---
+const calculateSMC = (data) => {
+    const markers = [];
+    const coloredCandles = []; 
+    const priceLines = []; 
+
+    if (!data || data.length < 5) return { markers, coloredCandles, priceLines };
+
+    for (let i = 2; i < data.length - 1; i++) {
+        const curr = data[i];     
+        const prev = data[i-1];   
+        const prev2 = data[i-2];  
+
+        // --- 1. FAIR VALUE GAPS (FVG) ---
+        // We removed the strict threshold so ALL gaps show up.
+        
+        // Bullish Gap
+        if (curr.low > prev2.high) {
+            coloredCandles.push({ 
+                time: prev.time, 
+                color: '#FBBF24', // Yellow
+                wickColor: '#FBBF24', 
+                borderColor: '#FBBF24' 
+            });
+            // Draw Demand Zone (limit to recent)
+            if (i > data.length - 80) {
+                 priceLines.push({ price: prev2.high, color: '#FBBF24', title: 'DEMAND GAP' });
+            }
+        }
+
+        // Bearish Gap
+        if (curr.high < prev2.low) {
+            coloredCandles.push({ 
+                time: prev.time, 
+                color: '#D500F9', // Purple
+                wickColor: '#D500F9', 
+                borderColor: '#D500F9' 
+            });
+            // Draw Supply Zone
+            if (i > data.length - 80) {
+                priceLines.push({ price: prev2.low, color: '#D500F9', title: 'SUPPLY GAP' });
+            }
+        }
+
+        // --- 2. ORDER BLOCKS (Independent Price Action Logic) ---
+        
+        // Bullish OB: Red candle followed by Green that closes above Red's Open (Engulfing)
+        const isRedPrev = prev.close < prev.open;
+        const isGreenCurr = curr.close > curr.open;
+        const engulfsBull = curr.close > prev.open; // Simple engulfing definition
+
+        if (isRedPrev && isGreenCurr && engulfsBull) {
+            markers.push({ 
+                time: prev.time, // Mark the Order Block candle
+                position: 'belowBar', 
+                color: '#00E676', // Bright Green
+                shape: 'arrowUp', 
+                text: 'OB',
+                size: 1
+            });
+        }
+        
+        // Bearish OB: Green candle followed by Red that closes below Green's Open
+        const isGreenPrev = prev.close > prev.open;
+        const isRedCurr = curr.close < curr.open;
+        const engulfsBear = curr.close < prev.open;
+
+        if (isGreenPrev && isRedCurr && engulfsBear) {
+            markers.push({ 
+                time: prev.time, 
+                position: 'aboveBar', 
+                color: '#FF1744', // Bright Red
+                shape: 'arrowDown', 
+                text: 'OB',
+                size: 1
+            });
+        }
+    }
+    
+    // Sort markers by time
+    markers.sort((a, b) => a.time - b.time);
+    
+    // Deduplicate markers (keep only one per candle to avoid clutter)
+    const uniqueMarkers = [];
+    const seenTimes = new Set();
+    for (let m of markers) {
+        if (!seenTimes.has(m.time)) {
+            uniqueMarkers.push(m);
+            seenTimes.add(m.time);
+        }
+    }
+
+    return { markers: uniqueMarkers, coloredCandles, priceLines };
+};
+
 // --- MAIN COMPONENT ---
 
 const CustomChart = ({ symbol }) => {
   const chartContainerRef = useRef();
   
-  // Refs to hold instances (Mutable, doesn't trigger render)
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
+  const priceLinesRef = useRef([]); 
   
-  // State
   const [timeframe, setTimeframe] = useState('1D'); 
   const [chartData, setChartData] = useState([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeIndicators, setActiveIndicators] = useState([]);
   const [isLive, setIsLive] = useState(false);
   
-  // Indicator Inputs
-  const [selectedInd, setSelectedInd] = useState('SMA');
+  const [selectedInd, setSelectedInd] = useState('SMC');
   const [param1, setParam1] = useState(20);
   const [param2, setParam2] = useState(26);
   const [param3, setParam3] = useState(9);
@@ -211,19 +302,11 @@ const CustomChart = ({ symbol }) => {
   // --- 1. INITIALIZATION ---
   useEffect(() => {
     if (!chartContainerRef.current) return;
-
-    // Force cleanup existing chart
     chartContainerRef.current.innerHTML = '';
 
     const chart = createChart(chartContainerRef.current, {
-      layout: {
-        background: { type: ColorType.Solid, color: '#0D1117' },
-        textColor: '#8B949E',
-      },
-      grid: {
-        vertLines: { color: '#21262D' },
-        horzLines: { color: '#21262D' },
-      },
+      layout: { background: { type: ColorType.Solid, color: '#0D1117' }, textColor: '#8B949E' },
+      grid: { vertLines: { color: '#21262D' }, horzLines: { color: '#21262D' } },
       width: chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
       crosshair: { mode: CrosshairMode.Normal },
@@ -231,46 +314,36 @@ const CustomChart = ({ symbol }) => {
       rightPriceScale: { borderColor: '#30363D' },
     });
 
-    // Main Candle Series
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#3FB950', downColor: '#F85149',
       borderVisible: false, wickUpColor: '#3FB950', wickDownColor: '#F85149',
     });
 
-    // Volume Series (Overlay at bottom)
     const volumeSeries = chart.addSeries(HistogramSeries, {
-      color: '#26a69a',
-      priceFormat: { type: 'volume' },
-      priceScaleId: '', // Overlay on main scale
+      color: '#26a69a', priceFormat: { type: 'volume' }, priceScaleId: '',
     });
-
-    volumeSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.85, bottom: 0 },
-    });
+    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
 
-    // RESIZE OBSERVER (Solves the "Invisible Chart" bug)
     const resizeObserver = new ResizeObserver(entries => {
         if (!chartRef.current) return;
         const newRect = entries[0].contentRect;
         if (newRect.width > 0 && newRect.height > 0) {
-            chartRef.current.applyOptions({ 
-                width: newRect.width, 
-                height: newRect.height 
-            });
+            chartRef.current.applyOptions({ width: newRect.width, height: newRect.height });
             chartRef.current.timeScale().fitContent(); 
         }
     });
-    
     resizeObserver.observe(chartContainerRef.current);
 
     return () => {
       resizeObserver.disconnect();
-      chart.remove();
-      chartRef.current = null;
+      if (chartRef.current) {
+        chartRef.current.remove();
+        chartRef.current = null;
+      }
     };
   }, []);
 
@@ -278,21 +351,11 @@ const CustomChart = ({ symbol }) => {
   const fetchData = useCallback(async () => {
     if (!symbol) return;
     try {
-      // Use our new robust FMP/Yahoo hybrid endpoint
       const response = await axios.get(`/api/stocks/${symbol}/chart?range=${timeframe}`);
       const data = response.data;
 
-      if (chartRef.current && data.length > 0) {
-        setChartData(data); // Store for indicators calculation
-        
-        candleSeriesRef.current.setData(data);
-        
-        const volData = data.map(d => ({
-          time: d.time,
-          value: d.volume,
-          color: d.close >= d.open ? 'rgba(63, 185, 80, 0.4)' : 'rgba(248, 81, 73, 0.4)'
-        }));
-        volumeSeriesRef.current.setData(volData);
+      if (chartRef.current && candleSeriesRef.current && data.length > 0) {
+        setChartData(data);
         setIsLive(true);
       }
     } catch (err) {
@@ -301,155 +364,168 @@ const CustomChart = ({ symbol }) => {
     }
   }, [symbol, timeframe]);
 
+  // --- 3. APPLY INDICATORS ---
+  useEffect(() => {
+    if (!chartRef.current || !candleSeriesRef.current || chartData.length === 0) return;
+
+    const isSMC = activeIndicators.some(i => i.type === 'SMC');
+
+    if (isSMC) {
+        const { markers, coloredCandles, priceLines } = calculateSMC(chartData);
+
+        // 1. Apply Colors (FVG)
+        const coloredData = chartData.map(d => {
+            const override = coloredCandles.find(c => c.time === d.time);
+            return override ? { ...d, ...override } : d;
+        });
+        candleSeriesRef.current.setData(coloredData);
+
+        // 2. Apply Markers (OB)
+        if (candleSeriesRef.current.setMarkers) {
+             candleSeriesRef.current.setMarkers(markers);
+        }
+
+        // 3. Apply Lines
+        // Clear old lines
+        priceLinesRef.current.forEach(line => {
+             if(chartRef.current && candleSeriesRef.current) {
+                 try { candleSeriesRef.current.removePriceLine(line); } catch(e){}
+             }
+        });
+        priceLinesRef.current = [];
+
+        // Draw new lines (Limit last 5 for performance)
+        const recentLines = priceLines.slice(-5);
+        recentLines.forEach(lineData => {
+            if (candleSeriesRef.current.createPriceLine) {
+                const lineObj = candleSeriesRef.current.createPriceLine({
+                    price: lineData.price,
+                    color: lineData.color,
+                    lineWidth: 2,
+                    lineStyle: 0, 
+                    axisLabelVisible: true,
+                    title: lineData.title,
+                });
+                priceLinesRef.current.push(lineObj);
+            }
+        });
+
+    } else {
+        // Normal Mode
+        candleSeriesRef.current.setData(chartData);
+        if (candleSeriesRef.current.setMarkers) {
+            candleSeriesRef.current.setMarkers([]);
+        }
+        // Clear SMC lines
+        priceLinesRef.current.forEach(line => {
+             if(chartRef.current && candleSeriesRef.current) {
+                 try { candleSeriesRef.current.removePriceLine(line); } catch(e){}
+             }
+        });
+        priceLinesRef.current = [];
+    }
+
+    // Update Volume
+    if (volumeSeriesRef.current) {
+        const volData = chartData.map(d => ({
+          time: d.time, value: d.volume,
+          color: d.close >= d.open ? 'rgba(63, 185, 80, 0.4)' : 'rgba(248, 81, 73, 0.4)'
+        }));
+        volumeSeriesRef.current.setData(volData);
+    }
+
+  }, [chartData, activeIndicators]);
+
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 10000); // Live poll 10s
+    const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  // --- 3. INDICATOR LOGIC ---
+  // --- 4. HANDLERS ---
   const addIndicator = () => {
     if (!chartData.length || !chartRef.current) return;
-
     const closePrices = chartData.map(d => d.close);
     const id = Date.now();
     let newSeries = [];
-    
-    // Generate a unique Pane ID for oscillators
     let paneId = `pane_${id}`;
 
     try {
-      if (selectedInd === 'SMA') {
+      if (selectedInd === 'SMC') { 
+          // Logic handled in useEffect
+      }
+      else if (selectedInd === 'SMA') {
         const period = parseInt(param1);
-        const smaRes = SMA.calculate({ period, values: closePrices });
-        const smaData = [];
-        
-        // Align data (indicators are shorter than price history)
-        for (let i = 0; i < smaRes.length; i++) {
-            const dataIndex = chartData.length - 1 - i;
-            const resIndex = smaRes.length - 1 - i;
-            if (dataIndex >= 0) {
-                smaData.unshift({ time: chartData[dataIndex].time, value: smaRes[resIndex] });
-            }
+        const res = SMA.calculate({ period, values: closePrices });
+        const lineData = [];
+        for (let i = 0; i < res.length; i++) {
+            const dIndex = chartData.length - 1 - i; const rIndex = res.length - 1 - i;
+            if (dIndex >= 0) lineData.unshift({ time: chartData[dIndex].time, value: res[rIndex] });
         }
-        
-        // Overlay (no priceScaleId)
-        const smaSeries = chartRef.current.addSeries(LineSeries, { 
-            color: '#FF9800', lineWidth: 2, title: `SMA ${period}` 
-        });
-        smaSeries.setData(smaData);
-        newSeries.push(smaSeries);
+        const series = chartRef.current.addSeries(LineSeries, { color: '#FF9800', lineWidth: 2, title: `SMA ${period}` });
+        series.setData(lineData);
+        newSeries.push(series);
       }
       else if (selectedInd === 'EMA') {
         const period = parseInt(param1);
-        const emaRes = EMA.calculate({ period, values: closePrices });
-        const emaData = [];
-        for (let i = 0; i < emaRes.length; i++) {
-            const dataIndex = chartData.length - 1 - i;
-            const resIndex = emaRes.length - 1 - i;
-            if (dataIndex >= 0) emaData.unshift({ time: chartData[dataIndex].time, value: emaRes[resIndex] });
+        const res = EMA.calculate({ period, values: closePrices });
+        const lineData = [];
+        for (let i = 0; i < res.length; i++) {
+            const dIndex = chartData.length - 1 - i; const rIndex = res.length - 1 - i;
+            if (dIndex >= 0) lineData.unshift({ time: chartData[dIndex].time, value: res[rIndex] });
         }
-        // Overlay
-        const emaSeries = chartRef.current.addSeries(LineSeries, { 
-            color: '#2962FF', lineWidth: 2, title: `EMA ${period}` 
-        });
-        emaSeries.setData(emaData);
-        newSeries.push(emaSeries);
+        const series = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, title: `EMA ${period}` });
+        series.setData(lineData);
+        newSeries.push(series);
       }
       else if (selectedInd === 'RSI') {
-        const rsiValues = RSI.calculate({ values: closePrices, period: parseInt(param1) });
-        const rsiData = [];
-        for (let i = 0; i < rsiValues.length; i++) {
-            const dataIndex = chartData.length - 1 - i;
-            const rsiIndex = rsiValues.length - 1 - i;
-            if (dataIndex >= 0) rsiData.unshift({ time: chartData[dataIndex].time, value: rsiValues[rsiIndex] });
+        const res = RSI.calculate({ values: closePrices, period: parseInt(param1) });
+        const lineData = [];
+        for (let i = 0; i < res.length; i++) {
+            const dIndex = chartData.length - 1 - i; const rIndex = res.length - 1 - i;
+            if (dIndex >= 0) lineData.unshift({ time: chartData[dIndex].time, value: res[rIndex] });
         }
-        
-        // Separate Pane
-        const rsiSeries = chartRef.current.addSeries(LineSeries, { 
-            color: '#A855F7', lineWidth: 2, priceScaleId: paneId, title: `RSI (${param1})` 
-        });
-        rsiSeries.setData(rsiData);
-        newSeries.push(rsiSeries);
-        
-        // Configure Pane (Bottom)
+        const series = chartRef.current.addSeries(LineSeries, { color: '#A855F7', lineWidth: 2, priceScaleId: paneId, title: `RSI (${param1})` });
+        series.setData(lineData);
+        newSeries.push(series);
         chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-      } 
+      }
       else if (selectedInd === 'MACD') {
-        const macdInput = { 
-            values: closePrices, fastPeriod: parseInt(param1), slowPeriod: parseInt(param2), 
-            signalPeriod: parseInt(param3), SimpleMAOscillator: false, SimpleMASignal: false 
-        };
-        const macdRes = MACD.calculate(macdInput);
-        const macdLine = []; const signalLine = []; const histogram = [];
-
-        for(let i=0; i<macdRes.length; i++){
-            const dIndex = chartData.length - 1 - i;
-            const mIndex = macdRes.length - 1 - i;
+        const macdInput = { values: closePrices, fastPeriod: parseInt(param1), slowPeriod: parseInt(param2), signalPeriod: parseInt(param3), SimpleMAOscillator: false, SimpleMASignal: false };
+        const res = MACD.calculate(macdInput);
+        const mLine = []; const sLine = []; const hLine = [];
+        for(let i=0; i<res.length; i++){
+            const dIndex = chartData.length - 1 - i; const rIndex = res.length - 1 - i;
             if (dIndex >= 0){
-                const t = chartData[dIndex].time; const m = macdRes[mIndex];
-                macdLine.unshift({ time: t, value: m.MACD });
-                signalLine.unshift({ time: t, value: m.signal });
-                histogram.unshift({ time: t, value: m.histogram, color: m.histogram >= 0 ? '#26a69a' : '#ef5350' });
+                const t = chartData[dIndex].time; const m = res[rIndex];
+                mLine.unshift({ time: t, value: m.MACD });
+                sLine.unshift({ time: t, value: m.signal });
+                hLine.unshift({ time: t, value: m.histogram, color: m.histogram >= 0 ? '#26a69a' : '#ef5350' });
             }
         }
-
-        const histSeries = chartRef.current.addSeries(HistogramSeries, { priceScaleId: paneId });
+        const hSeries = chartRef.current.addSeries(HistogramSeries, { priceScaleId: paneId });
         const mSeries = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, priceScaleId: paneId });
         const sSeries = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 2, priceScaleId: paneId });
-
-        histSeries.setData(histogram); mSeries.setData(macdLine); sSeries.setData(signalLine);
-        newSeries = [histSeries, mSeries, sSeries];
-        
+        hSeries.setData(hLine); mSeries.setData(mLine); sSeries.setData(sLine);
+        newSeries = [hSeries, mSeries, sSeries];
         chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
       }
-      else if (selectedInd === 'StochRSI') {
-          const stochInput = { 
-              values: closePrices, rsiPeriod: parseInt(param1), stochasticPeriod: parseInt(param2), kPeriod: 3, dPeriod: 3 
-          };
-          const stochRes = StochasticRSI.calculate(stochInput);
-          const kLine = []; const dLine = [];
-          
-          for(let i=0; i<stochRes.length; i++){
-              const dIndex = chartData.length - 1 - i;
-              const sIndex = stochRes.length - 1 - i;
-              if (dIndex >= 0) {
-                  kLine.unshift({ time: chartData[dIndex].time, value: stochRes[sIndex].k });
-                  dLine.unshift({ time: chartData[dIndex].time, value: stochRes[sIndex].d });
-              }
-          }
 
-          const kSeries = chartRef.current.addSeries(LineSeries, { color: '#2962FF', title: '%K', priceScaleId: paneId });
-          const dSeries = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', title: '%D', priceScaleId: paneId });
-          
-          kSeries.setData(kLine); dSeries.setData(dLine);
-          newSeries = [kSeries, dSeries];
-          
-          chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-      }
-
-      // Save Indicator State
-      const indObj = { 
-          id, 
-          type: selectedInd, 
-          series: newSeries, 
-          params: `${param1}${selectedInd === 'SMA' || selectedInd === 'EMA' ? '' : ','+param2+','+param3}` 
-      };
-      
-      setActiveIndicators([...activeIndicators, indObj]);
+      setActiveIndicators([...activeIndicators, { id, type: selectedInd, series: newSeries, params: `${param1}${selectedInd === 'SMA' || selectedInd === 'EMA' ? '' : ','+param2+','+param3}` }]);
       setIsMenuOpen(false);
-
-    } catch (e) {
-        console.error("Indicator Calculation Error:", e);
-    }
+    } catch (e) { console.error("Indicator Calc Error", e); }
   };
 
   const removeIndicator = (id) => {
       const indToRemove = activeIndicators.find(i => i.id === id);
-      if (indToRemove && chartRef.current) {
-          indToRemove.series.forEach(s => chartRef.current.removeSeries(s));
-          setActiveIndicators(activeIndicators.filter(i => i.id !== id));
+      if (!indToRemove) return;
+
+      if (indToRemove.type !== 'SMC') {
+          if (chartRef.current) {
+              indToRemove.series.forEach(s => chartRef.current.removeSeries(s));
+          }
       }
+      setActiveIndicators(activeIndicators.filter(i => i.id !== id));
   };
 
   const timeframesList = ['5M', '15M', '1H', '4H', '1D'];
@@ -458,73 +534,42 @@ const CustomChart = ({ symbol }) => {
     <ChartWrapper>
       <Toolbar>
         <LeftGroup>
-            {/* Range Selector */}
             <div style={{display:'flex', gap:'4px'}}>
             {timeframesList.map((tf) => (
-                <RangeButton key={tf} active={timeframe === tf} onClick={() => setTimeframe(tf)}>
-                {tf}
-                </RangeButton>
+                <RangeButton key={tf} active={timeframe === tf} onClick={() => setTimeframe(tf)}>{tf}</RangeButton>
             ))}
             </div>
-
-            {/* Indicator Dropdown */}
             <div style={{position: 'relative'}}>
-                <IndicatorButton onClick={() => setIsMenuOpen(!isMenuOpen)}>
-                    <FaLayerGroup /> Indicators <FaPlus size={10}/>
-                </IndicatorButton>
-                
+                <IndicatorButton onClick={() => setIsMenuOpen(!isMenuOpen)}><FaLayerGroup /> Indicators <FaPlus size={10}/></IndicatorButton>
                 {isMenuOpen && (
                     <Dropdown>
-                        <select 
-                            style={{background: '#0D1117', color:'white', padding:'5px', borderRadius:'4px', width:'100%'}}
-                            value={selectedInd}
-                            onChange={(e) => setSelectedInd(e.target.value)}
-                        >
-                            <option value="SMA">SMA (Simple)</option>
-                            <option value="EMA">EMA (Exponential)</option>
-                            <option value="RSI">RSI</option>
-                            <option value="MACD">MACD</option>
-                            <option value="StochRSI">Stoch RSI</option>
+                        <select style={{background: '#0D1117', color:'white', padding:'5px', borderRadius:'4px', width:'100%'}} value={selectedInd} onChange={(e) => setSelectedInd(e.target.value)}>
+                            <option value="SMC">⚡ SMC (Smart Money)</option>
+                            <option value="SMA">SMA</option><option value="EMA">EMA</option><option value="RSI">RSI</option><option value="MACD">MACD</option>
                         </select>
-                        
-                        <div style={{fontSize:'0.8rem', color:'#8b949e'}}>Settings:</div>
-                        <InputGroup>
-                            <StyledInput type="number" value={param1} onChange={e=>setParam1(e.target.value)} title="Period / Fast" />
-                            {['MACD', 'StochRSI'].includes(selectedInd) && (
-                                <>
-                                <StyledInput type="number" value={param2} onChange={e=>setParam2(e.target.value)} title="Slow" />
-                                <StyledInput type="number" value={param3} onChange={e=>setParam3(e.target.value)} title="Signal" />
-                                </>
-                            )}
-                        </InputGroup>
-
-                        <AddButton onClick={addIndicator}>Add Indicator</AddButton>
+                        {selectedInd !== 'SMC' && (
+                            <>
+                            <div style={{fontSize:'0.8rem', color:'#8b949e'}}>Settings:</div>
+                            <InputGroup>
+                                <StyledInput type="number" value={param1} onChange={e=>setParam1(e.target.value)} title="Period/Fast" />
+                                {['MACD'].includes(selectedInd) && (
+                                    <><StyledInput type="number" value={param2} onChange={e=>setParam2(e.target.value)} title="Slow" /><StyledInput type="number" value={param3} onChange={e=>setParam3(e.target.value)} title="Signal" /></>
+                                )}
+                            </InputGroup>
+                            </>
+                        )}
+                        <AddButton onClick={addIndicator}>Add {selectedInd}</AddButton>
                     </Dropdown>
                 )}
             </div>
         </LeftGroup>
-
-        {/* Live Status */}
-        <StatusText isLive={isLive}>
-            {isLive && <PulseDot />}
-            {isLive ? 'LIVE' : 'CONNECTING...'}
-        </StatusText>
-      </Toolbar>
-        
-      {/* Active Chips */}
-      {activeIndicators.length > 0 && (
-        <div style={{padding: '0 12px 8px 12px', display: 'flex', background: '#161B22', borderBottom: '1px solid #30363D'}}>
-            <ActiveIndicatorsList>
-                {activeIndicators.map(ind => (
-                    <IndicatorTag key={ind.id}>
-                        {ind.type} ({ind.params})
-                        <CloseIcon onClick={() => removeIndicator(ind.id)} />
-                    </IndicatorTag>
-                ))}
-            </ActiveIndicatorsList>
+        <div style={{display:'flex', gap:'5px', overflowX:'auto'}}>
+            {activeIndicators.map(ind => (
+                <IndicatorTag key={ind.id}>{ind.type}<CloseIcon onClick={() => removeIndicator(ind.id)} /></IndicatorTag>
+            ))}
         </div>
-      )}
-
+        <StatusText isLive={isLive}>{isLive && <PulseDot />}{isLive ? 'LIVE' : 'CONNECTING...'}</StatusText>
+      </Toolbar>
       <ChartContainer ref={chartContainerRef} />
     </ChartWrapper>
   );

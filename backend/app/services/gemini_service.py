@@ -185,17 +185,34 @@ def find_peer_tickers_by_industry(company_name: str, sector: str, industry: str,
 # --- 3. CHART AI (IMAGE) ANALYSIS (OPTIMIZED) ---
 
 def identify_ticker_from_image(image_bytes: bytes):
-    """Identifies ticker from chart image."""
+    """Identifies ticker from chart image, supports Stocks & Indices."""
     try:
         configure_gemini_for_request()
         model = genai.GenerativeModel('gemini-2.5-flash')
-        image_part = {"mime_type": "image/jpeg", "data": image_bytes}
-        prompt = """Analyze this stock chart image. Identify the stock ticker symbol. Return ONLY the official Yahoo Finance ticker symbol (e.g., "AAPL", "RELIANCE.NS"). If not found, return "NOT_FOUND"."""
-        response = model.generate_content([prompt, image_part])
-        return response.text.strip().upper()
+        
+        prompt = """
+        Analyze this financial chart image. Identify the symbol/ticker.
+        
+        RULES:
+        1. If it's a specific company, return the Yahoo symbol (e.g., "RELIANCE.NS", "AAPL").
+        2. If it's an INDEX, map it correctly:
+           - Nifty 50 -> "^NSEI"
+           - Bank Nifty -> "^NSEBANK"
+           - Sensex -> "^BSESN"
+           - S&P 500 -> "^GSPC"
+           - Nasdaq -> "^IXIC"
+           - Bitcoin -> "BTC-USD"
+           - Gold -> "GC=F"
+        3. If you are not 100% sure, return "NOT_FOUND".
+        4. Return ONLY the symbol string. No text.
+        """
+        
+        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
+        return response.text.strip().upper().replace("`", "")
     except Exception as e:
         print(f"Error identifying ticker: {e}")
         return "NOT_FOUND"
+
 
 def analyze_chart_technicals_from_image(image_bytes: bytes):
     """

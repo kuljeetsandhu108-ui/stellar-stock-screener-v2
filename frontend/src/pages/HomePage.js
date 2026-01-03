@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
-import { FaSearch, FaRegBuilding, FaGlobeAmericas } from 'react-icons/fa';
+import { FaSearch, FaChartBar, FaGlobeAmericas } from 'react-icons/fa';
 import IndicesBanner from '../components/Indices/IndicesBanner';
 import ChartUploader from '../components/HomePage/ChartUploader';
 
@@ -131,6 +131,7 @@ const SearchSection = styled.div`
   max-width: 650px;
   position: relative;
   animation: ${fadeIn} 1.8s ease-out;
+  z-index: 50; /* Ensure dropdown appears above other elements */
 `;
 
 const SearchWrapper = styled.div`
@@ -138,7 +139,6 @@ const SearchWrapper = styled.div`
   width: 100%;
   display: flex;
   align-items: center;
-  z-index: 50; /* Ensure it stays on top */
 `;
 
 const SearchInput = styled.input`
@@ -214,7 +214,7 @@ const SuggestionsList = styled.ul`
   padding: 0;
   max-height: 350px;
   overflow-y: auto;
-  z-index: 49;
+  z-index: 100;
   
   /* Smooth Scrollbar */
   &::-webkit-scrollbar { width: 6px; }
@@ -282,6 +282,23 @@ const LoadingText = styled.p`
   font-weight: 600;
   letter-spacing: 0.5px;
   font-size: 0.9rem;
+`;
+
+// --- NEW: DUAL UPLOADER GRID ---
+const UploadGrid = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  width: 100%;
+  max-width: 1000px;
+  margin-top: 4rem;
+  padding: 0 1rem;
+  animation: ${fadeIn} 2s ease-out;
+
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr; /* Stack on mobile */
+    gap: 1.5rem;
+  }
 `;
 
 // --- 3. MAIN COMPONENT LOGIC ---
@@ -436,8 +453,26 @@ const HomePage = () => {
             — OR —
         </p>
         
-        {/* 7. Image Uploader */}
-        <ChartUploader />
+        {/* 7. DUAL AI UPLOADERS (Stock vs Index) */}
+        <UploadGrid>
+            {/* Stock Uploader (Blue Theme) */}
+            <ChartUploader 
+                type="stock"
+                title="Stock AI Analyst"
+                description="Upload a stock chart to identify Breakouts, Trends, and Trade Setups."
+                color="#58A6FF" 
+                icon={<FaChartBar />}
+            />
+            
+            {/* Index Uploader (Gold Theme) */}
+            <ChartUploader 
+                type="index"
+                title="Index / Macro AI"
+                description="Upload a chart of Nifty, BankNifty, or SPX for deep market direction analysis."
+                color="#EBCB8B"
+                icon={<FaGlobeAmericas />}
+            />
+        </UploadGrid>
 
       </MainContent>
     </HomePageContainer>
