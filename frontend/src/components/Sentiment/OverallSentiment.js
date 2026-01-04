@@ -239,7 +239,7 @@ const OverallSentiment = ({ sentimentData }) => {
 
   if (!sentimentData) {
     return (
-      <Card title="AI Confidence Matrix">
+      <Card title="Confidence Matrix">
         <p style={{color: 'var(--color-text-secondary)', padding: '1rem', textAlign: 'center'}}>
             Calculating market sentiment...
         </p>
@@ -260,7 +260,7 @@ const OverallSentiment = ({ sentimentData }) => {
   const currentTech = techData || bd.technical;
 
   return (
-    <Card title="AI Confidence Matrix">
+    <Card title="Confidence Matrix">
       <DashboardContainer>
         
         {/* --- TOP: MAIN OVERALL METER --- */}

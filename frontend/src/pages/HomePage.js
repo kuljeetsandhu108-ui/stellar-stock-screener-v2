@@ -403,7 +403,7 @@ const HomePage = () => {
       <MainContent>
         <Title>Stellar Stock Screener</Title>
         <Subtitle>
-            Leveraging Advanced AI to provide comprehensive<br /> 
+            Leveraging Advanced Data Models to provide comprehensive<br /> 
             technical and fundamental financial insights.
         </Subtitle>
         
@@ -458,7 +458,7 @@ const HomePage = () => {
             {/* Stock Uploader (Blue Theme) */}
             <ChartUploader 
                 type="stock"
-                title="Stock AI Analyst"
+                title="Stock Chart Analyst"
                 description="Upload a stock chart to identify Breakouts, Trends, and Trade Setups."
                 color="#58A6FF" 
                 icon={<FaChartBar />}
@@ -467,7 +467,7 @@ const HomePage = () => {
             {/* Index Uploader (Gold Theme) */}
             <ChartUploader 
                 type="index"
-                title="Index / Macro AI"
+                title="Index / Macro Vision"
                 description="Upload a chart of Nifty, BankNifty, or SPX for deep market direction analysis."
                 color="#EBCB8B"
                 icon={<FaGlobeAmericas />}

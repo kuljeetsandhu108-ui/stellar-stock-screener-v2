@@ -182,7 +182,7 @@ const SwotAnalysis = ({ analysisText, isLoading, onRegenerate }) => {
       <HeaderContainer>
         <TitleWrapper>
             <FaRobot size={20} color="var(--color-primary)" />
-            <SectionTitle>AI-Powered SWOT Analysis</SectionTitle>
+            <SectionTitle>Smart SWOT Analysis</SectionTitle>
         </TitleWrapper>
         <RefreshButton onClick={onRegenerate} disabled={isLoading} isLoading={isLoading}>
             <FaRedo /> {isLoading ? 'Analyzing...' : 'Regenerate'}

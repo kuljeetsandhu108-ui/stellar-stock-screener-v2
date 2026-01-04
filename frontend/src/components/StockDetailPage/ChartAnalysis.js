@@ -390,7 +390,7 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
         const newData = response.data.analysis;
         
         if (!newData || newData.length < 20 || newData.includes("RATIONALE: Analysis failed") || newData.includes("TREND: Error")) {
-            throw new Error("Invalid AI Response");
+            throw new Error("Invalid Response");
         }
 
         setAnalysisCache(prev => ({ ...prev, [tf]: newData }));
@@ -494,7 +494,7 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
         <ScannerContainer>
             <ScannerLine />
             <ProcessingIcon />
-            <ProcessingText>AI ANALYST INITIALIZING</ProcessingText>
+            <ProcessingText>SYSTEM ANALYST INITIALIZING</ProcessingText>
             <ProcessingSubtext>
                 Scanning {activeTimeframe === 'Image' ? 'Chart' : activeTimeframe} Market Structure...
             </ProcessingSubtext>
@@ -535,7 +535,7 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
                         <ActionBadge action={action}>{action}</ActionBadge>
                     </div>
                     <div style={{textAlign: 'right'}}>
-                        <div style={{fontSize: '0.8rem', color: 'var(--color-text-secondary)', marginBottom: '5px', letterSpacing: '1px'}}>AI CONFIDENCE</div>
+                        <div style={{fontSize: '0.8rem', color: 'var(--color-text-secondary)', marginBottom: '5px', letterSpacing: '1px'}}>CONFIDENCE</div>
                         <div style={{fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--color-text-primary)'}}>{parsedAnalysis.CONFIDENCE || 'Medium'}</div>
                     </div>
                 </TicketHeader>

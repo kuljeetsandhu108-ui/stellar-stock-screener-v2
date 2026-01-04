@@ -8,9 +8,7 @@ import re
 # ==========================================
 
 def get_company_profile(symbol: str):
-    """
-    Fetches profile data from Yahoo Finance.
-    """
+    """Fetches profile data from Yahoo Finance."""
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
@@ -29,17 +27,13 @@ def get_company_profile(symbol: str):
             "beta": info.get('beta'),
             "fullTimeEmployees": info.get('fullTimeEmployees')
         }
-    except Exception:
-        return {}
+    except Exception: return {}
 
 def get_quote(symbol: str):
-    """
-    Fetches real-time quote data.
-    """
+    """Fetches real-time quote data."""
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
-        
         price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
         prev_close = info.get('previousClose')
         
@@ -64,123 +58,110 @@ def get_quote(symbol: str):
             "previousClose": prev_close,
             "timestamp": pd.Timestamp.now().timestamp()
         }
-    except Exception:
-        return {}
+    except Exception: return {}
 
 # ==========================================
-# 2. FINANCIALS & CHARTING
+# 2. CHARTING ENGINE (THE FIX)
 # ==========================================
 
-def _parse_yfinance_financials(df):
+def get_chart_data(symbol: str, range_type: str = "1d", interval: str = "1d"):
     """
-    FUZZY MATCHING PARSER.
+    Fetches OHLCV data.
+    FIXED: Now treats inputs as INTERVALS (Candle Size) rather than Ranges.
     """
-    if df is None or df.empty:
-        return []
-    
     try:
-        df_t = df.transpose()
-        df_t.reset_index(inplace=True)
-        df_t.columns.values[0] = "date"
+        ticker = yf.Ticker(symbol)
         
-        records = df_t.to_dict('records')
-        formatted_data = []
-
-        for row in records:
-            date_val = row['date']
-            date_str = str(date_val).split(' ')[0]
-
-            def find_val(keywords):
-                for key in row.keys():
-                    key_str = str(key).lower()
-                    if any(kw in key_str for kw in keywords):
-                        val = row[key]
-                        if pd.notna(val): return float(val)
-                return 0.0
-
-            item = {
-                "date": date_str,
-                "calendarYear": date_str[:4],
-                "netIncome": find_val(['net income', 'netincome']),
-                "revenue": find_val(['total revenue', 'operating revenue', 'totalrevenue']),
-                "grossProfit": find_val(['gross profit', 'grossprofit']),
-                "eps": find_val(['basic eps', 'diluted eps']),
-                "totalAssets": find_val(['total assets', 'totalassets']),
-                "longTermDebt": find_val(['long term debt', 'longtermdebt']),
-                "totalCurrentAssets": find_val(['total current assets', 'current assets']),
-                "totalCurrentLiabilities": find_val(['total current liabilities', 'current liabilities']),
-                "operatingCashFlow": find_val(['operating cash flow', 'operatingcashflow']),
-                "dividendsPaid": find_val(['cash dividends paid', 'dividends paid']),
-                "totalStockholdersEquity": find_val(['stockholders equity', 'total equity']),
-                "weightedAverageShsOut": find_val(['share issued', 'average shares'])
-            }
-            
-            if 'TTM' not in date_str:
-                formatted_data.append(item)
-
-        return formatted_data
-
-    except Exception:
-        return []
-
-def get_historical_financials(symbol: str):
-    try:
-        ticker = yf.Ticker(symbol)
-        return {
-            "income": _parse_yfinance_financials(ticker.financials),
-            "balance": _parse_yfinance_financials(ticker.balance_sheet),
-            "cash_flow": _parse_yfinance_financials(ticker.cashflow),
-        }
-    except: return {"income": [], "balance": [], "cash_flow": []}
-
-def get_quarterly_financials(symbol: str):
-    try:
-        ticker = yf.Ticker(symbol)
-        return {
-            "income": _parse_yfinance_financials(ticker.quarterly_financials),
-            "balance": _parse_yfinance_financials(ticker.quarterly_balance_sheet),
-            "cash_flow": _parse_yfinance_financials(ticker.quarterly_cashflow),
-        }
-    except: return {"income": [], "balance": [], "cash_flow": []}
-
-def get_chart_data(symbol: str, range_type: str = "1mo", interval: str = "1d"):
-    """
-    Fetches chart data. Optimized for speed.
-    """
-    try:
+        # Default
         period = "1y"
-        if range_type == "1d": period = "1d"; interval = "5m"
-        elif range_type == "1w": period = "5d"; interval = "15m"
-        elif range_type == "1m": period = "1mo"; interval = "1h"
-        elif range_type == "3m": period = "3mo"; interval = "1d"
-        elif range_type == "1y": period = "1y"; interval = "1d"
-        elif range_type == "5y": period = "5y"; interval = "1wk"
+        yf_interval = "1d"
+        
+        # Normalize input
+        r = range_type.lower()
 
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period=period, interval=interval)
-        if df.empty: return []
+        # --- SMART INTERVAL MAPPING ---
+        # Maps the Frontend Button (e.g., '1W') to the correct Yahoo settings
+        
+        if r == "5m":
+            period = "5d"   # 5 Days of 5-min candles
+            yf_interval = "5m"
+        elif r == "15m":
+            period = "5d"   # 5 Days of 15-min candles
+            yf_interval = "15m"
+        elif r == "30m":
+            period = "5d"   # 5 Days of 30-min candles
+            yf_interval = "30m"
+        elif r == "1h":
+            period = "1mo"  # 1 Month of 1-hour candles
+            yf_interval = "60m"
+        elif r == "4h":
+            # Yahoo Free doesn't support 4h. We fall back to 1h data over 3 months.
+            # Or map to Daily if user prefers trend. 
+            # Best fallback for charts:
+            period = "6mo"
+            yf_interval = "1d" 
+        elif r == "1d":
+            period = "2y"   # 2 Years of Daily candles
+            yf_interval = "1d"
+        elif r == "1w":
+            period = "5y"   # 5 Years of Weekly candles (THE FIX)
+            yf_interval = "1wk"
+        elif r == "1m":
+            period = "max"  # Max history of Monthly candles (THE FIX)
+            yf_interval = "1mo"
 
+        # Fetch Data
+        df = ticker.history(period=period, interval=yf_interval)
+        
+        if df.empty: 
+            return []
+
+        # Format
         df.reset_index(inplace=True)
         df.columns = [col.lower() for col in df.columns]
         
         chart_data = []
         for _, row in df.iterrows():
-            time_val = int(row['date'].timestamp())
+            date_val = row['date']
+            # Lightweight charts needs seconds
+            time_val = int(date_val.timestamp())
+            
             chart_data.append({
                 "time": time_val,
-                "open": row['open'], "high": row['high'], "low": row['low'], "close": row['close'], "volume": row['volume']
+                "open": row['open'],
+                "high": row['high'],
+                "low": row['low'],
+                "close": row['close'],
+                "volume": row['volume']
             })
+            
         return chart_data
-    except: return []
+    except Exception as e:
+        print(f"Chart Data Error: {e}")
+        return []
 
 def get_historical_data(symbol: str, period: str = "1y", interval: str = "1d"):
+    """Fetches raw dataframe for technical calculations."""
     try:
+        # Map frontend interval request to yahoo period
+        adjusted_period = period 
+        
+        if interval == "1m": adjusted_period = "5d"
+        elif interval in ["2m", "5m", "15m", "30m", "90m"]: adjusted_period = "5d"
+        elif interval in ["60m", "1h"]: adjusted_period = "1mo"
+        elif interval == "1wk": adjusted_period = "2y"
+        elif interval == "1mo": adjusted_period = "5y"
+        
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period=period, interval=interval)
+        hist = ticker.history(period=adjusted_period, interval=interval)
         if hist.empty: return None
         hist.columns = [col.lower() for col in hist.columns]
         return hist
     except: return None
+
+# ==========================================
+# 3. TECHNICALS & FINANCIALS
+# ==========================================
 
 def calculate_technical_indicators(df: pd.DataFrame):
     if df is None or df.empty: return {}
@@ -216,9 +197,66 @@ def calculate_technical_indicators(df: pd.DataFrame):
         }
     except: return {}
 
-# ==========================================
-# 4. ANALYST, SHAREHOLDING & METRICS
-# ==========================================
+def _parse_yfinance_financials(df):
+    if df is None or df.empty: return []
+    try:
+        df_t = df.transpose()
+        df_t.reset_index(inplace=True)
+        df_t.columns.values[0] = "date"
+        records = df_t.to_dict('records')
+        formatted_data = []
+
+        for row in records:
+            date_val = row['date']
+            date_str = str(date_val).split(' ')[0]
+
+            def find_val(keywords):
+                for key in row.keys():
+                    key_str = str(key).lower()
+                    if any(kw in key_str for kw in keywords):
+                        val = row[key]
+                        if pd.notna(val): return float(val)
+                return 0.0
+
+            item = {
+                "date": date_str,
+                "calendarYear": date_str[:4],
+                "netIncome": find_val(['net income', 'netincome']),
+                "revenue": find_val(['total revenue', 'operating revenue', 'totalrevenue']),
+                "grossProfit": find_val(['gross profit', 'grossprofit']),
+                "eps": find_val(['basic eps', 'diluted eps']),
+                "totalAssets": find_val(['total assets', 'totalassets']),
+                "longTermDebt": find_val(['long term debt', 'longtermdebt']),
+                "totalCurrentAssets": find_val(['total current assets', 'current assets']),
+                "totalCurrentLiabilities": find_val(['total current liabilities', 'current liabilities']),
+                "operatingCashFlow": find_val(['operating cash flow', 'operatingcashflow']),
+                "dividendsPaid": find_val(['cash dividends paid', 'dividends paid']),
+                "totalStockholdersEquity": find_val(['stockholders equity', 'total equity']),
+                "weightedAverageShsOut": find_val(['share issued', 'average shares'])
+            }
+            if 'TTM' not in date_str: formatted_data.append(item)
+        return formatted_data
+    except: return []
+
+def get_historical_financials(symbol: str):
+    try:
+        ticker = yf.Ticker(symbol)
+        return {
+            "income": _parse_yfinance_financials(ticker.financials),
+            "balance": _parse_yfinance_financials(ticker.balance_sheet),
+            "cash_flow": _parse_yfinance_financials(ticker.cashflow),
+        }
+    except: return {"income": [], "balance": [], "cash_flow": []}
+
+def get_quarterly_financials(symbol: str):
+    try:
+        ticker = yf.Ticker(symbol)
+        return {
+            "income": _parse_yfinance_financials(ticker.quarterly_financials),
+            "balance": _parse_yfinance_financials(ticker.quarterly_balance_sheet),
+            "cash_flow": _parse_yfinance_financials(ticker.quarterly_cashflow),
+        }
+    except: return {"income": [], "balance": [], "cash_flow": []}
 
 def get_analyst_recommendations(symbol: str):
     try:
@@ -226,12 +264,10 @@ def get_analyst_recommendations(symbol: str):
         recs = ticker.recommendations
         if recs is None or recs.empty: return []
         latest = recs.iloc[-1]
-        
         def get_col(name):
             for col in latest.index:
                 if name.lower() in str(col).lower(): return int(latest[col])
             return 0
-            
         return [{
             "ratingStrongBuy": get_col('strongBuy'),
             "ratingBuy": get_col('buy'),
@@ -258,7 +294,6 @@ def get_key_fundamentals(symbol: str):
         info = ticker.info
         eps = info.get('trailingEps')
         price = info.get('currentPrice') or info.get('regularMarketPrice')
-        
         return {
             "peRatioTTM": info.get('trailingPE'),
             "earningsYieldTTM": (eps / price) if (eps and price) else None,

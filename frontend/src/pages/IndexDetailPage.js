@@ -171,7 +171,7 @@ const IndexDetailPage = () => {
         {/* --- LEFT PANEL: AI ANALYSIS (Only visible if User uploaded a chart) --- */}
         {aiAnalysisData && (
           <LeftPanel>
-            <SectionHeader><FaGlobeAmericas /> AI Macro Analysis</SectionHeader>
+            <SectionHeader><FaGlobeAmericas /> Macro Analysis</SectionHeader>
             
             {/* The Gold-Themed AI Card */}
             <IndexChartAnalysis analysisData={aiAnalysisData} />

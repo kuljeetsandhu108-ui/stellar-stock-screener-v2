@@ -192,7 +192,7 @@ const StockDetailPage = () => {
             const payload = { companyName: stockData.profile.companyName, keyMetrics: stockData.key_metrics };
             axios.post(`/api/stocks/${symbol}/fundamental-analysis`, payload)
                 .then(res => setPhilosophyAssessment(res.data.assessment))
-                .catch(() => setPhilosophyAssessment("Could not generate AI assessment."))
+                .catch(() => setPhilosophyAssessment("Could not generate assessment."))
                 .finally(() => setIsLoadingPhilosophy(false));
         } else { setIsLoadingPhilosophy(false); }
 
@@ -232,7 +232,7 @@ const StockDetailPage = () => {
         };
         axios.post(`/api/stocks/${symbol}/conclusion-analysis`, payload)
             .then(res => setConclusion(res.data.conclusion))
-            .catch(() => setConclusion("GRADE: N/A\nTHESIS: Could not generate AI conclusion."))
+            .catch(() => setConclusion("GRADE: N/A\nTHESIS: Could not generate conclusion."))
             .finally(() => setIsLoadingConclusion(false));
     };
 
@@ -279,7 +279,7 @@ const StockDetailPage = () => {
         
         {/* --- TAB 1: CHART AI (Conditional) --- */}
         {chartAnalysisData && (
-          <TabPanel label="Chart AI">
+          <TabPanel label="Chart Insight">
             {/* Shows the custom chart + AI Analysis */}
             <ChartAnalysis analysisData={chartAnalysisData} technicalData={chartTechnicalData} />
           </TabPanel>

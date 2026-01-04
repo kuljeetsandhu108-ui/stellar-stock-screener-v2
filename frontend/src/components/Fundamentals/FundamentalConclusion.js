@@ -192,7 +192,7 @@ const FundamentalConclusion = ({ conclusionData }) => {
   
   const parsedConclusion = useMemo(() => {
     if (!conclusionData) {
-      return { grade: 'N/A', thesis: 'AI is analyzing the financial structure...', takeaways: [] };
+      return { grade: 'N/A', thesis: 'System is analyzing the financial structure...', takeaways: [] };
     }
     
     const cleanText = "\n" + conclusionData.replace(/\*\*/g, '').replace(/\*/g, '');
@@ -219,7 +219,7 @@ const FundamentalConclusion = ({ conclusionData }) => {
 
   return (
     <SectionContainer>
-      <SectionTitle>AI Investment Verdict</SectionTitle>
+      <SectionTitle>Analyst Verdict</SectionTitle>
       
       <ConclusionGrid>
         

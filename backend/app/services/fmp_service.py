@@ -212,6 +212,7 @@ def get_historical_candles(symbol: str, timeframe: str = "1D"):
     Fetches OHLCV candles specifically formatted for the Lightweight Charts frontend.
     
     INTELLIGENT ROUTING:
+    - If timeframe is 1W, 1M -> Returns [] to trigger Yahoo Fallback (FMP weak here).
     - If timeframe is 5M, 15M, 1H, 4H -> Uses FMP Intraday API.
     - If timeframe is 1D -> Uses FMP Daily Historical API.
     
@@ -222,7 +223,13 @@ def get_historical_candles(symbol: str, timeframe: str = "1D"):
     if not FMP_API_KEY: return []
     
     try:
-        # 1. Map Frontend Timeframe to FMP Endpoint
+        # --- 1. STRATEGIC FALLBACK FOR WEEKLY/MONTHLY ---
+        # FMP's standard API doesn't provide pre-aggregated Weekly/Monthly candles well.
+        # We return empty to let the Router switch to Yahoo (which handles this perfectly).
+        if timeframe in ["1W", "1M"]:
+            return []
+
+        # --- 2. Map Frontend Timeframe to FMP Endpoint ---
         endpoint = ""
         is_intraday = True
         
@@ -238,22 +245,25 @@ def get_historical_candles(symbol: str, timeframe: str = "1D"):
         elif timeframe == "4H":
             endpoint = f"historical-chart/4hour/{symbol}"
         else:
-            # Default to Daily (Handles 1D, 1W, 1M, 1Y views via zooming)
+            # Default to Daily (Handles 1D view)
             is_intraday = False
             endpoint = f"historical-price-full/{symbol}"
 
         url = f"{BASE_URL}/{endpoint}?apikey={FMP_API_KEY}"
         
-        # Optimize Daily fetch: limit to last 3 years to keep response fast
+        # Optimize Daily fetch: limit to last 3 years to keep response fast and relevant
         if not is_intraday:
             start_date = (datetime.now() - timedelta(days=1095)).strftime('%Y-%m-%d')
             url += f"&from={start_date}"
 
         response = requests.get(url)
-        response.raise_for_status()
+        # We don't raise_for_status here immediately to handle graceful empty returns
+        if response.status_code != 200:
+            return []
+            
         data = response.json()
 
-        # 2. Extract specific list based on endpoint type
+        # --- 3. Extract specific list based on endpoint type ---
         # Intraday returns list directly: [...]
         # Daily returns object: { symbol: 'AAP', historical: [...] }
         raw_candles = data if is_intraday else data.get('historical', [])
@@ -263,7 +273,7 @@ def get_historical_candles(symbol: str, timeframe: str = "1D"):
 
         formatted_data = []
         
-        # 3. Process and Format Data
+        # --- 4. Process and Format Data ---
         for candle in raw_candles:
             date_str = candle.get('date')
             
@@ -294,7 +304,7 @@ def get_historical_candles(symbol: str, timeframe: str = "1D"):
                 # Skip malformed dates
                 continue
 
-        # 4. Sort: FMP usually sends Newest First. Charts need Oldest First.
+        # --- 5. Sort: FMP usually sends Newest First. Charts need Oldest First. ---
         formatted_data.sort(key=lambda x: x['time'])
         
         return formatted_data

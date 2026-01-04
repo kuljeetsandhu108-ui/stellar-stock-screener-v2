@@ -185,7 +185,7 @@ const Forecasts = ({ symbol, quote, analystRatings, priceTarget, keyStats, news,
 
       <AiAnalysisContainer>
         <AnalysisHeader>
-            <SectionTitle><FaRobot /> AI-Powered Analysis</SectionTitle>
+            <SectionTitle><FaRobot /> Smart Analysis</SectionTitle>
             <RegenerateButton onClick={fetchAiAnalysis} disabled={isLoading} isLoading={isLoading}>
                 <FaRedo /> {isLoading ? 'Analyzing...' : 'Regenerate'}
             </RegenerateButton>

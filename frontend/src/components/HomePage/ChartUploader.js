@@ -162,7 +162,7 @@ const ChartUploader = ({
       let { identified_symbol, analysis_data } = response.data;
 
       if (!identified_symbol || identified_symbol === 'NOT_FOUND') {
-        setError('AI could not identify the symbol. Please ensure the ticker name is visible in the top-left.');
+        setError('System  could not identify the symbol. Please ensure the ticker name is visible in the top-left.');
         setIsUploading(false);
         return;
       }
@@ -172,7 +172,7 @@ const ChartUploader = ({
       try {
         const searchRes = await axios.get(`/api/stocks/search?query=${identified_symbol}`);
         if (searchRes.data.symbol) {
-            console.log(`AI guess: ${identified_symbol} -> Corrected: ${searchRes.data.symbol}`);
+            console.log(`System guess: ${identified_symbol} -> Corrected: ${searchRes.data.symbol}`);
             identified_symbol = searchRes.data.symbol;
         }
       } catch (e) {
