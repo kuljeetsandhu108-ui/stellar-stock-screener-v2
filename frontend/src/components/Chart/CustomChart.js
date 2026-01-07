@@ -12,7 +12,7 @@ import axios from 'axios';
 import { RSI, MACD, StochasticRSI, SMA, EMA, ADX, ATR, VWAP } from 'technicalindicators';
 import { 
   FaLayerGroup, FaTimes, FaPlus, FaMousePointer, 
-  FaMinus, FaSlash, FaVectorSquare, FaListOl, FaBalanceScale, FaEraser, FaUndo, FaPencilAlt, FaTrash
+  FaMinus, FaSlash, FaVectorSquare, FaListOl, FaBalanceScale, FaEraser, FaUndo, FaPencilAlt, FaTrash, FaSpinner
 } from 'react-icons/fa';
 
 // --- STYLED COMPONENTS ---
@@ -55,7 +55,7 @@ const DrawingSidebar = styled.div`
   border-radius: 8px;
   border: 1px solid var(--color-border);
   z-index: 30;
-  box-shadow: 4px 0 15px rgba(0,0,0,0.3);
+  box-shadow: 4px 0 20px rgba(0,0,0,0.4);
 `;
 
 const ToolBtn = styled.button`
@@ -63,7 +63,7 @@ const ToolBtn = styled.button`
   height: 36px;
   border-radius: 6px;
   border: 1px solid ${({ active }) => active ? 'var(--color-primary)' : 'transparent'};
-  background: ${({ active }) => active ? 'rgba(88, 166, 255, 0.15)' : 'transparent'};
+  background: ${({ active }) => active ? 'rgba(88, 166, 255, 0.2)' : 'transparent'};
   color: ${({ active }) => active ? 'var(--color-primary)' : 'var(--color-text-secondary)'};
   display: flex;
   align-items: center;
@@ -76,6 +76,7 @@ const ToolBtn = styled.button`
   &:hover {
     background: rgba(255,255,255,0.1);
     color: #fff;
+    transform: translateX(2px);
   }
 `;
 
@@ -180,8 +181,23 @@ const StatusText = styled.span`font-size: 0.75rem; color: ${({ isLive }) => isLi
 const PulseDot = styled.div`width: 6px; height: 6px; border-radius: 50%; background-color: #3FB950; box-shadow: 0 0 5px #3FB950; animation: pulse 2s infinite; @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }`;
 const HelperText = styled.div`position: absolute; top: 60px; left: 60px; background: rgba(0,0,0,0.7); color: #fff; padding: 5px 10px; border-radius: 4px; font-size: 0.8rem; pointer-events: none; z-index: 25;`;
 
+// --- NEW LOADING SPINNER ---
+const LoadingOverlay = styled.div`
+  position: absolute;
+  top: 50px; left: 0; right: 0; bottom: 0;
+  background: rgba(13, 17, 23, 0.4);
+  backdrop-filter: blur(2px);
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-primary);
+  font-size: 2rem;
+`;
+const Spinner = styled(FaSpinner)`animation: spin 1s linear infinite; @keyframes spin { 100% { transform: rotate(360deg); } }`;
 
-// --- SMC & SUPERTREND HELPERS ---
+
+// --- ALGORITHMS (UNCHANGED) ---
 const calculateSuperTrend = (data, period = 10, multiplier = 3) => {
     if (!data || data.length < period) return [];
     const atr = ATR.calculate({ period, high: data.map(d=>d.high), low: data.map(d=>d.low), close: data.map(d=>d.close) });
@@ -238,17 +254,21 @@ const CustomChart = ({ symbol }) => {
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
+  const abortControllerRef = useRef(null); // For canceling old requests
   
-  // Refs for drawings
-  const priceLinesRef = useRef([]); // SMC lines
-  const drawingObjectsRef = useRef([]); // User drawings
-  const previewObjectsRef = useRef([]); // Temporary drawing objects
+  // Drawing Storage
+  const priceLinesRef = useRef([]); 
+  const drawingObjectsRef = useRef([]); 
+  const previewObjectsRef = useRef([]); 
   
   const [timeframe, setTimeframe] = useState('1D'); 
   const [chartData, setChartData] = useState([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeIndicators, setActiveIndicators] = useState([]);
   const [isLive, setIsLive] = useState(false);
+  
+  // *** NEW: Explicit Loading State ***
+  const [isChartLoading, setIsChartLoading] = useState(false);
   
   // Drawing State
   const [drawMode, setDrawMode] = useState('cursor'); 
@@ -330,6 +350,7 @@ const CustomChart = ({ symbol }) => {
 
       if (['fib', 'trend', 'longshort'].includes(mode)) {
           handleMultiClickTool(price, time, mode === 'longshort' ? 3 : 2, (points) => {
+              const id = Date.now();
               setUserDrawings(prev => [...prev, { id, type: mode, points }]);
           });
       }
@@ -345,11 +366,7 @@ const CustomChart = ({ symbol }) => {
         const currentTime = param.time;
         const start = currentPoints[0];
         
-        // CRITICAL FIX: Skip preview drawing if times are equal (prevents infinite loop/stack overflow)
-        if (currentTime === start.time) return;
-
-        // ONLY draw preview for Fib and LongShort. Skip Trend line preview to be safe.
-        if (mode === 'trend') return; 
+        if (currentTime === start.time) return; 
 
         drawPreviewShape(mode, start, { price: currentPrice, time: currentTime }, chart, candleSeries);
     });
@@ -360,6 +377,9 @@ const CustomChart = ({ symbol }) => {
 
     const resizeObserver = new ResizeObserver(entries => {
         if (!chartRef.current) return;
+        // Check if drawing to avoid resize flicker
+        if (drawModeRef.current !== 'cursor') return;
+
         const newRect = entries[0].contentRect;
         if (newRect.width > 0 && newRect.height > 0) {
             chartRef.current.applyOptions({ width: newRect.width, height: newRect.height });
@@ -402,7 +422,15 @@ const CustomChart = ({ symbol }) => {
   const drawPreviewShape = (type, p1, p2, chart, series) => {
       clearPreview(); 
 
-      if (type === 'fib') {
+      if (type === 'trend') {
+          // SORT TIME
+          const sorted = p1.time > p2.time ? [p2, p1] : [p1, p2];
+          const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }];
+          const lineSeries = chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+          lineSeries.setData(data);
+          previewObjectsRef.current.push({ type: 'series', ref: lineSeries });
+      }
+      else if (type === 'fib') {
           const low = Math.min(p1.price, p2.price); const high = Math.max(p1.price, p2.price); const diff = high - low;
           const levels = [0, 0.5, 1]; 
           levels.forEach(lvl => {
@@ -446,7 +474,6 @@ const CustomChart = ({ symbol }) => {
               });
           }
           else if (d.type === 'trend') {
-              // Always sort by time to prevent crash
               const sorted = d.points[0].time > d.points[1].time ? [d.points[1], d.points[0]] : [d.points[0], d.points[1]];
               const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }];
               const series = chartRef.current.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, lastValueVisible: false, priceLineVisible: false });
@@ -520,15 +547,33 @@ const CustomChart = ({ symbol }) => {
 
   useEffect(() => { updateLayout(); }, [activeIndicators]);
 
-  const fetchData = useCallback(async () => {
+  // --- 5. DATA FETCHING (SMART SILENT UPDATE) ---
+  const fetchData = useCallback(async (isSilent = false) => {
     if (!symbol) return;
+    
+    // Kill pending request if switching timeframes (not silent poll)
+    if (!isSilent && abortControllerRef.current) {
+        abortControllerRef.current.abort();
+    }
+    if (!isSilent) {
+        abortControllerRef.current = new AbortController();
+    }
+
     try {
-      const response = await axios.get(`/api/stocks/${symbol}/chart?range=${timeframe}`);
+      if (!isSilent) setIsChartLoading(true);
+      
+      const response = await axios.get(`/api/stocks/${symbol}/chart?range=${timeframe}`, {
+          signal: !isSilent ? abortControllerRef.current.signal : undefined
+      });
       const data = response.data;
+      
       if (chartRef.current && candleSeriesRef.current && data.length > 0) {
         setChartData(data);
+        
+        // Re-Apply SMC if active (keeping colors)
         const isSMC = activeIndicators.some(i => i.type === 'SMC');
         if (isSMC) applySMC(data); else candleSeriesRef.current.setData(data);
+        
         if (volumeSeriesRef.current) {
              const volData = data.map(d => ({
               time: d.time, value: d.volume,
@@ -538,10 +583,30 @@ const CustomChart = ({ symbol }) => {
         }
         setIsLive(true);
       }
-    } catch (err) { console.error("Chart Error:", err); setIsLive(false); }
-  }, [symbol, timeframe]);
+    } catch (err) { 
+        if (!axios.isCancel(err)) console.error("Chart Error:", err);
+        setIsLive(false); 
+    } finally {
+        if (!isSilent) setIsChartLoading(false);
+    }
+  }, [symbol, timeframe]); 
 
-  // --- 5. SMC & INDICATORS ---
+  // --- 6. POLLING & EFFECTS ---
+  
+  // Effect: Timeframe Change (Shows Loader)
+  useEffect(() => {
+    fetchData(false); 
+  }, [symbol, timeframe]); // Only re-run when user changes TF
+
+  // Effect: Silent Interval (No Loader)
+  useEffect(() => {
+    const interval = setInterval(() => {
+        fetchData(true);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
+  // --- 7. INDICATORS ---
   const applySMC = (data) => {
       if (!candleSeriesRef.current) return;
       const { markers, coloredCandles, priceLines } = calculateSMC(data);
@@ -574,12 +639,6 @@ const CustomChart = ({ symbol }) => {
         priceLinesRef.current = [];
     }
   }, [chartData, activeIndicators]);
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
 
   const addIndicator = () => {
     if (!chartData.length || !chartRef.current) return;
@@ -770,8 +829,17 @@ const CustomChart = ({ symbol }) => {
                 <IndicatorTag key={ind.id}>{ind.type}<CloseIcon onClick={() => removeIndicator(ind.id)} /></IndicatorTag>
             ))}
         </div>
-        <StatusText isLive={isLive}>{isLive && <PulseDot />}{isLive ? 'LIVE' : 'CONNECTING...'}</StatusText>
+        <StatusText isLive={isLive}>
+            {isLive ? <><PulseDot /> LIVE</> : <><FaEraser className="fa-spin" style={{fontSize:'0.8rem'}}/> LOADING...</>}
+        </StatusText>
       </Toolbar>
+      
+      {/* Loading Overlay */}
+      {isChartLoading && (
+         <LoadingOverlay>
+             <FaEraser className="fa-spin" />
+         </LoadingOverlay>
+      )}
       
       {drawMode !== 'cursor' && <HelperText>{helpText}</HelperText>}
       <ChartContainer ref={chartContainerRef} crosshair={drawMode !== 'cursor'} />

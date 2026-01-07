@@ -16,7 +16,7 @@ BASE_URL_V4 = "https://financialmodelingprep.com/api/v4"
 
 def get_company_profile(symbol: str):
     """
-    Fetches company profile (description, industry, CEO, etc.).
+    Fetches company profile (description, industry, CEO, image, etc.).
     """
     if not FMP_API_KEY: return {}
     try:
@@ -31,7 +31,7 @@ def get_company_profile(symbol: str):
 
 def get_quote(symbol: str):
     """
-    Fetches real-time price, change, and volume.
+    Fetches real-time price, change, volume, and day range.
     """
     if not FMP_API_KEY: return {}
     try:
@@ -55,6 +55,7 @@ def get_financial_statements(symbol: str, statement_type: str, period: str = "an
     """
     if not FMP_API_KEY: return []
     try:
+        # FMP format: /income-statement/AAPL?period=quarter&limit=5
         url = f"{BASE_URL}/{statement_type}/{symbol}?period={period}&limit={limit}&apikey={FMP_API_KEY}"
         response = requests.get(url)
         response.raise_for_status()
@@ -64,7 +65,7 @@ def get_financial_statements(symbol: str, statement_type: str, period: str = "an
 
 def get_key_metrics(symbol: str, period: str = "annual", limit: int = 5):
     """
-    Fetches key valuation metrics (P/E, P/B, ROE, etc.).
+    Fetches key valuation metrics (P/E, P/B, ROE, Debt/Equity, etc.).
     """
     if not FMP_API_KEY: return []
     try:
@@ -77,7 +78,7 @@ def get_key_metrics(symbol: str, period: str = "annual", limit: int = 5):
 
 def get_financial_ratios(symbol: str, period: str = "annual", limit: int = 5):
     """
-    Fetches advanced financial ratios.
+    Fetches advanced financial ratios (Current Ratio, Quick Ratio, etc.).
     """
     if not FMP_API_KEY: return []
     try:
@@ -93,7 +94,7 @@ def get_financial_ratios(symbol: str, period: str = "annual", limit: int = 5):
 
 def get_analyst_ratings(symbol: str, limit: int = 100):
     """
-    Fetches Buy/Sell/Hold ratings.
+    Fetches Buy/Sell/Hold ratings history.
     """
     if not FMP_API_KEY: return []
     try:
@@ -105,7 +106,7 @@ def get_analyst_ratings(symbol: str, limit: int = 100):
 
 def get_analyst_estimates(symbol: str, limit: int = 1):
     """
-    Fetches revenue and EPS estimates.
+    Fetches revenue and EPS estimates for upcoming quarters.
     """
     if not FMP_API_KEY: return {}
     try:
@@ -118,7 +119,7 @@ def get_analyst_estimates(symbol: str, limit: int = 1):
 
 def get_price_target_consensus(symbol: str):
     """
-    Fetches high, low, and average price targets.
+    Fetches High, Low, and Average price targets from analysts.
     """
     if not FMP_API_KEY: return {}
     try:
@@ -131,7 +132,7 @@ def get_price_target_consensus(symbol: str):
 
 def get_shareholding_data(symbol: str, limit: int = 100):
     """
-    Fetches institutional holders.
+    Fetches institutional holders (FII/DII data proxy).
     """
     if not FMP_API_KEY: return []
     try:
@@ -142,12 +143,13 @@ def get_shareholding_data(symbol: str, limit: int = 100):
         return []
 
 # ==========================================
-# 4. PEER COMPARISON (UPDATED)
+# 4. PEER COMPARISON (UPDATED V4)
 # ==========================================
 
 def get_stock_peers(symbol: str):
     """
-    Fetches the official peer list from FMP v4 API.
+    Fetches the official peer list from FMP V4 API.
+    This is much more accurate than the V3 endpoint.
     """
     if not FMP_API_KEY: return []
     try:
@@ -163,8 +165,8 @@ def get_stock_peers(symbol: str):
 
 def get_peers_with_metrics(symbols: list):
     """
-    Efficiently fetches metrics for multiple companies in ONE API call.
-    Uses TTM (Trailing Twelve Months) for best comparison.
+    Efficiently fetches metrics for MULTIPLE companies in ONE API call.
+    Uses TTM (Trailing Twelve Months) for the fairest comparison.
     """
     if not FMP_API_KEY or not symbols: return []
     try:
@@ -181,7 +183,7 @@ def get_peers_with_metrics(symbols: list):
 
 def search_ticker(query: str, limit: int = 10):
     """
-    Used for the Search Bar autocomplete.
+    Used for the Search Bar autocomplete fallback.
     """
     if not FMP_API_KEY: return []
     try:
@@ -204,7 +206,7 @@ def get_stock_news(symbol: str, limit: int = 10):
         return []
 
 # ==========================================
-# 6. CHARTING ENGINE (HIGH PERFORMANCE)
+# 6. CHARTING ENGINE (SMART ROUTING)
 # ==========================================
 
 def get_historical_candles(symbol: str, timeframe: str = "1D"):
@@ -212,28 +214,28 @@ def get_historical_candles(symbol: str, timeframe: str = "1D"):
     Fetches OHLCV candles specifically formatted for the Lightweight Charts frontend.
     
     INTELLIGENT ROUTING:
-    - If timeframe is 1W, 1M -> Returns [] to trigger Yahoo Fallback (FMP weak here).
+    - If timeframe is 1W, 1M -> Returns [] (Empty) -> Triggers Yahoo Fallback in Router.
     - If timeframe is 5M, 15M, 1H, 4H -> Uses FMP Intraday API.
     - If timeframe is 1D -> Uses FMP Daily Historical API.
     
     Returns:
     - List of { time: UnixTimestamp, open, high, low, close, volume }
-    - Sorted Oldest -> Newest (ready for chart).
+    - Sorted Oldest -> Newest (Ready for chart).
     """
     if not FMP_API_KEY: return []
     
     try:
-        # --- 1. STRATEGIC FALLBACK FOR WEEKLY/MONTHLY ---
-        # FMP's standard API doesn't provide pre-aggregated Weekly/Monthly candles well.
-        # We return empty to let the Router switch to Yahoo (which handles this perfectly).
+        # 1. SMART FALLBACK
+        # FMP aggregation for Weekly/Monthly is often weak or requires complex parameters.
+        # We explicitly return empty to let the Yahoo Service (File 3) handle this flawlessly.
         if timeframe in ["1W", "1M"]:
             return []
 
-        # --- 2. Map Frontend Timeframe to FMP Endpoint ---
+        # 2. Map Frontend Timeframe to FMP Endpoint
         endpoint = ""
         is_intraday = True
         
-        # FMP supports: 1min, 5min, 15min, 30min, 1hour, 4hour
+        # FMP supports specific intraday intervals
         if timeframe == "5M":
             endpoint = f"historical-chart/5min/{symbol}"
         elif timeframe == "15M":
@@ -257,13 +259,13 @@ def get_historical_candles(symbol: str, timeframe: str = "1D"):
             url += f"&from={start_date}"
 
         response = requests.get(url)
-        # We don't raise_for_status here immediately to handle graceful empty returns
+        # Don't raise error immediately, check status codes to allow fallback
         if response.status_code != 200:
             return []
             
         data = response.json()
 
-        # --- 3. Extract specific list based on endpoint type ---
+        # 3. Extract specific list based on endpoint type
         # Intraday returns list directly: [...]
         # Daily returns object: { symbol: 'AAP', historical: [...] }
         raw_candles = data if is_intraday else data.get('historical', [])
@@ -273,7 +275,7 @@ def get_historical_candles(symbol: str, timeframe: str = "1D"):
 
         formatted_data = []
         
-        # --- 4. Process and Format Data ---
+        # 4. Process and Format Data
         for candle in raw_candles:
             date_str = candle.get('date')
             
@@ -289,7 +291,7 @@ def get_historical_candles(symbol: str, timeframe: str = "1D"):
                     # Parse date string and set time to midnight UTC (standard for daily charts)
                     dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
                 
-                # Convert to Unix Timestamp (Seconds)
+                # Convert to Unix Timestamp (Seconds) for Lightweight Charts
                 timestamp = int(dt_obj.timestamp())
 
                 formatted_data.append({
@@ -304,7 +306,7 @@ def get_historical_candles(symbol: str, timeframe: str = "1D"):
                 # Skip malformed dates
                 continue
 
-        # --- 5. Sort: FMP usually sends Newest First. Charts need Oldest First. ---
+        # 5. Sort: FMP usually sends Newest First. Charts need Oldest First.
         formatted_data.sort(key=lambda x: x['time'])
         
         return formatted_data

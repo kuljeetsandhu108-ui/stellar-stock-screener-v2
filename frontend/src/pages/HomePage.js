@@ -1,16 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import styled, { keyframes } from 'styled-components';
+import styled, { keyframes, css } from 'styled-components';
 import axios from 'axios';
-import { FaSearch, FaChartBar, FaGlobeAmericas } from 'react-icons/fa';
+import { FaSearch, FaChartBar, FaGlobeAmericas, FaSpinner } from 'react-icons/fa';
 import IndicesBanner from '../components/Indices/IndicesBanner';
 import ChartUploader from '../components/HomePage/ChartUploader';
 
-// --- 1. HIGH-END ANIMATIONS ---
+// --- 1. ANIMATIONS ---
 
 const fadeIn = keyframes`
   from { opacity: 0; transform: translateY(-20px); }
   to { opacity: 1; transform: translateY(0); }
+`;
+
+const spin = keyframes`
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 `;
 
 const float = keyframes`
@@ -131,7 +136,7 @@ const SearchSection = styled.div`
   max-width: 650px;
   position: relative;
   animation: ${fadeIn} 1.8s ease-out;
-  z-index: 50; /* Ensure dropdown appears above other elements */
+  z-index: 100; /* Ensure this is top level */
 `;
 
 const SearchWrapper = styled.div`
@@ -194,6 +199,11 @@ const SearchButton = styled.button`
   &:active {
     transform: translateY(-50%) scale(0.95);
   }
+
+  &:disabled {
+      opacity: 0.8;
+      cursor: default;
+  }
 `;
 
 // --- AUTOCOMPLETE DROPDOWN ---
@@ -214,7 +224,7 @@ const SuggestionsList = styled.ul`
   padding: 0;
   max-height: 350px;
   overflow-y: auto;
-  z-index: 100;
+  z-index: 101; /* Higher than Wrapper */
   
   /* Smooth Scrollbar */
   &::-webkit-scrollbar { width: 6px; }
@@ -307,7 +317,11 @@ const HomePage = () => {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  
+  // Distinguish between Autocomplete loading (typing) and Full Search loading (enter)
+  const [isAutoCompleting, setIsAutoCompleting] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  
   const [error, setError] = useState('');
   
   const navigate = useNavigate();
@@ -322,19 +336,26 @@ const HomePage = () => {
       return;
     }
 
+    // Indicate loading start immediately
+    setIsAutoCompleting(true);
+
     // Debounce to prevent server spam
     const delayDebounceFn = setTimeout(async () => {
       try {
-        // Call our new Smart Autocomplete Endpoint
         const response = await axios.get(`/api/stocks/autocomplete?query=${query}`);
         setSuggestions(response.data);
         setShowSuggestions(true);
       } catch (error) {
         console.error("Autocomplete error:", error);
+      } finally {
+        setIsAutoCompleting(false);
       }
-    }, 300); // 300ms delay
+    }, 400); // 400ms delay
 
-    return () => clearTimeout(delayDebounceFn);
+    return () => {
+        clearTimeout(delayDebounceFn);
+        // We don't set isAutoCompleting false here to keep the spinner while user types fast
+    };
   }, [query]);
 
 
@@ -343,7 +364,7 @@ const HomePage = () => {
     const target = searchQuery.trim();
     if (!target) return;
 
-    setIsLoading(true);
+    setIsSearching(true);
     setError('');
     setShowSuggestions(false);
     
@@ -355,7 +376,7 @@ const HomePage = () => {
     } catch (err) {
       setError('Could not locate stock. Please try a valid ticker.');
     } finally {
-      setIsLoading(false);
+      setIsSearching(false);
     }
   };
 
@@ -417,11 +438,17 @@ const HomePage = () => {
               onChange={(e) => setQuery(e.target.value)}
               onKeyPress={handleKeyPress}
               onFocus={() => query.length >= 2 && setShowSuggestions(true)}
-              disabled={isLoading}
+              disabled={isSearching}
               spellCheck={false}
             />
-            <SearchButton onClick={() => performSearch()} disabled={isLoading} aria-label="Search">
-              <FaSearch size={20} />
+            
+            {/* BUTTON LOGIC: Show Spinner if Autocompleting OR Searching */}
+            <SearchButton onClick={() => performSearch()} disabled={isSearching || isAutoCompleting} aria-label="Search">
+              {isSearching || isAutoCompleting ? (
+                  <FaSpinner className="fa-spin" size={20} />
+              ) : (
+                  <FaSearch size={20} />
+              )}
             </SearchButton>
           </SearchWrapper>
 
@@ -446,8 +473,8 @@ const HomePage = () => {
           )}
         </SearchSection>
 
-        {/* 6. Status Text */}
-        <LoadingText>{isLoading ? 'Analyzing Market Data...' : error || ''}</LoadingText>
+        {/* 6. Status Text (Only for Main Search Error or Long loading) */}
+        <LoadingText>{isSearching ? 'Processing Market Data...' : error || ''}</LoadingText>
         
         <p style={{ color: 'var(--color-text-secondary)', margin: '2rem 0', fontWeight: '500', opacity: 0.6 }}>
             — OR —
