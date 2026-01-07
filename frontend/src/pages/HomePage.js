@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import styled, { keyframes, css } from 'styled-components';
+import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
 import { FaSearch, FaChartBar, FaGlobeAmericas, FaSpinner } from 'react-icons/fa';
 import IndicesBanner from '../components/Indices/IndicesBanner';
 import ChartUploader from '../components/HomePage/ChartUploader';
 
-// --- 1. ANIMATIONS ---
+// --- 1. HIGH-END ANIMATIONS ---
 
 const fadeIn = keyframes`
   from { opacity: 0; transform: translateY(-20px); }
@@ -318,7 +318,7 @@ const HomePage = () => {
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   
-  // Distinguish between Autocomplete loading (typing) and Full Search loading (enter)
+  // State for different loading contexts
   const [isAutoCompleting, setIsAutoCompleting] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   
@@ -327,39 +327,42 @@ const HomePage = () => {
   const navigate = useNavigate();
   const searchRef = useRef(null);
 
-  // --- AUTOCOMPLETE ENGINE ---
+  // --- SAFE AUTOCOMPLETE ENGINE ---
   useEffect(() => {
-    // Clear if empty
+    // 1. Clear if empty or short
     if (query.length < 2) {
       setSuggestions([]);
       setShowSuggestions(false);
       return;
     }
 
-    // Indicate loading start immediately
     setIsAutoCompleting(true);
 
-    // Debounce to prevent server spam
+    // 2. Debounce API Call (Prevent spamming server)
     const delayDebounceFn = setTimeout(async () => {
       try {
         const response = await axios.get(`/api/stocks/autocomplete?query=${query}`);
-        setSuggestions(response.data);
-        setShowSuggestions(true);
+        
+        // --- CRITICAL SAFETY CHECK ---
+        // Prevents "White Screen of Death" if API returns non-array (e.g. error msg)
+        if (Array.isArray(response.data)) {
+            setSuggestions(response.data);
+            setShowSuggestions(true);
+        } else {
+            // Graceful fallback
+            setSuggestions([]);
+        }
       } catch (error) {
         console.error("Autocomplete error:", error);
       } finally {
         setIsAutoCompleting(false);
       }
-    }, 400); // 400ms delay
+    }, 400); // 400ms wait before asking server
 
-    return () => {
-        clearTimeout(delayDebounceFn);
-        // We don't set isAutoCompleting false here to keep the spinner while user types fast
-    };
+    return () => clearTimeout(delayDebounceFn);
   }, [query]);
 
-
-  // --- SEARCH HANDLER (FALLBACK) ---
+  // --- SEARCH HANDLER (Button/Enter) ---
   const performSearch = async (searchQuery = query) => {
     const target = searchQuery.trim();
     if (!target) return;
@@ -369,7 +372,7 @@ const HomePage = () => {
     setShowSuggestions(false);
     
     try {
-      // If user presses Enter without selecting, let AI guess the symbol
+      // Use Backend Fallback Search (AI or FMP)
       const response = await axios.get(`/api/stocks/search?query=${target}`);
       const symbol = response.data.symbol;
       navigate(`/stock/${symbol}`);
@@ -380,7 +383,7 @@ const HomePage = () => {
     }
   };
 
-  // --- CLICK HANDLER ---
+  // --- CLICK HANDLER (Dropdown Item) ---
   const handleSuggestionClick = (symbol) => {
     setQuery(symbol);
     setSuggestions([]);
@@ -442,7 +445,7 @@ const HomePage = () => {
               spellCheck={false}
             />
             
-            {/* BUTTON LOGIC: Show Spinner if Autocompleting OR Searching */}
+            {/* Show Spinner inside button if ANY loading is happening */}
             <SearchButton onClick={() => performSearch()} disabled={isSearching || isAutoCompleting} aria-label="Search">
               {isSearching || isAutoCompleting ? (
                   <FaSpinner className="fa-spin" size={20} />
@@ -480,7 +483,7 @@ const HomePage = () => {
             — OR —
         </p>
         
-        {/* 7. DUAL AI UPLOADERS (Stock vs Index) */}
+        {/* 7. DUAL UPLOADERS (Stock vs Index) */}
         <UploadGrid>
             {/* Stock Uploader (Blue Theme) */}
             <ChartUploader 
