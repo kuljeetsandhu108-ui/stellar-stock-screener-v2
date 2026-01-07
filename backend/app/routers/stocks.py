@@ -4,7 +4,6 @@ import time
 from datetime import datetime, timedelta
 import pytz 
 from fastapi import APIRouter, HTTPException, Query, Body
-# Import all services including the new Redis service
 from ..services import fmp_service, yahoo_service, news_service, gemini_service, fundamental_service, technical_service, sentiment_service, redis_service
 from pydantic import BaseModel
 from typing import List, Dict, Any
@@ -23,7 +22,7 @@ class ForecastRequest(BaseModel):
     priceTarget: Dict[str, Any]
     keyStats: Dict[str, Any]
     newsHeadlines: List[str]
-    currency: str = "USD" # Currency awareness
+    currency: str = "USD"
 
 class FundamentalRequest(BaseModel):
     companyName: str
@@ -51,7 +50,7 @@ class TimeframeRequest(BaseModel):
 
 router = APIRouter()
 
-# TradingView Symbol Mapping (Fixes chart mismatches for specific indices/stocks)
+# TradingView Symbol Mapping (Fixes chart mismatches)
 TRADINGVIEW_OVERRIDE_MAP = {
     "TATAPOWER.NS": "NSE:TATAPOWER",
     "RELIANCE.NS": "NSE:RELIANCE",
@@ -276,9 +275,9 @@ async def get_peers_comparison(symbol: str):
     fmp_peers_data = await asyncio.to_thread(fmp_service.get_peers_with_metrics, all_symbols)
     peers_map = {item['symbol']: item for item in fmp_peers_data}
     
-    # Fallback to Yahoo for missing data
     tasks_to_run = []
     for peer_symbol in all_symbols:
+        # Fetch from Yahoo if not in FMP map OR if P/E is missing (common data hole)
         if peer_symbol not in peers_map or not peers_map[peer_symbol].get('peRatioTTM'):
             tasks_to_run.append((peer_symbol, asyncio.to_thread(yahoo_service.get_key_fundamentals, peer_symbol)))
             
@@ -322,8 +321,8 @@ async def get_stock_chart(symbol: str, range: str = "1D"):
 
     if not data: return []
 
-    # 2. Live Stitching (Only needed for Daily/Intraday)
-    # We grab a live quote to ensure the very last candle is up to the second.
+    # 2. LIVE STITCHING LOGIC
+    # Grab instant price from Yahoo (usually fastest for live tick)
     live_quote = await asyncio.to_thread(yahoo_service.get_quote, symbol)
     
     if live_quote and live_quote.get('price'):
@@ -338,29 +337,28 @@ async def get_stock_chart(symbol: str, range: str = "1D"):
         now = datetime.now(tz)
         today_str = now.strftime('%Y-%m-%d')
         
-        if len(data) > 0:
-            last = data[-1]
-            last_date_str = datetime.fromtimestamp(last['time'], tz=tz).strftime('%Y-%m-%d')
-            
-            if range == "1D":
-                if last_date_str == today_str:
-                    # Update existing today candle
-                    last['close'] = price
-                    last['high'] = max(last['high'], price)
-                    last['low'] = min(last['low'], price)
-                    if live_quote.get('volume'): last['volume'] = live_quote['volume']
-                else:
-                    # Market open, but FMP hasn't updated yet -> Append new candle
-                    day_open = live_quote.get('open') or price
-                    new_candle = {
-                        "time": int(now.replace(hour=0,minute=0,second=0,microsecond=0).timestamp()),
-                        "open": day_open,
-                        "high": max(day_open, price),
-                        "low": min(day_open, price),
-                        "close": price,
-                        "volume": live_quote.get('volume') or 0
-                    }
-                    data.append(new_candle)
+        last_candle = data[-1]
+        last_date_str = datetime.fromtimestamp(last_candle['time'], tz=tz).strftime('%Y-%m-%d')
+
+        if range == "1D":
+            if last_date_str == today_str:
+                # Update existing today candle
+                last_candle['close'] = price
+                last_candle['high'] = max(last_candle['high'], price)
+                last_candle['low'] = min(last_candle['low'], price)
+                if live_quote.get('volume'): last_candle['volume'] = live_quote['volume']
+            else:
+                # Append new candle for today
+                day_open = live_quote.get('open') or last_candle['close']
+                new_candle = {
+                    "time": int(now.replace(hour=0,minute=0,second=0,microsecond=0).timestamp()), 
+                    "open": day_open,
+                    "high": max(day_open, price),
+                    "low": min(day_open, price),
+                    "close": price,
+                    "volume": live_quote.get('volume') or 0
+                }
+                data.append(new_candle)
 
     # 3. Save to Redis (Short TTL for live charts)
     redis_service.set_cache(cache_key, data, 15)
@@ -385,37 +383,35 @@ async def get_all_stock_data(symbol: str):
         "fmp_quote": asyncio.to_thread(fmp_service.get_quote, symbol),
         "fmp_key_metrics": asyncio.to_thread(fmp_service.get_key_metrics, symbol, "annual", 1),
         
-        "fmp_inc": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "income-statement", "annual", 10),
-        "fmp_bal": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "balance-sheet-statement", "annual", 10),
-        "fmp_cf": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "cash-flow-statement", "annual", 10),
+        "fmp_income_5y": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "income-statement", "annual", 10),
+        "fmp_balance_5y": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "balance-sheet-statement", "annual", 10),
+        "fmp_cash_flow_5y": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "cash-flow-statement", "annual", 10),
         
-        "fmp_q_inc": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "income-statement", "quarter", 5),
-        "fmp_q_bal": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "balance-sheet-statement", "quarter", 5),
-        "fmp_q_cf": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "cash-flow-statement", "quarter", 5),
+        "fmp_quarterly_income": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "income-statement", "quarter", 5),
+        "fmp_quarterly_balance": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "balance-sheet-statement", "quarter", 5),
+        "fmp_quarterly_cash_flow": asyncio.to_thread(fmp_service.get_financial_statements, symbol, "cash-flow-statement", "quarter", 5),
         
         "shareholding": asyncio.to_thread(fmp_service.get_shareholding_data, symbol),
         "news": asyncio.to_thread(news_service.get_company_news, symbol),
-        "yf_rec": asyncio.to_thread(yahoo_service.get_analyst_recommendations, symbol),
-        "yf_tar": asyncio.to_thread(yahoo_service.get_price_target_data, symbol),
-        
-        # Technicals Base (Daily)
+        "yf_recommendations": asyncio.to_thread(yahoo_service.get_analyst_recommendations, symbol),
+        "yf_price_target": asyncio.to_thread(yahoo_service.get_price_target_data, symbol),
         "hist_df": asyncio.to_thread(yahoo_service.get_historical_data, symbol, "260d"),
     }
 
-    # Backup Tasks (Triggered concurrently for Intl stocks to avoid wait)
+    # Backup Tasks (Triggered concurrently for Intl stocks)
     if is_international:
         tasks.update({
-            "yf_p": asyncio.to_thread(yahoo_service.get_company_profile, symbol),
-            "yf_q": asyncio.to_thread(yahoo_service.get_quote, symbol),
-            "yf_m": asyncio.to_thread(yahoo_service.get_key_fundamentals, symbol),
-            "yf_share": asyncio.to_thread(yahoo_service.get_shareholding_summary, symbol),
-            "yf_hist": asyncio.to_thread(yahoo_service.get_historical_financials, symbol),
-            "yf_q_fin": asyncio.to_thread(yahoo_service.get_quarterly_financials, symbol),
+            "yf_profile": asyncio.to_thread(yahoo_service.get_company_profile, symbol),
+            "yf_quote": asyncio.to_thread(yahoo_service.get_quote, symbol),
+            "yf_key_fundamentals": asyncio.to_thread(yahoo_service.get_key_fundamentals, symbol),
+            "yf_shareholding": asyncio.to_thread(yahoo_service.get_shareholding_summary, symbol),
+            "yf_historical_financials": asyncio.to_thread(yahoo_service.get_historical_financials, symbol),
+            "yf_quarterly_financials": asyncio.to_thread(yahoo_service.get_quarterly_financials, symbol),
         })
     else:
         # Lazy load backups for US if needed
-        tasks["yf_m"] = asyncio.to_thread(yahoo_service.get_key_fundamentals, symbol)
-        tasks["yf_share"] = asyncio.to_thread(yahoo_service.get_shareholding_summary, symbol)
+        tasks["yf_key_fundamentals"] = asyncio.to_thread(yahoo_service.get_key_fundamentals, symbol)
+        tasks["yf_shareholding"] = asyncio.to_thread(yahoo_service.get_shareholding_summary, symbol)
 
     try:
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
@@ -447,14 +443,14 @@ async def get_all_stock_data(symbol: str):
             p = await asyncio.to_thread(yahoo_service.get_company_profile, symbol)
             q = await asyncio.to_thread(yahoo_service.get_quote, symbol)
         else:
-            p = safe('yf_p', {})
-            q = safe('yf_q', {})
+            p = safe('yf_profile', {})
+            q = safe('yf_quote', {})
 
     final_data['profile'] = p or {}
     final_data['quote'] = q or {}
 
     # 2. Metrics
-    final_data['key_metrics'] = {**safe('yf_m', {}), **safe('fmp_key_metrics', {})}
+    final_data['key_metrics'] = {**safe('yf_key_fundamentals', {}), **safe('fmp_key_metrics', {})}
 
     # 3. Financials
     inc = safe('fmp_income_5y', [])
@@ -471,8 +467,8 @@ async def get_all_stock_data(symbol: str):
              yf_h = await asyncio.to_thread(yahoo_service.get_historical_financials, symbol)
              yf_q = await asyncio.to_thread(yahoo_service.get_quarterly_financials, symbol)
         else:
-             yf_h = safe('yf_hist', {'income':[]})
-             yf_q = safe('yf_q_fin', {'income':[]})
+             yf_h = safe('yf_historical_financials', {'income':[]})
+             yf_q = safe('yf_quarterly_financials', {'income':[]})
         
         final_data['annual_revenue_and_profit'] = yf_h.get('income', [])
         final_data['annual_balance_sheets'] = yf_h.get('balance', [])
@@ -501,11 +497,12 @@ async def get_all_stock_data(symbol: str):
     final_data['moving_averages'] = technical_service.calculate_moving_averages(hist_df)
     final_data['pivot_points'] = technical_service.calculate_pivot_points(hist_df)
     
+    # Sentiment
     final_data['overall_sentiment'] = sentiment_service.calculate_overall_sentiment(
         piotroski_score=final_data['piotroski_f_score'].get('score'),
         key_metrics=final_data['key_metrics'],
         technicals=final_data['technical_indicators'],
-        analyst_ratings=safe('yf_rec', [])
+        analyst_ratings=safe('yf_recommendations', [])
     )
     
     # 6. Shareholding
@@ -518,13 +515,13 @@ async def get_all_stock_data(symbol: str):
         if not is_international:
              yf_hold_sum = await asyncio.to_thread(yahoo_service.get_shareholding_summary, symbol)
         else:
-             yf_hold_sum = safe('yf_share', {})
+             yf_hold_sum = safe('yf_shareholding', {})
         final_data['shareholding_breakdown'] = yf_hold_sum
         final_data['shareholding'] = []
 
     final_data['news'] = safe('news', [])
-    final_data['analyst_ratings'] = safe('yf_rec', [])
-    final_data['price_target_consensus'] = safe('yf_tar', {})
+    final_data['analyst_ratings'] = safe('yf_recommendations', [])
+    final_data['price_target_consensus'] = safe('yf_price_target', {})
 
     tv_symbol = symbol
     if symbol in TRADINGVIEW_OVERRIDE_MAP: tv_symbol = TRADINGVIEW_OVERRIDE_MAP[symbol]
@@ -565,7 +562,7 @@ async def get_all_stock_data(symbol: str):
 
     final = clean_nans(final_data)
     
-    # Save to Redis (60s cache for master data)
+    # Save to Redis
     redis_service.set_cache(cache_key, final, 60)
     
     return final

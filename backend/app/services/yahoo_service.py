@@ -17,18 +17,15 @@ def get_company_profile(symbol: str):
         ticker = yf.Ticker(symbol)
         info = ticker.info
         
-        # Yahoo often hides CEO deep in governance data or doesn't provide it in basic info
-        # We try to extract what we can to match the FMP schema.
-        
         return {
             "companyName": info.get('longName') or info.get('shortName') or symbol,
             "symbol": symbol,
             "description": info.get('longBusinessSummary', 'No description available.'),
             "industry": info.get('industry', 'N/A'),
             "sector": info.get('sector', 'N/A'),
-            "ceo": "N/A", 
+            "ceo": "N/A", # Yahoo often hides CEO deep in governance data
             "website": info.get('website', ''),
-            "image": info.get('logo_url', ''), # Note: Yahoo logo URLs are often unstable
+            "image": info.get('logo_url', ''), 
             "currency": info.get('currency', 'USD'),
             "exchange": info.get('exchange', 'N/A'),
             "mktCap": info.get('marketCap'),
@@ -36,7 +33,7 @@ def get_company_profile(symbol: str):
             "fullTimeEmployees": info.get('fullTimeEmployees')
         }
     except Exception as e:
-        print(f"Yahoo Profile Error for {symbol}: {e}")
+        # print(f"Yahoo Profile Error for {symbol}: {e}")
         return {}
 
 def get_quote(symbol: str):
@@ -85,7 +82,6 @@ def get_quote(symbol: str):
             "timestamp": pd.Timestamp.now().timestamp()
         }
     except Exception as e:
-        # print(f"Yahoo Quote Error for {symbol}: {e}") # Silent fail is better here to avoid log spam
         return {}
 
 # ==========================================
@@ -108,7 +104,6 @@ def get_chart_data(symbol: str, range_type: str = "1d", interval: str = "1d"):
         r = range_type.lower()
 
         # --- SMART INTERVAL MAPPING ---
-        # Maps Frontend Buttons to Yahoo Intervals
         if r == "5m":
             period = "5d"; yf_interval = "5m"
         elif r == "15m":
@@ -118,7 +113,7 @@ def get_chart_data(symbol: str, range_type: str = "1d", interval: str = "1d"):
         elif r == "1h":
             period = "1mo"; yf_interval = "60m"
         elif r == "4h":
-            # Yahoo free doesn't do 4h. Fallback to 1h for 6 months allows zooming.
+            # Yahoo free doesn't do 4h. Fallback to 1h for 6 months.
             period = "6mo"; yf_interval = "60m" 
         elif r == "1d":
             period = "2y"; yf_interval = "1d"
@@ -142,7 +137,6 @@ def get_chart_data(symbol: str, range_type: str = "1d", interval: str = "1d"):
         chart_data = []
         for _, row in df.iterrows():
             # Lightweight charts requires Seconds (Unix Timestamp)
-            # Yahoo sometimes returns offsets, we strip them to get pure UTC timestamp
             date_val = row['date']
             time_val = int(date_val.timestamp())
             
@@ -196,7 +190,6 @@ def calculate_technical_indicators(df: pd.DataFrame):
     if df is None or df.empty: return {}
     try:
         # Execute Pandas TA strategies
-        # We append=True to add columns to the dataframe
         df.ta.rsi(length=14, append=True)
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
         df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
@@ -254,7 +247,6 @@ def _parse_yfinance_financials(df):
 
         for row in records:
             date_val = row['date']
-            # Convert timestamp to YYYY-MM-DD
             date_str = str(date_val).split(' ')[0]
 
             def find_val(keywords):
@@ -270,7 +262,7 @@ def _parse_yfinance_financials(df):
                 "date": date_str,
                 "calendarYear": date_str[:4],
                 # Income
-                "netIncome": find_val(['net income', 'netincome', 'net income common stockholders']),
+                "netIncome": find_val(['net income', 'netincome', 'net income common']),
                 "revenue": find_val(['total revenue', 'operating revenue', 'totalrevenue']),
                 "grossProfit": find_val(['gross profit', 'grossprofit']),
                 "eps": find_val(['basic eps', 'diluted eps']),
@@ -296,20 +288,29 @@ def _parse_yfinance_financials(df):
 def get_historical_financials(symbol: str):
     try:
         ticker = yf.Ticker(symbol)
+        # Try both new (.income_stmt) and old (.financials) properties
+        inc = ticker.income_stmt if not ticker.income_stmt.empty else ticker.financials
+        bal = ticker.balance_sheet if not ticker.balance_sheet.empty else ticker.balance_sheet
+        cf = ticker.cashflow if not ticker.cashflow.empty else ticker.cashflow
+        
         return {
-            "income": _parse_yfinance_financials(ticker.financials),
-            "balance": _parse_yfinance_financials(ticker.balance_sheet),
-            "cash_flow": _parse_yfinance_financials(ticker.cashflow),
+            "income": _parse_yfinance_financials(inc),
+            "balance": _parse_yfinance_financials(bal),
+            "cash_flow": _parse_yfinance_financials(cf),
         }
     except: return {"income": [], "balance": [], "cash_flow": []}
 
 def get_quarterly_financials(symbol: str):
     try:
         ticker = yf.Ticker(symbol)
+        inc = ticker.quarterly_income_stmt if not ticker.quarterly_income_stmt.empty else ticker.quarterly_financials
+        bal = ticker.quarterly_balance_sheet if not ticker.quarterly_balance_sheet.empty else ticker.quarterly_balance_sheet
+        cf = ticker.quarterly_cashflow if not ticker.quarterly_cashflow.empty else ticker.quarterly_cashflow
+
         return {
-            "income": _parse_yfinance_financials(ticker.quarterly_financials),
-            "balance": _parse_yfinance_financials(ticker.quarterly_balance_sheet),
-            "cash_flow": _parse_yfinance_financials(ticker.quarterly_cashflow),
+            "income": _parse_yfinance_financials(inc),
+            "balance": _parse_yfinance_financials(bal),
+            "cash_flow": _parse_yfinance_financials(cf),
         }
     except: return {"income": [], "balance": [], "cash_flow": []}
 
@@ -388,9 +389,17 @@ def get_shareholding_summary(symbol: str):
     """
     try:
         ticker = yf.Ticker(symbol)
-        insider = (ticker.info.get('heldPercentInsiders', 0) or 0) * 100
-        inst = (ticker.info.get('heldPercentInstitutions', 0) or 0) * 100
         
+        insider = 0.0
+        inst = 0.0
+        
+        # 1. Try Info Dictionary
+        if ticker.info.get('heldPercentInsiders') is not None:
+            insider = ticker.info.get('heldPercentInsiders') * 100
+        if ticker.info.get('heldPercentInstitutions') is not None:
+            inst = ticker.info.get('heldPercentInstitutions') * 100
+            
+        # 2. If Info failed, try Major Holders DataFrame (Critical for Indian Stocks)
         if insider == 0 and inst == 0:
             holders = ticker.major_holders
             if holders is not None and not holders.empty:
@@ -398,6 +407,7 @@ def get_shareholding_summary(symbol: str):
                     try:
                         val_str = str(row.iloc[0])
                         label = str(row.iloc[1]).lower()
+                        
                         if '%' in val_str:
                             val = float(val_str.replace('%', ''))
                             if 'insider' in label: insider = val
