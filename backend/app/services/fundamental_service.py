@@ -2,153 +2,238 @@ import pandas as pd
 
 def calculate_piotroski_f_score(income_statements, balance_sheets, cash_flow_statements):
     """
-    Calculates the Piotroski F-Score based on 9 criteria using historical financial data.
+    Calculates the Piotroski F-Score (0-9) to assess financial strength.
+    Uses Pandas to ensure chronological accuracy.
     """
     score = 0
     criteria_met = []
 
-    # Ensure we have at least two years of data to compare for the calculations.
+    # 1. Validation: We need at least 2 years of data to compare trends
+    if not income_statements or not balance_sheets or not cash_flow_statements:
+        return {"score": 0, "criteria": ["Insufficient Data"]}
+    
     if len(income_statements) < 2 or len(balance_sheets) < 2 or len(cash_flow_statements) < 2:
-        return {"score": 0, "criteria": ["Not enough historical data."]}
+        return {"score": 0, "criteria": ["Insufficient Historical Data (Need 2+ years)"]}
 
     try:
-        # Use pandas DataFrames for easier data manipulation and access.
-        income_df = pd.DataFrame(income_statements).set_index('date').sort_index()
-        balance_df = pd.DataFrame(balance_sheets).set_index('date').sort_index()
-        cash_flow_df = pd.DataFrame(cash_flow_statements).set_index('date').sort_index()
+        # 2. Data Preparation: Convert to DataFrames and Sort Chronologically
+        # EODHD/FMP usually send Newest First. We sort by date ASCENDING.
+        # Index -1 = Current Year, Index -2 = Previous Year
+        inc_df = pd.DataFrame(income_statements).sort_values('date')
+        bal_df = pd.DataFrame(balance_sheets).sort_values('date')
+        cf_df = pd.DataFrame(cash_flow_statements).sort_values('date')
 
-        # Get the dates for the current and previous year for comparison.
-        cy = income_df.index[-1] # Current Year
-        py = income_df.index[-2] # Previous Year
+        # Align lengths (take the minimum common length to avoid index errors)
+        min_len = min(len(inc_df), len(bal_df), len(cf_df))
+        inc_df = inc_df.tail(min_len)
+        bal_df = bal_df.tail(min_len)
+        cf_df = cf_df.tail(min_len)
 
-        # --- Piotroski F-Score Criteria (9 points) ---
+        cy = -1 # Current Year Index
+        py = -2 # Previous Year Index
 
-        # 1. Net Income (Profitability)
-        net_income = income_df.loc[cy, 'netIncome']
+        # --- PROFITABILITY (4 Points) ---
+
+        # 1. Return on Assets (ROA) > 0
+        # Net Income / Total Assets
+        net_income = float(inc_df.iloc[cy].get('netIncome', 0))
+        total_assets = float(bal_df.iloc[cy].get('totalAssets', 1)) # Avoid div/0
+        roa_current = net_income / total_assets
         if net_income > 0:
             score += 1
             criteria_met.append("Positive Net Income")
 
-        # 2. Operating Cash Flow (Profitability)
-        op_cash_flow = cash_flow_df.loc[cy, 'operatingCashFlow']
-        if op_cash_flow > 0:
+        # 2. Operating Cash Flow > 0
+        ocf = float(cf_df.iloc[cy].get('operatingCashFlow', 0))
+        if ocf > 0:
             score += 1
             criteria_met.append("Positive Operating Cash Flow")
 
-        # 3. Return On Assets (ROA) Trend (Profitability)
-        total_assets_cy = balance_df.loc[cy, 'totalAssets']
-        total_assets_py = balance_df.loc[py, 'totalAssets']
-        roa_cy = net_income / total_assets_cy
-        roa_py = income_df.loc[py, 'netIncome'] / total_assets_py
-        if roa_cy > roa_py:
+        # 3. Change in ROA (Current > Previous)
+        net_income_prev = float(inc_df.iloc[py].get('netIncome', 0))
+        total_assets_prev = float(bal_df.iloc[py].get('totalAssets', 1))
+        roa_prev = net_income_prev / total_assets_prev
+        
+        if roa_current > roa_prev:
             score += 1
             criteria_met.append("Increasing Return on Assets (ROA)")
 
-        # 4. Quality of Earnings (Profitability)
-        if op_cash_flow > net_income:
+        # 4. Quality of Earnings (Accruals): OCF > Net Income
+        if ocf > net_income:
             score += 1
-            criteria_met.append("Operating Cash Flow > Net Income")
+            criteria_met.append("High Quality Earnings (Cash Flow > Net Income)")
 
-        # 5. Long-Term Debt vs Assets (Leverage)
-        debt_cy = balance_df.loc[cy, 'longTermDebt'] / total_assets_cy
-        debt_py = balance_df.loc[py, 'longTermDebt'] / total_assets_py
-        if debt_cy < debt_py:
-            score += 1
-            criteria_met.append("Lower Long-term Debt Ratio")
+        # --- LEVERAGE, LIQUIDITY, SOURCE OF FUNDS (3 Points) ---
 
-        # 6. Current Ratio Trend (Liquidity)
-        current_ratio_cy = balance_df.loc[cy, 'totalCurrentAssets'] / balance_df.loc[cy, 'totalCurrentLiabilities']
-        current_ratio_py = balance_df.loc[py, 'totalCurrentAssets'] / balance_df.loc[py, 'totalCurrentLiabilities']
-        if current_ratio_cy > current_ratio_py:
+        # 5. Change in Leverage (Long Term Debt)
+        # Current LTD should be <= Previous LTD
+        ltd_curr = float(bal_df.iloc[cy].get('longTermDebt', 0))
+        ltd_prev = float(bal_df.iloc[py].get('longTermDebt', 0))
+        
+        # We give points if debt decreased OR if debt is zero
+        if ltd_curr <= ltd_prev:
             score += 1
-            criteria_met.append("Higher Current Ratio")
+            criteria_met.append("Lower or Stable Long-Term Debt")
 
-        # 7. Shares Outstanding (Dilution)
-        shares_cy = income_df.loc[cy, 'weightedAverageShsOut']
-        shares_py = income_df.loc[py, 'weightedAverageShsOut']
-        if shares_cy <= shares_py:
-            score += 1
-            criteria_met.append("No new shares issued (no dilution)")
+        # 6. Change in Current Ratio (Current > Previous)
+        # Current Assets / Current Liabilities
+        ca_curr = float(bal_df.iloc[cy].get('totalCurrentAssets', 0))
+        cl_curr = float(bal_df.iloc[cy].get('totalCurrentLiabilities', 1))
+        current_ratio_curr = ca_curr / cl_curr if cl_curr else 0
 
-        # 8. Gross Margin Trend (Operating Efficiency)
-        gross_margin_cy = income_df.loc[cy, 'grossProfit'] / income_df.loc[cy, 'revenue']
-        gross_margin_py = income_df.loc[py, 'grossProfit'] / income_df.loc[py, 'revenue']
-        if gross_margin_cy > gross_margin_py:
-            score += 1
-            criteria_met.append("Higher Gross Margin")
+        ca_prev = float(bal_df.iloc[py].get('totalCurrentAssets', 0))
+        cl_prev = float(bal_df.iloc[py].get('totalCurrentLiabilities', 1))
+        current_ratio_prev = ca_prev / cl_prev if cl_prev else 0
 
-        # 9. Asset Turnover Trend (Operating Efficiency)
-        asset_turnover_cy = income_df.loc[cy, 'revenue'] / total_assets_py
-        asset_turnover_py = income_df.loc[py, 'revenue'] / (balance_df.iloc[-3]['totalAssets'] if len(balance_df) > 2 else total_assets_py)
-        if asset_turnover_cy > asset_turnover_py:
+        if current_ratio_curr > current_ratio_prev:
             score += 1
-            criteria_met.append("Higher Asset Turnover Ratio")
-            
+            criteria_met.append("Improving Liquidity (Current Ratio)")
+
+        # 7. Change in Shares Outstanding (No Dilution)
+        # Current Shares <= Previous Shares
+        shares_curr = float(inc_df.iloc[cy].get('weightedAverageShsOut', 0))
+        shares_prev = float(inc_df.iloc[py].get('weightedAverageShsOut', 0))
+        
+        # Allow a tiny margin for rounding errors (e.g. 0.1%)
+        if shares_curr <= shares_prev * 1.001:
+            score += 1
+            criteria_met.append("No Share Dilution")
+
+        # --- OPERATING EFFICIENCY (2 Points) ---
+
+        # 8. Change in Gross Margin
+        # (Gross Profit / Revenue)
+        rev_curr = float(inc_df.iloc[cy].get('revenue', 1))
+        gp_curr = float(inc_df.iloc[cy].get('grossProfit', 0))
+        gm_curr = gp_curr / rev_curr if rev_curr else 0
+
+        rev_prev = float(inc_df.iloc[py].get('revenue', 1))
+        gp_prev = float(inc_df.iloc[py].get('grossProfit', 0))
+        gm_prev = gp_prev / rev_prev if rev_prev else 0
+
+        if gm_curr > gm_prev:
+            score += 1
+            criteria_met.append("Improving Gross Margin")
+
+        # 9. Change in Asset Turnover
+        # (Revenue / Total Assets)
+        at_curr = rev_curr / total_assets if total_assets else 0
+        at_prev = rev_prev / total_assets_prev if total_assets_prev else 0
+
+        if at_curr > at_prev:
+            score += 1
+            criteria_met.append("Improving Asset Turnover efficiency")
+
     except Exception as e:
-        print(f"Could not calculate Piotroski score due to missing data or error: {e}")
-        return {"score": 0, "criteria": [f"Piotroski calculation error: {e}"]}
+        print(f"Piotroski Calculation Error: {e}")
+        return {"score": score, "criteria": criteria_met + ["Calculation Error"]}
 
     return {"score": score, "criteria": criteria_met}
 
 
-def calculate_graham_scan(profile: dict, key_metrics: dict, income_statements: list):
+def calculate_graham_scan(profile: dict, key_metrics: dict, income_statements: list, cash_flow_statements: list = []):
     """
-    Performs a Benjamin Graham scan based on 7 tenets for the defensive investor.
+    Benjamin Graham 'Defensive Investor' Checklist (7 Tenets).
+    Includes specific logic for Indian/Global markets.
     """
     score = 0
     criteria_met = []
 
-    if not profile or not key_metrics or len(income_statements) < 5:
-        return {"score": 0, "criteria": ["Not enough historical data for a full Graham scan."]}
+    if not profile or not key_metrics or len(income_statements) < 3:
+        return {"score": 0, "criteria": ["Insufficient Data for Graham Analysis."]}
 
     try:
-        # Tenet 1: Adequate Size (Market Cap > $2 Billion)
-        market_cap = profile.get('mktCap')
-        if market_cap and market_cap > 2_000_000_000:
-            score += 1
-            criteria_met.append(f"Adequate Size (Market Cap: ${market_cap / 1_000_000_000:.2f}B)")
-
-        # Tenet 2: Strong Financial Condition (Current Ratio > 2.0)
-        current_ratio = key_metrics.get('currentRatioTTM')
-        if current_ratio and current_ratio > 2.0:
-            score += 1
-            criteria_met.append(f"Strong Financials (Current Ratio: {current_ratio:.2f})")
-
-        # Tenet 3: Earnings Stability (Positive earnings for the last 5 years)
-        earnings_stable = all(stmt.get('netIncome', 0) > 0 for stmt in income_statements)
-        if earnings_stable:
-            score += 1
-            criteria_met.append("Earnings Stability (5 consecutive years of profit)")
-
-        # Tenet 4: Dividend Record (Consistent dividends for the last 5 years)
-        dividend_record = all(stmt.get('dividendsPaid', 0) != 0 for stmt in income_statements)
-        if dividend_record:
-            score += 1
-            criteria_met.append("Consistent Dividend Record (5 years)")
+        # --- 1. Adequate Size ---
+        # Rule: Exclude small companies to avoid volatility.
+        # Heuristic: Market Cap > 2 Billion USD (or approx 15,000 Cr INR)
+        # Since API returns raw numbers, we check raw magnitude.
+        mcap = float(key_metrics.get('marketCap') or profile.get('mktCap') or 0)
         
-        # Tenet 5: Earnings Growth (At least 33% growth over 5 years)
-        eps_start = income_statements[-1].get('eps')
-        eps_end = income_statements[0].get('eps')
-        if eps_start is not None and eps_end is not None and eps_start > 0:
-            growth = ((eps_end / eps_start) - 1) * 100
-            if growth >= 33:
-                score += 1
-                criteria_met.append(f"Earnings Growth (>33% over 5 years, actual: {growth:.2f}%)")
-
-        # Tenet 6: Moderate P/E Ratio (P/E < 15)
-        pe_ratio = key_metrics.get('peRatioTTM')
-        if pe_ratio and 0 < pe_ratio < 15:
+        # We assume 'Adequate' is > 2 Billion units of base currency (roughly works for USD and large INR caps)
+        if mcap > 2_000_000_000: 
             score += 1
-            criteria_met.append(f"Moderate P/E Ratio (< 15, actual: {pe_ratio:.2f})")
+            criteria_met.append(f"Adequate Size (Market Cap > 2B)")
 
-        # Tenet 7: Moderate Price-to-Book (P/E * P/B < 22.5)
-        pb_ratio = key_metrics.get('priceToBookRatioTTM')
-        if pe_ratio and pb_ratio and (pe_ratio * pb_ratio) < 22.5:
+        # --- 2. Strong Financial Condition ---
+        # Rule: Current Ratio >= 2.0
+        current_ratio = key_metrics.get('currentRatioTTM')
+        if current_ratio and current_ratio >= 2.0:
             score += 1
-            criteria_met.append(f"Moderate P/B Ratio (P/E * P/B < 22.5, actual: {(pe_ratio * pb_ratio):.2f})")
+            criteria_met.append(f"Strong Financials (Current Ratio {current_ratio:.2f} >= 2.0)")
+        elif current_ratio and current_ratio >= 1.5:
+            # Partial credit/mention for decent companies
+            pass 
+
+        # --- 3. Earnings Stability ---
+        # Rule: Positive earnings for the last 5-10 years.
+        # We check whatever history we have (usually 5 years from API).
+        earnings_history = [float(s.get('netIncome', 0)) for s in income_statements]
+        if earnings_history and all(e > 0 for e in earnings_history):
+            score += 1
+            criteria_met.append(f"Earnings Stability ({len(earnings_history)} years of positive profit)")
+
+        # --- 4. Dividend Record ---
+        # Rule: Uninterrupted payments for 20 years (We check 5 years available).
+        # We look at Cash Flow 'dividendsPaid'. Note: These are usually negative numbers (outflows).
+        dividends = []
+        if cash_flow_statements:
+            dividends = [float(s.get('dividendsPaid', 0)) for s in cash_flow_statements]
+        elif income_statements:
+            # Fallback to income statement if specific CF field missing
+            dividends = [float(s.get('dividendsPaid', 0)) for s in income_statements]
+            
+        # Check if any dividends were paid (non-zero) consistently
+        # We allow one missed year in 5 years for strictness flexibility, but let's be strict here:
+        if dividends and all(d != 0 for d in dividends):
+            score += 1
+            criteria_met.append("Consistent Dividend History")
+
+        # --- 5. Earnings Growth ---
+        # Rule: At least 33% growth in EPS over the last 10 years (We check 5).
+        # List is typically Newest -> Oldest
+        if len(income_statements) >= 3:
+            # Safely get EPS
+            def get_eps(item):
+                if item.get('eps'): return float(item['eps'])
+                if item.get('netIncome') and item.get('weightedAverageShsOut'):
+                    return float(item['netIncome']) / float(item['weightedAverageShsOut'])
+                return 0.0
+
+            current_eps = get_eps(income_statements[0])
+            past_eps = get_eps(income_statements[-1])
+            
+            if past_eps > 0 and current_eps > past_eps:
+                growth = ((current_eps - past_eps) / past_eps) * 100
+                if growth > 15: # Adjusted for shorter timeframe (5y)
+                    score += 1
+                    criteria_met.append(f"Earnings Growth (EPS grew {growth:.1f}%)")
+
+        # --- 6. Moderate P/E Ratio ---
+        # Rule: Current price should not be more than 15 times average earnings.
+        pe = float(key_metrics.get('peRatioTTM') or 0)
+        if 0 < pe < 15:
+            score += 1
+            criteria_met.append(f"Attractive Valuation (P/E {pe:.2f} < 15)")
+
+        # --- 7. Moderate Price to Assets (Graham Number) ---
+        # Rule: P/E * P/B should not exceed 22.5
+        # OR Price to Book < 1.5
+        pb = float(key_metrics.get('priceToBookRatioTTM') or 0)
+        
+        passed_valuation = False
+        
+        if 0 < pb < 1.5: 
+            passed_valuation = True
+            criteria_met.append(f"Assets Undervalued (P/B {pb:.2f} < 1.5)")
+        elif pe > 0 and pb > 0 and (pe * pb) < 22.5:
+            passed_valuation = True
+            criteria_met.append(f"Graham Number Safe (P/E * P/B = {(pe*pb):.1f} < 22.5)")
+            
+        if passed_valuation:
+            score += 1
 
     except Exception as e:
-        print(f"Error calculating Graham Scan: {e}")
-        return {"score": score, "criteria": criteria_met + [f"Calculation error: {e}"]}
+        print(f"Graham Scan Error: {e}")
+        criteria_met.append("Analysis interrupted by missing data")
 
     return {"score": score, "criteria": criteria_met}

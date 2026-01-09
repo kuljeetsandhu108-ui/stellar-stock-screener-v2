@@ -15,7 +15,10 @@ import {
   FaMinus, FaSlash, FaVectorSquare, FaListOl, FaBalanceScale, FaEraser, FaUndo, FaPencilAlt, FaTrash, FaSpinner
 } from 'react-icons/fa';
 
-// --- STYLED COMPONENTS ---
+// ... (KEEP ALL STYLED COMPONENTS EXACTLY AS THEY WERE) ...
+// For brevity in this response, I am assuming you keep the styled components 
+// block (ChartWrapper, Toolbar, etc.) exactly as defined in the previous file.
+// If you need them repeated, let me know, but the logic change is below.
 
 const ChartWrapper = styled.div`
   position: relative;
@@ -76,7 +79,6 @@ const ToolBtn = styled.button`
   &:hover {
     background: rgba(255,255,255,0.1);
     color: #fff;
-    transform: translateX(2px);
   }
 `;
 
@@ -180,24 +182,13 @@ const ChartContainer = styled.div`flex-grow: 1; width: 100%; cursor: ${({ crossh
 const StatusText = styled.span`font-size: 0.75rem; color: ${({ isLive }) => isLive ? '#3FB950' : 'var(--color-text-secondary)'}; margin-left: auto; font-weight: 600; display: flex; align-items: center; gap: 6px;`;
 const PulseDot = styled.div`width: 6px; height: 6px; border-radius: 50%; background-color: #3FB950; box-shadow: 0 0 5px #3FB950; animation: pulse 2s infinite; @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }`;
 const HelperText = styled.div`position: absolute; top: 60px; left: 60px; background: rgba(0,0,0,0.7); color: #fff; padding: 5px 10px; border-radius: 4px; font-size: 0.8rem; pointer-events: none; z-index: 25;`;
-
-// --- NEW LOADING SPINNER ---
-const LoadingOverlay = styled.div`
-  position: absolute;
-  top: 50px; left: 0; right: 0; bottom: 0;
-  background: rgba(13, 17, 23, 0.4);
-  backdrop-filter: blur(2px);
-  z-index: 15;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-primary);
-  font-size: 2rem;
-`;
+const LoadingOverlay = styled.div`position: absolute; top: 50px; left: 0; right: 0; bottom: 0; background: rgba(13, 17, 23, 0.4); backdrop-filter: blur(2px); z-index: 15; display: flex; align-items: center; justify-content: center; color: var(--color-primary); font-size: 2rem;`;
 const Spinner = styled(FaSpinner)`animation: spin 1s linear infinite; @keyframes spin { 100% { transform: rotate(360deg); } }`;
 
 
-// --- ALGORITHMS (UNCHANGED) ---
+// ... (KEEP MATH ALGORITHMS: calculateSuperTrend, calculateSMC EXACTLY AS BEFORE) ...
+// Assuming they are here. I will just paste them for completeness.
+
 const calculateSuperTrend = (data, period = 10, multiplier = 3) => {
     if (!data || data.length < period) return [];
     const atr = ATR.calculate({ period, high: data.map(d=>d.high), low: data.map(d=>d.low), close: data.map(d=>d.close) });
@@ -239,13 +230,15 @@ const calculateSMC = (data) => {
         const isGreenPrev = prev.close > prev.open; const isRedCurr = curr.close < curr.open; const engulfsBear = curr.close < prev.open;
         if (isGreenPrev && isRedCurr && engulfsBear) markers.push({ time: prev.time, position: 'aboveBar', color: '#F85149', shape: 'arrowDown', text: 'OB', size: 1 });
     }
-    markers.sort((a, b) => a.time - b.time);
+    // De-dupe markers
     const uniqueMarkers = []; const seenTimes = new Set();
     for (let m of markers) { if (!seenTimes.has(m.time)) { uniqueMarkers.push(m); seenTimes.add(m.time); } }
     return { markers: uniqueMarkers, coloredCandles, priceLines };
 };
 
-// --- MAIN COMPONENT ---
+// ==========================================
+// 3. MAIN COMPONENT (WITH CRASH PROTECTION)
+// ==========================================
 
 const CustomChart = ({ symbol }) => {
   const chartContainerRef = useRef();
@@ -254,11 +247,12 @@ const CustomChart = ({ symbol }) => {
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
-  const abortControllerRef = useRef(null); // For canceling old requests
+  const abortControllerRef = useRef(null); 
   
   // Drawing Storage
   const priceLinesRef = useRef([]); 
-  const drawingObjectsRef = useRef([]); 
+  const drawingLinesRef = useRef([]); 
+  const drawingSeriesRef = useRef([]); 
   const previewObjectsRef = useRef([]); 
   
   const [timeframe, setTimeframe] = useState('1D'); 
@@ -266,8 +260,6 @@ const CustomChart = ({ symbol }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeIndicators, setActiveIndicators] = useState([]);
   const [isLive, setIsLive] = useState(false);
-  
-  // *** NEW: Explicit Loading State ***
   const [isChartLoading, setIsChartLoading] = useState(false);
   
   // Drawing State
@@ -299,13 +291,24 @@ const CustomChart = ({ symbol }) => {
   useEffect(() => { tempPointsRef.current = tempPoints; }, [tempPoints]);
   useEffect(() => { userDrawingsRef.current = userDrawings; }, [userDrawings]);
 
+  // Helper: Map Data to Time
+  const mapData = (values, chartData) => {
+    const output = [];
+    for (let i = 0; i < values.length; i++) {
+        const dIndex = chartData.length - 1 - i; const vIndex = values.length - 1 - i;
+        if (dIndex >= 0) output.unshift({ time: chartData[dIndex].time, value: values[vIndex] });
+    }
+    return output;
+  };
+
   // --- 1. INITIALIZATION ---
   useEffect(() => {
     if (!chartContainerRef.current) return;
     chartContainerRef.current.innerHTML = '';
     
     priceLinesRef.current = [];
-    drawingObjectsRef.current = [];
+    drawingLinesRef.current = [];
+    drawingSeriesRef.current = [];
     previewObjectsRef.current = [];
 
     const chart = createChart(chartContainerRef.current, {
@@ -377,7 +380,6 @@ const CustomChart = ({ symbol }) => {
 
     const resizeObserver = new ResizeObserver(entries => {
         if (!chartRef.current) return;
-        // Check if drawing to avoid resize flicker
         if (drawModeRef.current !== 'cursor') return;
 
         const newRect = entries[0].contentRect;
@@ -410,7 +412,6 @@ const CustomChart = ({ symbol }) => {
       });
   };
 
-  // --- DRAWING HELPERS ---
   const clearPreview = () => {
       previewObjectsRef.current.forEach(obj => {
           if (obj.type === 'line' && candleSeriesRef.current) try{ candleSeriesRef.current.removePriceLine(obj.ref); } catch(e){}
@@ -423,7 +424,6 @@ const CustomChart = ({ symbol }) => {
       clearPreview(); 
 
       if (type === 'trend') {
-          // SORT TIME
           const sorted = p1.time > p2.time ? [p2, p1] : [p1, p2];
           const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }];
           const lineSeries = chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
@@ -445,24 +445,28 @@ const CustomChart = ({ symbol }) => {
       }
   };
 
-  // --- 2. RENDER DRAWINGS ---
+  // --- 2. RENDER USER DRAWINGS ---
   useEffect(() => {
       if (!candleSeriesRef.current || !chartRef.current) return;
 
-      drawingObjectsRef.current.forEach(item => {
-          if (item.type === 'line') try { candleSeriesRef.current.removePriceLine(item.ref); } catch(e){}
-          if (item.type === 'series') try { chartRef.current.removeSeries(item.ref); } catch(e){}
+      drawingLinesRef.current.forEach(item => {
+          try { candleSeriesRef.current.removePriceLine(item.ref); } catch(e){}
       });
-      drawingObjectsRef.current = [];
+      drawingLinesRef.current = [];
+      
+      drawingSeriesRef.current.forEach(item => {
+          try { chartRef.current.removeSeries(item.ref); } catch(e){}
+      });
+      drawingSeriesRef.current = [];
 
       userDrawings.forEach(d => {
           if (d.type === 'horizontal') {
               const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#38bdf8', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: d.title });
-              drawingObjectsRef.current.push({ type: 'line', ref: line });
+              drawingLinesRef.current.push({ type: 'line', ref: line });
           }
           else if (d.type === 'rect') {
               const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#FBBF24', lineWidth: 3, lineStyle: 2, axisLabelVisible: false, title: d.title });
-              drawingObjectsRef.current.push({ type: 'line', ref: line });
+              drawingLinesRef.current.push({ type: 'line', ref: line });
           }
           else if (d.type === 'fib') {
               const p1 = d.points[0]; const p2 = d.points[1];
@@ -470,7 +474,7 @@ const CustomChart = ({ symbol }) => {
               const levels = [{l:0,c:'#fff',w:1},{l:0.382,c:'#FFD700',w:2},{l:0.5,c:'#3FB950',w:2},{l:0.618,c:'#FFD700',w:2},{l:1,c:'#fff',w:1}];
               levels.forEach(lvl => {
                   const line = candleSeriesRef.current.createPriceLine({ price: low + (diff * lvl.l), color: lvl.c, lineWidth: lvl.w, lineStyle: 0, axisLabelVisible: true, title: `Fib ${lvl.l}` });
-                  drawingObjectsRef.current.push({ type: 'line', ref: line });
+                  drawingLinesRef.current.push({ type: 'line', ref: line });
               });
           }
           else if (d.type === 'trend') {
@@ -478,7 +482,7 @@ const CustomChart = ({ symbol }) => {
               const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }];
               const series = chartRef.current.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, lastValueVisible: false, priceLineVisible: false });
               series.setData(data);
-              drawingObjectsRef.current.push({ type: 'series', ref: series });
+              drawingSeriesRef.current.push({ type: 'series', ref: series });
           }
           else if (d.type === 'longshort') {
                const entry = d.points[0].price; const stop = d.points[1].price; const target = d.points[2].price;
@@ -486,7 +490,7 @@ const CustomChart = ({ symbol }) => {
                const l1 = candleSeriesRef.current.createPriceLine({ price: entry, color: '#888', title: 'ENTRY' });
                const l2 = candleSeriesRef.current.createPriceLine({ price: stop, color: '#F85149', title: 'STOP' });
                const l3 = candleSeriesRef.current.createPriceLine({ price: target, color: '#3FB950', title: `TARGET R:R ${rr}` });
-               drawingObjectsRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 }, { type: 'line', ref: l3 });
+               drawingLinesRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 }, { type: 'line', ref: l3 });
           }
       });
   }, [userDrawings]);
@@ -519,13 +523,9 @@ const CustomChart = ({ symbol }) => {
   
   const deleteDrawing = (id) => setUserDrawings(prev => prev.filter(d => d.id !== id));
   
-  const clearDrawings = () => {
-      setUserDrawings([]); 
-  };
+  const clearDrawings = () => { setUserDrawings([]); };
   
-  const undoLastDrawing = () => {
-      if (userDrawings.length > 0) setUserDrawings(prev => prev.slice(0, -1));
-  };
+  const undoLastDrawing = () => { if (userDrawings.length > 0) setUserDrawings(prev => prev.slice(0, -1)); };
 
   // --- 4. LAYOUT & DATA ---
   const updateLayout = () => {
@@ -547,17 +547,12 @@ const CustomChart = ({ symbol }) => {
 
   useEffect(() => { updateLayout(); }, [activeIndicators]);
 
-  // --- 5. DATA FETCHING (SMART SILENT UPDATE) ---
+  // --- 5. DATA FETCHING (CRASH-PROOF) ---
   const fetchData = useCallback(async (isSilent = false) => {
     if (!symbol) return;
     
-    // Kill pending request if switching timeframes (not silent poll)
-    if (!isSilent && abortControllerRef.current) {
-        abortControllerRef.current.abort();
-    }
-    if (!isSilent) {
-        abortControllerRef.current = new AbortController();
-    }
+    if (!isSilent && abortControllerRef.current) abortControllerRef.current.abort();
+    if (!isSilent) abortControllerRef.current = new AbortController();
 
     try {
       if (!isSilent) setIsChartLoading(true);
@@ -567,16 +562,27 @@ const CustomChart = ({ symbol }) => {
       });
       const data = response.data;
       
-      if (chartRef.current && candleSeriesRef.current && data.length > 0) {
-        setChartData(data);
+      // --- CRASH FIX: FILTER NULLS ---
+      // This checks every candle for validity before letting the chart touch it
+      const validData = (data || []).filter(d => 
+          d && 
+          d.time &&
+          typeof d.open === 'number' && !isNaN(d.open) &&
+          typeof d.high === 'number' && !isNaN(d.high) &&
+          typeof d.low === 'number' && !isNaN(d.low) &&
+          typeof d.close === 'number' && !isNaN(d.close)
+      );
+
+      if (chartRef.current && candleSeriesRef.current && validData.length > 0) {
+        setChartData(validData);
         
-        // Re-Apply SMC if active (keeping colors)
         const isSMC = activeIndicators.some(i => i.type === 'SMC');
-        if (isSMC) applySMC(data); else candleSeriesRef.current.setData(data);
+        if (isSMC) applySMC(validData); 
+        else candleSeriesRef.current.setData(validData);
         
         if (volumeSeriesRef.current) {
-             const volData = data.map(d => ({
-              time: d.time, value: d.volume,
+             const volData = validData.map(d => ({
+              time: d.time, value: d.volume || 0,
               color: d.close >= d.open ? 'rgba(63, 185, 80, 0.4)' : 'rgba(248, 81, 73, 0.4)'
             }));
             volumeSeriesRef.current.setData(volData);
@@ -593,16 +599,14 @@ const CustomChart = ({ symbol }) => {
 
   // --- 6. POLLING & EFFECTS ---
   
-  // Effect: Timeframe Change (Shows Loader)
   useEffect(() => {
     fetchData(false); 
-  }, [symbol, timeframe]); // Only re-run when user changes TF
+  }, [symbol, timeframe]); 
 
-  // Effect: Silent Interval (No Loader)
   useEffect(() => {
     const interval = setInterval(() => {
-        fetchData(true);
-    }, 5000);
+        if (!document.hidden) fetchData(true);
+    }, 15000); 
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -649,24 +653,39 @@ const CustomChart = ({ symbol }) => {
     const id = Date.now();
     let newSeries = [];
     let paneId = ['RSI', 'MACD', 'StochRSI', 'ADX', 'ATR'].includes(selectedInd) ? `pane_${id}` : undefined;
+    let paramsLabel = '';
 
     try {
-      if (selectedInd === 'SMC') { }
+      if (selectedInd === 'Combo_9_21' || selectedInd === 'Combo_12_21') {
+          const p1 = parseInt(param1);
+          const p2 = parseInt(param2);
+          const ema1 = EMA.calculate({ period: p1, values: closePrices });
+          const ema2 = EMA.calculate({ period: p2, values: closePrices });
+          const s1 = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, title: `EMA ${p1}` });
+          const s2 = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 2, title: `EMA ${p2}` });
+          s1.setData(mapData(ema1, chartData)); s2.setData(mapData(ema2, chartData));
+          newSeries.push(s1, s2);
+          paramsLabel = `${p1}, ${p2}`;
+      }
+      else if (selectedInd === 'SMC') { }
       else if (selectedInd === 'SMA') {
         const period = parseInt(param1); const res = SMA.calculate({ period, values: closePrices });
         const series = chartRef.current.addSeries(LineSeries, { color: '#FF9800', lineWidth: 2, title: `SMA ${period}` });
         series.setData(mapData(res, chartData)); newSeries.push(series);
+        paramsLabel = `${period}`;
       }
       else if (selectedInd === 'EMA') {
         const period = parseInt(param1); const res = EMA.calculate({ period, values: closePrices });
         const series = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, title: `EMA ${period}` });
         series.setData(mapData(res, chartData)); newSeries.push(series);
+        paramsLabel = `${period}`;
       }
       else if (selectedInd === 'SuperTrend') {
         const period = parseInt(param1); const mult = parseFloat(param3);
         const stData = calculateSuperTrend(chartData, period, mult);
         const series = chartRef.current.addSeries(LineSeries, { color: '#00E676', lineWidth: 2, title: `ST ${period}/${mult}` });
         series.setData(stData); newSeries.push(series);
+        paramsLabel = `${period}, ${mult}`;
       }
       else if (selectedInd === 'VWAP') {
         const res = VWAP.calculate({ high: highs, low: lows, close: closePrices, volume: volumes });
@@ -677,6 +696,8 @@ const CustomChart = ({ symbol }) => {
         const res = RSI.calculate({ values: closePrices, period: parseInt(param1) });
         const series = chartRef.current.addSeries(LineSeries, { color: '#A855F7', lineWidth: 2, priceScaleId: paneId, title: `RSI (${param1})` });
         series.setData(mapData(res, chartData)); newSeries.push(series);
+        chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+        paramsLabel = `${param1}`;
       }
       else if (selectedInd === 'MACD') {
         const macdInput = { values: closePrices, fastPeriod: parseInt(param1), slowPeriod: parseInt(param2), signalPeriod: parseInt(param3), SimpleMAOscillator: false, SimpleMASignal: false };
@@ -694,6 +715,8 @@ const CustomChart = ({ symbol }) => {
         const sSeries = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 2, priceScaleId: paneId });
         hSeries.setData(hLine); mSeries.setData(mLine); sSeries.setData(sLine);
         newSeries = [hSeries, mSeries, sSeries];
+        chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+        paramsLabel = `${param1},${param2},${param3}`;
       }
       else if (selectedInd === 'StochRSI') {
           const stochInput = { values: closePrices, rsiPeriod: parseInt(param1), stochasticPeriod: parseInt(param2), kPeriod: 3, dPeriod: 3 };
@@ -706,32 +729,33 @@ const CustomChart = ({ symbol }) => {
           const kSeries = chartRef.current.addSeries(LineSeries, { color: '#2962FF', title: '%K', priceScaleId: paneId });
           const dSeries = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', title: '%D', priceScaleId: paneId });
           kSeries.setData(kLine); dSeries.setData(dLine); newSeries = [kSeries, dSeries];
+          chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+          paramsLabel = `${param1},${param2}`;
       }
       else if (selectedInd === 'ADX') {
           const res = ADX.calculate({ high: highs, low: lows, close: closePrices, period: parseInt(param1) });
           const series = chartRef.current.addSeries(LineSeries, { color: '#FF0055', lineWidth: 2, priceScaleId: paneId, title: `ADX (${param1})` });
           series.setData(mapData(res.map(r=>r.adx), chartData)); newSeries.push(series);
+          paramsLabel = `${param1}`;
       }
       else if (selectedInd === 'ATR') {
           const res = ATR.calculate({ high: highs, low: lows, close: closePrices, period: parseInt(param1) });
           const series = chartRef.current.addSeries(LineSeries, { color: '#AB47BC', lineWidth: 2, priceScaleId: paneId, title: `ATR (${param1})` });
           series.setData(mapData(res, chartData)); newSeries.push(series);
+          paramsLabel = `${param1}`;
       }
 
-      const paramsLabel = selectedInd === 'SMC' || selectedInd === 'VWAP' ? '' : selectedInd === 'SuperTrend' ? `${param1}, ${param3}` : ['MACD', 'StochRSI'].includes(selectedInd) ? `${param1},${param2},${param3}` : `${param1}`;
       setActiveIndicators([...activeIndicators, { id, type: selectedInd, series: newSeries, paneId, params: paramsLabel }]);
       setIsMenuOpen(false);
 
     } catch (e) { console.error("Indicator Calc Error", e); }
   };
 
-  const mapData = (values, chartData) => {
-    const output = [];
-    for (let i = 0; i < values.length; i++) {
-        const dIndex = chartData.length - 1 - i; const vIndex = values.length - 1 - i;
-        if (dIndex >= 0) output.unshift({ time: chartData[dIndex].time, value: values[vIndex] });
-    }
-    return output;
+  const handleDropdownChange = (e) => {
+      const val = e.target.value;
+      setSelectedInd(val);
+      if (val === 'Combo_9_21') { setParam1(9); setParam2(21); }
+      else if (val === 'Combo_12_21') { setParam1(12); setParam2(21); }
   };
 
   const removeIndicator = (id) => {
@@ -803,9 +827,18 @@ const CustomChart = ({ symbol }) => {
                 <IndicatorButton onClick={() => setIsMenuOpen(!isMenuOpen)}><FaLayerGroup /> Indicators <FaPlus size={10}/></IndicatorButton>
                 {isMenuOpen && (
                     <Dropdown>
-                        <select style={{background: '#0D1117', color:'white', padding:'5px', borderRadius:'4px', width:'100%'}} value={selectedInd} onChange={(e) => setSelectedInd(e.target.value)}>
-                            <option value="SMC">⚡ SMC</option><option value="SuperTrend">SuperTrend</option><option value="VWAP">VWAP</option>
-                            <option value="SMA">SMA</option><option value="EMA">EMA</option><option value="RSI">RSI</option><option value="MACD">MACD</option><option value="StochRSI">Stoch RSI</option><option value="ADX">ADX</option><option value="ATR">ATR</option>
+                        <select style={{background: '#0D1117', color:'white', padding:'5px', borderRadius:'4px', width:'100%'}} value={selectedInd} onChange={handleDropdownChange}>
+                            <option value="SMC">⚡ SMC</option>
+                            <option value="Combo_9_21">🚀 9/21 EMA</option>
+                            <option value="Combo_12_21">🚀 12/21 EMA</option>
+                            <option value="SuperTrend">SuperTrend</option>
+                            <option value="VWAP">VWAP</option>
+                            <option value="SMA">SMA</option>
+                            <option value="EMA">EMA</option>
+                            <option value="RSI">RSI</option>
+                            <option value="MACD">MACD</option>
+                            <option value="StochRSI">Stoch RSI</option>
+                            <option value="ADX">ADX</option><option value="ATR">ATR</option>
                         </select>
                         {selectedInd !== 'SMC' && selectedInd !== 'VWAP' && (
                             <>
@@ -826,18 +859,17 @@ const CustomChart = ({ symbol }) => {
         </LeftGroup>
         <div style={{display:'flex', gap:'5px', overflowX:'auto'}}>
             {activeIndicators.map(ind => (
-                <IndicatorTag key={ind.id}>{ind.type}<CloseIcon onClick={() => removeIndicator(ind.id)} /></IndicatorTag>
+                <IndicatorTag key={ind.id}>{ind.type} {ind.params && `(${ind.params})`}<CloseIcon onClick={() => removeIndicator(ind.id)} /></IndicatorTag>
             ))}
         </div>
         <StatusText isLive={isLive}>
-            {isLive ? <><PulseDot /> LIVE</> : <><FaEraser className="fa-spin" style={{fontSize:'0.8rem'}}/> LOADING...</>}
+            {isLive ? <><PulseDot /> LIVE</> : <><FaSpinner className="fa-spin" style={{fontSize:'0.8rem'}}/> LOADING...</>}
         </StatusText>
       </Toolbar>
       
-      {/* Loading Overlay */}
       {isChartLoading && (
          <LoadingOverlay>
-             <FaEraser className="fa-spin" />
+             <FaSpinner className="fa-spin" />
          </LoadingOverlay>
       )}
       

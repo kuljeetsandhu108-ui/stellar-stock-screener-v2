@@ -95,22 +95,89 @@ def generate_forecast_analysis(company_name: str, analyst_ratings: list, price_t
         return "Could not generate AI forecast analysis."
 
 def generate_investment_philosophy_assessment(company_name: str, key_metrics: dict):
-    """Generates an assessment against famous investment philosophies."""
+    """
+    Generates assessment. 
+    HYBRID MODE: Tries AI first. If AI fails (429/Quota), falls back to Algorithmic Logic.
+    """
+    # 1. Prepare Data Safe Variables
+    pe = key_metrics.get('peRatioTTM')
+    ey = key_metrics.get('earningsYieldTTM')
+    roc = key_metrics.get('returnOnCapitalEmployedTTM')
+    
+    # Numeric values for math (Default to 0)
+    pe_val = float(pe) if pe is not None else 0.0
+    ey_val = float(ey) if ey is not None else 0.0
+    roc_val = float(roc) if roc is not None else 0.0
+    
+    # String formatting for display
+    pe_str = f"{pe_val:.2f}" if pe is not None else "N/A"
+    ey_str = f"{ey_val:.2%}" if ey is not None else "N/A"
+    roc_str = f"{roc_val:.2%}" if roc is not None else "N/A"
+
     try:
+        # --- PLAN A: ASK AI ---
         configure_gemini_for_request()
         model = genai.GenerativeModel('gemini-2.5-flash')
-        pe_ratio = key_metrics.get('peRatioTTM')
-        earnings_yield = key_metrics.get('earningsYieldTTM')
-        roc = key_metrics.get('returnOnCapitalEmployedTTM')
-        if pe_ratio is None or earnings_yield is None or roc is None:
-            return "Could not generate assessment due to missing P/E, ROC, or Earnings Yield."
-        data_summary = f"- Price to Earnings (P/E) Ratio: {pe_ratio if isinstance(pe_ratio, str) else f'{pe_ratio:.2f}'}\n- Earnings Yield (E/P): {earnings_yield if isinstance(earnings_yield, str) else f'{earnings_yield:.4f}'}\n- Return on Capital (ROC): {roc if isinstance(roc, str) else f'{roc:.4f}'}"
-        prompt = f"""Act as an analyst. For {company_name}, assess it against 3 philosophies (Magic Formula, Warren Buffett, Coffee Can) based on these metrics:\n{data_summary}\nOutput a clean, 2-column Markdown table with headers "Formula" and "Assessment", naturally incorporating metric values in the text."""
+        
+        data_summary = (
+            f"- Price to Earnings (P/E): {pe_str}\n"
+            f"- Earnings Yield (Greenblatt): {ey_str}\n"
+            f"- Return on Capital (ROC/ROE): {roc_str}"
+        )
+        
+        prompt = f"""
+        Act as a Value Investor. Analyze {company_name} based on:
+        {data_summary}
+        
+        Evaluate against:
+        1. Greenblatt's Magic Formula (High Yield + High ROC)
+        2. Warren Buffett's Moat (High ROC)
+        3. Ben Graham Value (Low P/E)
+        
+        Output a 2-column Markdown table with headers "Formula" and "Assessment".
+        Assessment should be 1 short sentence.
+        """
+        
         response = model.generate_content(prompt)
         return response.text.strip()
+
     except Exception as e:
-        print(f"Error in generate_investment_philosophy_assessment: {e}")
-        return "Could not generate AI assessment."
+        print(f"Gemini 429/Error (Philosophy): {e}")
+        
+        # --- PLAN B: ALGORITHMIC FALLBACK (The Crash Fix) ---
+        # We calculate the verdict manually so the user NEVER sees an error text.
+        
+        # 1. Magic Formula Logic
+        if ey_val > 0.05 and roc_val > 0.15:
+            magic_text = f"**Pass**. Attractive Yield ({ey_str}) and High Efficiency ({roc_str})."
+        else:
+            magic_text = f"**Fail**. Requires Earnings Yield > 5% and ROC > 15%."
+            
+        # 2. Buffett Moat Logic
+        if roc_val > 0.15:
+            buffett_text = f"**Wide Moat**. Consistent high ROC ({roc_str}) suggests competitive advantage."
+        elif roc_val > 0.10:
+            buffett_text = "**Narrow Moat**. Decent returns, but not exceptional."
+        else:
+            buffett_text = "**No Moat**. Low capital efficiency ({roc_str})."
+            
+        # 3. Graham Value Logic
+        if pe_val > 0 and pe_val < 15:
+            graham_text = f"**Undervalued**. P/E of {pe_str} is below defensive target of 15."
+        elif pe_val < 25:
+            graham_text = f"**Fair Value**. P/E of {pe_str} is reasonable."
+        else:
+            graham_text = f"**Expensive**. P/E of {pe_str} implies high growth expectations."
+
+        # Return a perfectly formatted Markdown table that the Frontend can read
+        return f"""
+| Formula | Assessment |
+|---|---|
+| **Greenblatt Magic Formula** | {magic_text} |
+| **Buffett Moat Indicator** | {buffett_text} |
+| **Ben Graham Valuation** | {graham_text} |
+| *System Status* | *AI Quota Limit. Showing smart algorithmic analysis.* |
+"""       
 
 def generate_canslim_assessment(company_name: str, quote: dict, quarterly_earnings: list, annual_earnings: list, institutional_holders: int):
     """Generates a CANSLIM checklist."""

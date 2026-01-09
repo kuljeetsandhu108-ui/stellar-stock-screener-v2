@@ -2,292 +2,268 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 
-def get_currency_symbol(currency_code: str):
-    """
-    Converts a currency code (e.g., 'INR') into its corresponding symbol (e.g., '₹').
-    """
-    symbols = {
-        "INR": "₹",
-        "USD": "$",
-        "JPY": "¥",
-        "EUR": "€",
-        "GBP": "£",
-    }
-    return symbols.get(currency_code, "$")
+# ==========================================
+# 1. INDICATORS (RSI, MACD, STOCH, ADX)
+# ==========================================
 
-def calculate_darvas_box(hist_df: pd.DataFrame, quote: dict, currency_code: str):
+def calculate_technical_indicators(df: pd.DataFrame):
     """
-    Analyzes historical price data to identify a Darvas Box pattern.
+    Calculates technical indicators using pandas_ta.
+    Input: DataFrame with ['open', 'high', 'low', 'close', 'volume']
+    Output: Dictionary of latest values.
+    """
+    if df is None or df.empty or len(df) < 50:
+        return {}
+    
+    try:
+        # Create a copy to prevent SettingWithCopy warnings
+        wdf = df.copy()
+        
+        # 1. RSI (14)
+        wdf.ta.rsi(length=14, append=True)
+        
+        # 2. MACD (12, 26, 9)
+        wdf.ta.macd(fast=12, slow=26, signal=9, append=True)
+        
+        # 3. Stochastic (14, 3, 3)
+        wdf.ta.stoch(k=14, d=3, smooth_k=3, append=True)
+        
+        # 4. ADX (14)
+        wdf.ta.adx(length=14, append=True)
+        
+        # 5. ATR (14)
+        wdf.ta.atr(length=14, append=True)
+        
+        # 6. Williams %R (14)
+        wdf.ta.willr(length=14, append=True)
+        
+        # 7. Bollinger Bands (20, 2)
+        wdf.ta.bbands(length=20, std=2, append=True)
+
+        # Get the most recent row (Latest Data)
+        latest = wdf.iloc[-1]
+        prev = wdf.iloc[-2] if len(wdf) > 1 else latest
+        
+        # Helper to safely extract float values (Handles NaN/None)
+        def get_val(key):
+            val = latest.get(key)
+            if val is None or pd.isna(val):
+                return None
+            return float(val)
+
+        return {
+            "rsi": get_val('RSI_14'),
+            "macd": get_val('MACD_12_26_9'),
+            "macdsignal": get_val('MACDs_12_26_9'),
+            "stochasticsk": get_val('STOCHk_14_3_3'),
+            "adx": get_val('ADX_14'),
+            "atr": get_val('ATRr_14'),
+            "williamsr": get_val('WILLR_14'),
+            "bollingerBands": {
+                "upperBand": get_val('BBU_20_2.0'),
+                "middleBand": get_val('BBM_20_2.0'),
+                "lowerBand": get_val('BBL_20_2.0'),
+            },
+            # Context for AI Analysis
+            "price_action": {
+                "current_close": get_val('close'),
+                "prev_close": float(prev['close']),
+                "trend": "UP" if get_val('close') > float(prev['close']) else "DOWN"
+            }
+        }
+    except Exception as e:
+        print(f"Technical Indicator Calc Error: {e}")
+        return {}
+
+# ==========================================
+# 2. MOVING AVERAGES (SMA)
+# ==========================================
+
+def calculate_moving_averages(df: pd.DataFrame):
+    """
+    Calculates Simple Moving Averages (5, 10, 20, 50, 100, 200).
+    """
+    if df is None or df.empty: return {}
+    
+    try:
+        wdf = df.copy()
+        mas = {}
+        
+        # Calculate standard periods
+        periods = [5, 10, 20, 50, 100, 200]
+        
+        for p in periods:
+            # Only calculate if we have enough data points
+            if len(wdf) >= p:
+                # Rolling mean is faster than pandas_ta for simple SMA
+                val = wdf['close'].rolling(window=p).mean().iloc[-1]
+                mas[str(p)] = float(val)
+            else:
+                mas[str(p)] = None
+                
+        return mas
+    except Exception as e:
+        print(f"MA Calc Error: {e}")
+        return {}
+
+# ==========================================
+# 3. PIVOT POINTS (Classic, Fib, Camarilla)
+# ==========================================
+
+def calculate_pivot_points(df: pd.DataFrame):
+    """
+    Calculates Pivots based on the PREVIOUS candle (High/Low/Close).
+    """
+    if df is None or len(df) < 2: return {}
+    
+    try:
+        # We need the previous completed candle (usually yesterday for Daily chart)
+        prev = df.iloc[-2]
+        
+        h = float(prev['high'])
+        l = float(prev['low'])
+        c = float(prev['close'])
+        
+        # Classic Pivot
+        pp = (h + l + c) / 3
+        range_val = h - l
+        
+        classic = {
+            "pp": pp,
+            "r1": (2 * pp) - l,
+            "s1": (2 * pp) - h,
+            "r2": pp + range_val,
+            "s2": pp - range_val,
+            "r3": h + 2 * (pp - l),
+            "s3": l - 2 * (h - pp)
+        }
+        
+        # Fibonacci Pivot
+        fib = {
+            "pp": pp,
+            "r1": pp + (0.382 * range_val),
+            "s1": pp - (0.382 * range_val),
+            "r2": pp + (0.618 * range_val),
+            "s2": pp - (0.618 * range_val),
+            "r3": pp + range_val,
+            "s3": pp - range_val
+        }
+        
+        # Camarilla Pivot
+        cam = {
+            "pp": pp,
+            "r1": c + (range_val * 1.1 / 12),
+            "s1": c - (range_val * 1.1 / 12),
+            "r2": c + (range_val * 1.1 / 6),
+            "s2": c - (range_val * 1.1 / 6),
+            "r3": c + (range_val * 1.1 / 4),
+            "s3": c - (range_val * 1.1 / 4)
+        }
+
+        return {
+            "classic": classic,
+            "fibonacci": fib,
+            "camarilla": cam
+        }
+    except Exception as e:
+        print(f"Pivot Calc Error: {e}")
+        return {}
+
+# ==========================================
+# 4. DARVAS BOX SCAN
+# ==========================================
+
+def calculate_darvas_box(hist_df: pd.DataFrame, quote: dict, currency: str = "USD"):
+    """
+    Checks if stock is in a Darvas Box (Consolidation near Highs).
     """
     if hist_df is None or len(hist_df) < 30 or not quote:
-        return {"status": "Insufficient Data", "message": "Not enough historical data to perform scan."}
+        return {"status": "Neutral", "message": "Insufficient data for Darvas scan."}
 
     try:
         current_price = quote.get('price')
-        year_high = quote.get('yearHigh')
-        avg_volume = quote.get('avgVolume')
-        current_volume = quote.get('volume')
-
-        if not all([current_price, year_high, avg_volume, current_volume]):
-             return {"status": "Insufficient Data", "message": "Missing key price or volume data."}
+        # EODHD quote sometimes has missing yearHigh, use chart max as fallback
+        year_high = quote.get('yearHigh') or hist_df['high'].max()
         
-        currency_symbol = get_currency_symbol(currency_code)
+        if not current_price or not year_high:
+            return {"status": "Neutral", "message": "Price data unavailable."}
 
-        if current_price < (year_high * 0.90):
+        # 1. Price Proximity Check (Must be within 15% of 52W High)
+        if current_price < (year_high * 0.85):
             return {
                 "status": "Not a Candidate",
-                "message": f"Stock price ({currency_symbol}{current_price:.2f}) is not within 10% of its 52-week high ({currency_symbol}{year_high:.2f})."
+                "message": f"Price is {((year_high - current_price)/year_high)*100:.1f}% below 52-week high."
             }
 
-        recent_period = hist_df.tail(15)
-        box_top = recent_period['high'].max()
-        box_bottom = recent_period['low'].min()
-
-        if box_top > box_bottom * 1.08:
-            return {
-                "status": "No Box Formed",
-                "message": "Stock is too volatile and has not formed a narrow consolidation box recently."
+        # 2. Box Formation Check (Last 20 days)
+        recent = hist_df.tail(20)
+        box_top = recent['high'].max()
+        box_bottom = recent['low'].min()
+        
+        # Is the box tight? (< 15% depth)
+        box_depth = (box_top - box_bottom) / box_top
+        if box_depth > 0.15:
+             return {
+                "status": "Volatile",
+                "message": "Consolidation is too loose (>15% range)."
             }
 
-        if current_price > box_top:
-            volume_check = "on high volume" if current_volume > (avg_volume * 1.5) else "on average volume"
+        # 3. Breakout Status
+        currency_sym = "₹" if currency == "INR" else "$"
+        
+        if current_price >= box_top:
             return {
                 "status": "Breakout!",
-                "message": f"Stock has broken out above the box top of {currency_symbol}{box_top:.2f} {volume_check}.",
+                "message": f"Breaking out of box ({currency_sym}{box_top:.2f}).",
                 "box_top": box_top, "box_bottom": box_bottom, "result": "Pass"
             }
-        
-        elif current_price < box_bottom:
-            return {
+        elif current_price <= box_bottom:
+             return {
                 "status": "Breakdown",
-                "message": f"Stock has broken down below the box bottom of {currency_symbol}{box_bottom:.2f}.",
+                "message": f"Falling below box support ({currency_sym}{box_bottom:.2f}).",
                 "box_top": box_top, "box_bottom": box_bottom, "result": "Fail"
             }
-        
         else:
             return {
                 "status": "In Box",
-                "message": f"Stock is consolidating in a Darvas Box between {currency_symbol}{box_bottom:.2f} and {currency_symbol}{box_top:.2f}.",
+                "message": f"Consolidating between {currency_sym}{box_bottom:.2f} and {currency_sym}{box_top:.2f}.",
                 "box_top": box_top, "box_bottom": box_bottom, "result": "Neutral"
             }
 
     except Exception as e:
-        print(f"Error calculating Darvas Box: {e}")
-        return {"status": "Calculation Error", "message": str(e)}
+        print(f"Darvas Error: {e}")
+        return {"status": "Error", "message": "Calculation failed."}
 
-
-def calculate_moving_averages(hist_df: pd.DataFrame):
-    """
-    Calculates a standard set of Simple Moving Averages (SMA).
-    """
-    if hist_df is None or hist_df.empty or len(hist_df) < 50: # Reduced requirement slightly
-        return {} 
-    
-    try:
-        # Calculate SMAs, checking if enough data exists for 200
-        mas = {
-            "5": hist_df['close'].rolling(window=5).mean().iloc[-1],
-            "10": hist_df['close'].rolling(window=10).mean().iloc[-1],
-            "20": hist_df['close'].rolling(window=20).mean().iloc[-1],
-            "50": hist_df['close'].rolling(window=50).mean().iloc[-1],
-            "100": hist_df['close'].rolling(window=100).mean().iloc[-1] if len(hist_df) >= 100 else None,
-            "200": hist_df['close'].rolling(window=200).mean().iloc[-1] if len(hist_df) >= 200 else None,
-        }
-        return mas
-    except Exception as e:
-        print(f"Error calculating moving averages: {e}")
-        return {}
-
-def calculate_pivot_points(hist_df: pd.DataFrame):
-    """
-    Calculates Classic, Fibonacci, and Camarilla Pivot Points.
-    """
-    if hist_df is None or len(hist_df) < 2:
-        return {} 
-        
-    try:
-        prev_day = hist_df.iloc[-2]
-        high = prev_day['high']
-        low = prev_day['low']
-        close = prev_day['close']
-        price_range = high - low
-
-        # Classic
-        pivot_classic = (high + low + close) / 3
-        classic = {
-            "pp": pivot_classic, "r1": (2 * pivot_classic) - low, "s1": (2 * pivot_classic) - high,
-            "r2": pivot_classic + price_range, "s2": pivot_classic - price_range,
-            "r3": high + 2 * (pivot_classic - low), "s3": low - 2 * (high - pivot_classic)
-        }
-
-        # Fibonacci
-        fibonacci = {
-            "pp": pivot_classic, "r1": pivot_classic + (0.382 * price_range), "s1": pivot_classic - (0.382 * price_range),
-            "r2": pivot_classic + (0.618 * price_range), "s2": pivot_classic - (0.618 * price_range),
-            "r3": pivot_classic + (1.000 * price_range), "s3": pivot_classic - (1.000 * price_range)
-        }
-
-        # Camarilla
-        camarilla = {
-            "pp": pivot_classic,
-            "r1": close + (price_range * 1.1 / 12), "s1": close - (price_range * 1.1 / 12),
-            "r2": close + (price_range * 1.1 / 6), "s2": close - (price_range * 1.1 / 6),
-            "r3": close + (price_range * 1.1 / 4), "s3": close - (price_range * 1.1 / 4)
-        }
-
-        return { "classic": classic, "fibonacci": fibonacci, "camarilla": camarilla }
-    except Exception as e:
-        print(f"Error calculating pivot points: {e}")
-        return {}
-
-# --- NEW: ADVANCED INDICATOR ENGINE FOR CHART AI ---
-def calculate_advanced_technicals(hist_df: pd.DataFrame):
-    """
-    Calculates specific indicators for the Chart Analysis tab:
-    MACD, RSI, Stochastic RSI, EMA.
-    """
-    if hist_df is None or hist_df.empty: return {}
-    
-    try:
-        # Calculate using pandas_ta
-        # We use try-except blocks for individual indicators to prevent total failure
-        
-        # 1. RSI (14)
-        try: hist_df.ta.rsi(length=14, append=True)
-        except: pass
-        
-        # 2. Stochastic RSI
-        try: hist_df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3, append=True)
-        except: pass
-        
-        # 3. MACD
-        try: hist_df.ta.macd(fast=12, slow=26, signal=9, append=True)
-        except: pass
-        
-        # 4. EMAs
-        try:
-            hist_df.ta.ema(length=20, append=True)
-            hist_df.ta.ema(length=50, append=True)
-            hist_df.ta.ema(length=200, append=True)
-        except: pass
-
-        latest = hist_df.iloc[-1]
-        
-        return {
-            "rsi": latest.get('RSI_14'),
-            "stoch_rsi_k": latest.get('STOCHRSIk_14_14_3_3'),
-            "stoch_rsi_d": latest.get('STOCHRSId_14_14_3_3'),
-            "macd": latest.get('MACD_12_26_9'),
-            "macd_signal": latest.get('MACDs_12_26_9'),
-            "ema_20": latest.get('EMA_20'),
-            "ema_50": latest.get('EMA_50'),
-            "ema_200": latest.get('EMA_200'),
-            "current_price": latest.get('close')
-        }
-    except Exception as e:
-        print(f"Error calculating advanced technicals: {e}")
-        return {}
-
-# --- NEW: ALGORITHMIC SUPPORT & RESISTANCE ---
-def calculate_support_resistance_levels(hist_df: pd.DataFrame):
-    """
-    Identifies key Support and Resistance levels using local minima and maxima (Fractals).
-    """
-    if hist_df is None or len(hist_df) < 20: return {"supports": [], "resistances": []}
-
-    try:
-        # We look for "Fractals" - a high surrounded by lower highs, or low surrounded by higher lows.
-        window = 3 # Smaller window for faster detection
-        
-        levels = []
-        
-        for i in range(window, len(hist_df) - window):
-            # Check for Support (Local Low)
-            is_support = True
-            for j in range(1, window + 1):
-                if hist_df['low'].iloc[i] > hist_df['low'].iloc[i-j] or hist_df['low'].iloc[i] > hist_df['low'].iloc[i+j]:
-                    is_support = False
-                    break
-            if is_support:
-                levels.append((hist_df.index[i], hist_df['low'].iloc[i], "Support"))
-
-            # Check for Resistance (Local High)
-            is_resistance = True
-            for j in range(1, window + 1):
-                if hist_df['high'].iloc[i] < hist_df['high'].iloc[i-j] or hist_df['high'].iloc[i] < hist_df['high'].iloc[i+j]:
-                    is_resistance = False
-                    break
-            if is_resistance:
-                levels.append((hist_df.index[i], hist_df['high'].iloc[i], "Resistance"))
-
-        current_price = hist_df['close'].iloc[-1]
-        
-        # Sort by proximity to current price
-        # Filter for supports below price
-        supports = sorted([x[1] for x in levels if x[2] == "Support" and x[1] < current_price], key=lambda x: abs(x - current_price))[:3]
-        # Filter for resistances above price
-        resistances = sorted([x[1] for x in levels if x[2] == "Resistance" and x[1] > current_price], key=lambda x: abs(x - current_price))[:3]
-        
-        return {
-            "supports": sorted(supports, reverse=True), # Highest supports first
-            "resistances": sorted(resistances) # Lowest resistances first
-        }
-
-    except Exception as e:
-        print(f"Error calculating S/R levels: {e}")
-        return {"supports": [], "resistances": []}
-
-# ... (Keep existing calculate_darvas_box, calculate_moving_averages, calculate_pivot_points) ...
+# ==========================================
+# 5. EXTENDED TECHNICALS (Multi-Timeframe AI)
+# ==========================================
 
 def calculate_extended_technicals(df: pd.DataFrame):
     """
-    Calculates a comprehensive suite of indicators: RSI, StochRSI, MACD, EMA, and Pivots.
-    Designed for multi-timeframe analysis.
+    Wraps standard calculation but ensures specific keys for the AI analysis endpoint.
     """
-    if df is None or df.empty or len(df) < 50:
-        return None
-
+    if df is None or df.empty: return None
+    
     try:
-        # 1. Standard Indicators (RSI, MACD)
-        df.ta.rsi(length=14, append=True)
-        df.ta.macd(fast=12, slow=26, signal=9, append=True)
+        # Calculate standard set first
+        inds = calculate_technical_indicators(df)
+        mas = calculate_moving_averages(df)
+        pivots = calculate_pivot_points(df)
         
-        # 2. Stochastic RSI (The "StochRSI" user requested)
-        df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3, append=True)
-
-        # 3. Exponential Moving Averages (EMA)
-        df.ta.ema(length=9, append=True)  # Fast EMA
-        df.ta.ema(length=21, append=True) # Medium EMA
-        df.ta.ema(length=50, append=True) # Slow EMA
-        df.ta.ema(length=200, append=True) # Trend EMA
-
-        # Get the latest row
-        latest = df.iloc[-1]
-        
-        # 4. Calculate Pivot Points (Support/Resistance)
-        # We reuse our existing logic but apply it here locally
-        prev_day = df.iloc[-2]
-        pp = (prev_day['high'] + prev_day['low'] + prev_day['close']) / 3
-        r1 = (2 * pp) - prev_day['low']
-        s1 = (2 * pp) - prev_day['high']
-        r2 = pp + (prev_day['high'] - prev_day['low'])
-        s2 = pp - (prev_day['high'] - prev_day['low'])
-
+        # Flatten structure for AI prompt
         return {
-            "price": latest['close'],
-            "rsi": latest.get('RSI_14'),
-            "stoch_k": latest.get('STOCHRSIk_14_14_3_3'),
-            "stoch_d": latest.get('STOCHRSId_14_14_3_3'),
-            "macd": latest.get('MACD_12_26_9'),
-            "macd_signal": latest.get('MACDs_12_26_9'),
-            "ema_9": latest.get('EMA_9'),
-            "ema_21": latest.get('EMA_21'),
-            "ema_50": latest.get('EMA_50'),
-            "ema_200": latest.get('EMA_200'),
-            "support": {"s1": s1, "s2": s2},
-            "resistance": {"r1": r1, "r2": r2},
-            "pivot": pp
+            "price": inds.get('price_action', {}).get('current_close'),
+            "rsi": inds.get('rsi'),
+            "macd": inds.get('macd'),
+            "macd_signal": inds.get('macdsignal'),
+            "stoch_k": inds.get('stochasticsk'),
+            "adx": inds.get('adx'),
+            "ema_20": mas.get('20'),
+            "ema_50": mas.get('50'),
+            "ema_200": mas.get('200'),
+            "pivot": pivots.get('classic', {}).get('pp'),
+            "support": {"s1": pivots.get('classic', {}).get('s1'), "s2": pivots.get('classic', {}).get('s2')},
+            "resistance": {"r1": pivots.get('classic', {}).get('r1'), "r2": pivots.get('classic', {}).get('r2')}
         }
-    except Exception as e:
-        print(f"Error calculating extended technicals: {e}")
+    except:
         return None
