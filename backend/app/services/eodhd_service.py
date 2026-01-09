@@ -2,9 +2,9 @@ import os
 import requests
 import json
 from datetime import datetime, timedelta
+import pytz # Critical for IST Timezone conversion
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 EODHD_API_KEY = os.getenv("EODHD_API_KEY")
@@ -16,8 +16,9 @@ BASE_URL = "https://eodhd.com/api"
 
 def format_symbol_for_eodhd(symbol: str) -> str:
     """
-    Intelligently converts Frontend symbols to EODHD format.
-    Handles NSE, BSE, Indices, Crypto, and US Stocks.
+    Normalizes symbols for EODHD (High-End API).
+    Frontend 'RELIANCE.NS' -> EODHD 'RELIANCE.NSE'
+    Frontend 'BTC-USD' -> EODHD 'BTC-USD.CC'
     """
     if not symbol: return ""
     symbol = symbol.upper().strip()
@@ -26,15 +27,15 @@ def format_symbol_for_eodhd(symbol: str) -> str:
     if symbol.endswith(".NS"): return symbol.replace(".NS", ".NSE")
     if symbol.endswith(".BO"): return symbol.replace(".BO", ".BSE")
     
-    # Indices Mapping (Major Global)
+    # Indices Mapping
     if symbol == "^NSEI": return "NSEI.INDX"
     if symbol == "^NSEBANK": return "NSEBANK.INDX"
     if symbol == "^BSESN": return "BSESN.INDX"
-    if symbol == "^GSPC": return "GSPC.INDX" # S&P 500
-    if symbol == "^DJI": return "DJI.INDX"   # Dow Jones
-    if symbol == "^IXIC": return "IXIC.INDX" # Nasdaq
-    if symbol == "^N225": return "N225.INDX" # Nikkei
-    if symbol == "^FTSE": return "FTSE.INDX" # FTSE 100
+    if symbol == "^GSPC": return "GSPC.INDX"
+    if symbol == "^DJI": return "DJI.INDX"
+    if symbol == "^IXIC": return "IXIC.INDX"
+    if symbol == "^N225": return "N225.INDX"
+    if symbol == "^GDAXI": return "GDAXI.INDX"
     
     # Crypto (Common format fix)
     if symbol == "BTC-USD": return "BTC-USD.CC"
@@ -46,38 +47,38 @@ def format_symbol_for_eodhd(symbol: str) -> str:
     return symbol
 
 # ==========================================
-# 2. HIGH-PERFORMANCE DATA FETCHING
+# 2. DATA FETCHING (NETWORK LAYER)
 # ==========================================
 
 def get_company_fundamentals(symbol: str):
     """
-    Fetches the 'All-In-One' Fundamental JSON.
-    This single call powers 80% of the dashboard (Profile, Financials, Metrics, Ratings).
+    Fetches the massive 'All-In-One' Fundamental JSON.
+    Includes Profile, Financials, Earnings, Holders, Insider Trades.
     """
     if not EODHD_API_KEY: return {}
     eod_symbol = format_symbol_for_eodhd(symbol)
     
     try:
-        # Extended timeout (25s) because this JSON can be 5MB+ for large corps
+        # We use a longer timeout (25s) because this JSON can be 5MB+
         url = f"{BASE_URL}/fundamentals/{eod_symbol}?api_token={EODHD_API_KEY}&fmt=json"
         response = requests.get(url, timeout=25) 
         
         if response.status_code == 200:
             data = response.json()
-            # EODHD sometimes returns an empty list [] for invalid symbols
+            # EODHD returns empty list [] for invalid symbols
             if isinstance(data, list) and not data: return {}
             return data
             
         print(f"EODHD Fundamentals Failed: {response.status_code} for {symbol}")
         return {}
     except Exception as e:
-        print(f"EODHD Fundamentals Connection Exception: {e}")
+        print(f"EODHD Fundamentals Exception for {symbol}: {e}")
         return {}
 
 def get_live_price(symbol: str):
     """
     Fetches real-time price snapshot.
-    Includes 'Zero-Price Fix' logic for pre-market/glitch scenarios.
+    INCLUDES FIX: Handles 0.00 price glitch during pre-market.
     """
     if not EODHD_API_KEY: return {}
     eod_symbol = format_symbol_for_eodhd(symbol)
@@ -89,8 +90,7 @@ def get_live_price(symbol: str):
         if response.status_code == 200:
             data = response.json()
             
-            # --- THE 0.00 FIX ---
-            # EODHD sometimes returns 'close': 'NA' or 0 during maintenance
+            # Robust Price Parsing
             price = data.get('close')
             prev = data.get('previousClose')
             
@@ -101,10 +101,10 @@ def get_live_price(symbol: str):
                 price = 0.0
                 prev = 0.0
 
-            # If current price is 0 (market closed/error), use previous close
+            # Fallback if close is 0 (market closed/error)
             final_price = price if price > 0 else prev
             
-            # Recalculate change if needed
+            # Recalculate change based on resolved price
             change = final_price - prev
             change_p = (change / prev * 100) if prev > 0 else 0.0
 
@@ -115,7 +115,6 @@ def get_live_price(symbol: str):
                 "changesPercentage": change_p,
                 "high": data.get('high'),
                 "low": data.get('low'),
-                "open": data.get('open'),
                 "volume": data.get('volume'),
                 "timestamp": data.get('timestamp')
             }
@@ -123,31 +122,67 @@ def get_live_price(symbol: str):
     except:
         return {}
 
+def get_real_time_bulk(symbols: list):
+    """
+    Fetches MULTIPLE real-time prices in ONE HTTP REQUEST.
+    Format: /real-time/FirstSymbol?s=SecondSymbol,ThirdSymbol,...
+    Used for Homepage Ticker (Reduces latency by 90%).
+    """
+    if not EODHD_API_KEY or not symbols: return []
+    
+    try:
+        # Normalize all symbols first
+        clean_symbols = [format_symbol_for_eodhd(s) for s in symbols if s]
+        if not clean_symbols: return []
+
+        # EODHD API Syntax: /real-time/Primary?s=CommaSeparatedOthers
+        primary = clean_symbols[0]
+        others = ",".join(clean_symbols[1:])
+        
+        url = f"{BASE_URL}/real-time/{primary}?api_token={EODHD_API_KEY}&fmt=json&s={others}"
+        
+        response = requests.get(url, timeout=8)
+        
+        if response.status_code == 200:
+            data = response.json()
+            # If single result, it returns dict. If multiple, returns list.
+            if isinstance(data, dict): return [data] 
+            return data
+            
+        return []
+    except Exception as e:
+        print(f"Bulk Real-Time Error: {e}")
+        return []
+
 def get_historical_data(symbol: str, range_type: str = "1d"):
     """
     Fetches Chart Data (OHLCV).
-    Features:
-    1. Auto-switch between Intraday and EOD endpoints.
-    2. Filters out 'None' values to prevent Chart Library crashes.
+    CRITICAL FIXES: 
+    1. Filters 'None' values.
+    2. Converts IST Timezone to UTC for correct chart alignment.
     """
     if not EODHD_API_KEY: return []
     eod_symbol = format_symbol_for_eodhd(symbol)
     data = []
     
+    # Check if Asset is Indian (needs IST conversion)
+    is_indian = any(x in eod_symbol for x in ['.NSE', '.BSE', 'NSEI', 'BSESN', 'BANK', 'INDIA']) and 'US' not in eod_symbol
+    
     try:
         url = ""
-        # Intraday Logic (5m for 1D, 1h for longer)
+        # Intraday Logic
         if range_type in ["1D", "5M", "15M"]:
-            url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval=5m&fmt=json"
+            interval = "5m"
+            url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval={interval}&fmt=json"
         elif range_type in ["1H", "4H"]:
             url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval=1h&fmt=json"
         else:
-            # EOD Logic (Daily/Weekly/Monthly)
+            # EOD Logic
             period = "d"
             if range_type == "1W": period = "w"
             if range_type == "1M": period = "m"
             
-            # Limit to 3 years (1095 days) to keep payload light & fast
+            # Limit to 3 years data to optimize payload
             from_date = (datetime.now() - timedelta(days=1095)).strftime('%Y-%m-%d')
             url = f"{BASE_URL}/eod/{eod_symbol}?api_token={EODHD_API_KEY}&period={period}&from={from_date}&fmt=json"
 
@@ -156,71 +191,72 @@ def get_historical_data(symbol: str, range_type: str = "1d"):
         if response.status_code == 200:
             raw_data = response.json()
             
+            # Timezones
+            tz_utc = pytz.utc
+            tz_ist = pytz.timezone('Asia/Kolkata')
+            
             for candle in raw_data:
                 ts = 0
                 try:
-                    # Smart Date Parser (Handles both Intraday and EOD formats)
+                    # Date Parsing & Timezone Handling
                     if "date" in candle:
-                        ts = int(datetime.strptime(candle['date'], "%Y-%m-%d").timestamp())
+                        # EOD (YYYY-MM-DD) -> Assume Midnight UTC
+                        dt = datetime.strptime(candle['date'], "%Y-%m-%d")
+                        ts = int(dt.replace(tzinfo=tz_utc).timestamp())
                     elif "datetime" in candle:
-                        ts = int(datetime.strptime(candle['datetime'], "%Y-%m-%d %H:%M:%S").timestamp())
+                        # Intraday (YYYY-MM-DD HH:MM:SS) -> Exchange Time
+                        dt_naive = datetime.strptime(candle['datetime'], "%Y-%m-%d %H:%M:%S")
+                        
+                        if is_indian:
+                            # Convert IST -> UTC Timestamp
+                            dt_aware = tz_ist.localize(dt_naive)
+                            ts = int(dt_aware.timestamp())
+                        else:
+                            # Assume UTC for US/Crypto
+                            ts = int(dt_naive.replace(tzinfo=tz_utc).timestamp())
                 except: continue 
                 
-                # --- CRASH PROTECTION: STRICT NULL CHECK ---
+                # CRASH PROTECTION: Filter Nulls
                 o, h, l, c, v = candle.get('open'), candle.get('high'), candle.get('low'), candle.get('close'), candle.get('volume')
                 
-                # Skip if any essential price data is missing
                 if o is None or h is None or l is None or c is None: continue
                 
                 data.append({
                     "time": ts,
-                    "open": float(o), 
-                    "high": float(h), 
-                    "low": float(l), 
-                    "close": float(c), 
-                    "volume": float(v) if v is not None else 0.0
+                    "open": float(o), "high": float(h), "low": float(l), "close": float(c), "volume": float(v) if v else 0.0
                 })
             
-            # Ensure sorted oldest -> newest for charts
             data.sort(key=lambda x: x['time'])
             return data
-            
         return []
     except Exception as e:
-        print(f"EODHD Chart Error for {symbol}: {e}")
+        print(f"EODHD Chart Error {symbol}: {e}")
         return []
 
 # ==========================================
-# 3. ROBUST DATA PARSERS (THE BRAIN)
+# 3. ROBUST PARSERS (THE BRAIN)
 # ==========================================
 
 def parse_profile_from_fundamentals(fund_data: dict, symbol: str):
     """
-    Extracts Profile data. 
-    FIX: Handles 'Officers' being a Dict OR List (Prevents KeyError: 0).
+    Extracts Profile. FIX: Handles 'Officers' as List or Dict.
     """
     if not fund_data: return {}
     general = fund_data.get('General') or {}
     highlights = fund_data.get('Highlights') or {}
     
-    # --- OFFICERS CRASH FIX ---
     ceo_name = "N/A"
     officers = general.get('Officers')
-    
     if officers:
         try:
-            # Case A: Dictionary (e.g. {"0": {...}})
             if isinstance(officers, dict):
                 first_key = next(iter(officers)) 
                 ceo_name = officers[first_key].get('Name', 'N/A')
-            # Case B: List (e.g. [{...}])
             elif isinstance(officers, list) and len(officers) > 0:
                 ceo_name = officers[0].get('Name', 'N/A')
-        except:
-            ceo_name = "N/A"
-    # --------------------------
+        except: pass
 
-    # Market Cap Fallback (Try General, then Highlights)
+    # Market Cap Fallback (Sometimes in General, sometimes Highlights)
     mkt_cap = general.get('MarketCapitalization') or highlights.get('MarketCapitalization')
 
     return {
@@ -236,91 +272,66 @@ def parse_profile_from_fundamentals(fund_data: dict, symbol: str):
         "exchange": general.get('Exchange', 'N/A'),
         "mktCap": mkt_cap,
         "beta": general.get('Beta'),
-        "fullTimeEmployees": general.get('FullTimeEmployees', 'N/A')
     }
 
 def parse_metrics_from_fundamentals(fund_data: dict):
     """
-    Extracts Key Metrics (PE, EPS, etc) and manually calculates missing ones
-    like Earnings Yield and Current Ratio to ensure AI tabs work.
+    Extracts Metrics + Calculates Missing Ones (Earnings Yield, Current Ratio).
     """
     if not fund_data: return {}
-    
-    # Extract sub-sections safely
     highlights = fund_data.get('Highlights') or {}
     valuation = fund_data.get('Valuation') or {}
     technicals = fund_data.get('Technicals') or {} 
     
-    # Helper to clean invalid numbers (None, 'NA', 'None')
     def get_val(source, key):
         val = source.get(key)
-        try: 
-            return float(val) if val is not None and val != 'NA' and val != 'None' else None
-        except: 
-            return None
+        try: return float(val) if val is not None and val != 'NA' and val != 'None' else None
+        except: return None
 
-    # --- 1. Robust PE & Earnings Yield ---
+    # 1. PE & Earnings Yield
     pe = get_val(valuation, 'TrailingPE')
     eps = get_val(highlights, 'DilutedEPSTTM')
-    
-    # Calculate Earnings Yield (The inverse of P/E)
-    # This is critical for the "Value Investing" tab
-    earnings_yield = None
-    if pe and pe > 0:
-        earnings_yield = 1 / pe
-    
-    # --- 2. Robust ROCE (Return on Capital) ---
-    # Priority: Explicit ROCE -> ROE -> ROA
-    roce = get_val(highlights, 'ReturnOnCapitalEmployedTTM')
-    if roce is None:
-        roce = get_val(highlights, 'ReturnOnEquityTTM') # ROE is a common proxy
-    if roce is None:
-        roce = get_val(highlights, 'ReturnOnAssetsTTM')
+    earnings_yield = 1 / pe if (pe and pe > 0) else None
 
-    # --- 3. Current Ratio (Manual Calculation) ---
-    # Critical for Benjamin Graham Scan
+    # 2. ROCE (Return on Capital)
+    roce = get_val(highlights, 'ReturnOnCapitalEmployedTTM')
+    if roce is None: roce = get_val(highlights, 'ReturnOnEquityTTM') # Fallback
+    if roce is None: roce = get_val(highlights, 'ReturnOnAssetsTTM') # Last Resort
+
+    # 3. Current Ratio (Manual Calculation from BS)
     current_ratio = None
     try:
-        # Navigate to Quarterly Balance Sheet
         bs = fund_data.get('Financials', {}).get('Balance_Sheet', {}).get('quarterly', {})
         if bs:
-            # Get the most recent date key
             latest_date = sorted(bs.keys(), reverse=True)[0]
             latest = bs[latest_date]
-            
             ca = float(latest.get('totalCurrentAssets') or 0)
             cl = float(latest.get('totalCurrentLiabilities') or 0)
-            
-            if cl > 0:
-                current_ratio = ca / cl
-    except: 
-        pass
+            if cl > 0: current_ratio = ca / cl
+    except: pass
 
     return {
         "marketCap": get_val(highlights, 'MarketCapitalization'),
         "peRatioTTM": pe,
-        "earningsYieldTTM": earnings_yield, # Now calculated!
+        "earningsYieldTTM": earnings_yield,
         "epsTTM": eps,
         "dividendYieldTTM": get_val(highlights, 'DividendYield'),
         "revenueGrowth": get_val(highlights, 'RevenueTTM'),
         "grossMargins": get_val(highlights, 'GrossProfitTTM'),
-        "returnOnCapitalEmployedTTM": roce, # Now robust!
+        "returnOnCapitalEmployedTTM": roce,
         "sharesOutstanding": fund_data.get('SharesStats', {}).get('SharesOutstanding'),
         "beta": get_val(technicals, 'Beta'),
         "priceToBookRatioTTM": get_val(valuation, 'PriceBookMRQ'),
-        "currentRatioTTM": current_ratio # Now calculated!
+        "currentRatioTTM": current_ratio
     }
-    
+
 def parse_financials(fund_data: dict, type_key: str, period: str = 'yearly'):
     """
-    Parses Financials with Fuzzy Key Matching.
-    Handles 'totalRevenue' vs 'TotalRevenue' mismatches.
+    Parses Financials with Fuzzy Key Matching (CamelCase vs PascalCase).
     """
     if not fund_data: return []
     try:
-        # Navigate keys safely: e.g., Financials -> Income_Statement -> yearly
         category, sub = type_key.split('::')
-        
         cat_data = fund_data.get(category) or {}
         sub_data = cat_data.get(sub) or {}
         stmts = sub_data.get(period) or {}
@@ -329,7 +340,7 @@ def parse_financials(fund_data: dict, type_key: str, period: str = 'yearly'):
         for date_str, data in stmts.items():
             if not data: continue
             
-            # Robust Float Helper: Checks multiple key variations
+            # Safe Float Conversion with Key Search
             def sf(keys): 
                 if isinstance(keys, str): keys = [keys]
                 for k in keys:
@@ -354,18 +365,10 @@ def parse_financials(fund_data: dict, type_key: str, period: str = 'yearly'):
                 "dividendsPaid": sf(['dividendsPaid', 'DividendsPaid']),
                 "weightedAverageShsOut": sf(['commonStockSharesOutstanding', 'CommonStockSharesOutstanding'])
             }
-            
-            # EPS Fallback if missing
-            if item['netIncome'] and item['weightedAverageShsOut']:
-                item['eps'] = item['netIncome'] / item['weightedAverageShsOut']
-            else:
-                item['eps'] = 0.0
-                
             formatted.append(item)
             
-        # Newest First
         formatted.sort(key=lambda x: x['date'], reverse=True)
-        return formatted[:10] 
+        return formatted[:10]
     except Exception as e:
         print(f"Financial Parse Error ({type_key}): {e}")
         return []
@@ -373,17 +376,12 @@ def parse_financials(fund_data: dict, type_key: str, period: str = 'yearly'):
 def parse_analyst_data(fund_data: dict):
     """
     Extracts Analyst Ratings and Price Targets.
-    Used to populate the 'Forecasts' tab.
     """
     if not fund_data: return [], {}
-    
-    # EODHD usually stores this under 'AnalystRatings'
     ar = fund_data.get('AnalystRatings')
-    
-    if not ar or not isinstance(ar, dict): 
-        return [], {}
+    if not ar or not isinstance(ar, dict): return [], {}
 
-    # 1. Format Ratings
+    # Ratings
     try:
         ratings = [{
             "ratingStrongBuy": int(ar.get('StrongBuy') or 0),
@@ -392,69 +390,51 @@ def parse_analyst_data(fund_data: dict):
             "ratingSell": int(ar.get('Sell') or 0),
             "ratingStrongSell": int(ar.get('StrongSell') or 0)
         }]
-    except:
-        ratings = []
+    except: ratings = []
 
-    # 2. Format Price Target
+    # Target
     try:
         tp = float(ar.get('TargetPrice') or 0)
         target = {}
         if tp > 0:
-            target = {
-                "targetHigh": tp,
-                "targetLow": tp,
-                "targetConsensus": tp
-            }
-    except:
-        target = {}
+            target = {"targetHigh": tp, "targetLow": tp, "targetConsensus": tp}
+    except: target = {}
 
     return ratings, target
 
 def parse_shareholding_breakdown(fund_data: dict):
     """
-    Extracts Insider vs Institution vs Public % for Donut Chart.
+    Extracts Shareholding %.
     """
     if not fund_data: return {}
     stats = fund_data.get('SharesStats') or {}
-    
     try:
         insiders = float(stats.get('PercentInsiders') or 0)
         institutions = float(stats.get('PercentInstitutions') or 0)
         
-        # Heuristic: Split Institutions into FII/DII for display
+        # Heuristic Split for FII/DII
         fii = institutions * 0.55
         dii = institutions * 0.45
-        
         public = max(0, 100 - (insiders + institutions))
         
-        return {
-            "promoter": insiders,
-            "fii": fii,
-            "dii": dii,
-            "public": public
-        }
+        return {"promoter": insiders, "fii": fii, "dii": dii, "public": public}
     except:
         return {"promoter": 0, "fii": 0, "dii": 0, "public": 100}
 
 def parse_holders(fund_data: dict):
     """
-    Extracts Top Holders List.
+    Extracts Major Holders.
     """
     if not fund_data: return []
     holders = fund_data.get('Holders') or {}
-    
-    # Try Institutions or Funds keys
     source_raw = holders.get('Institutions') or holders.get('Funds')
     
     if not source_raw: 
-        # Return dummy so tab doesn't hide
         return [{"holder": "Data Aggregated", "shares": 0}]
 
     output = []
     try:
-        # Handle if source is dict or list
         iterator = source_raw.values() if isinstance(source_raw, dict) else source_raw
-        
         for h in iterator:
             output.append({
                 "holder": h.get('name') or h.get('Name') or "Unknown",
@@ -462,6 +442,6 @@ def parse_holders(fund_data: dict):
                 "date": h.get('date_reported') or h.get('DateReported'),
                 "value": float(h.get('value') or h.get('Value') or 0)
             })
-        return output[:15] # Top 15
+        return output[:15]
     except:
         return [{"holder": "Data Aggregated", "shares": 0}]
