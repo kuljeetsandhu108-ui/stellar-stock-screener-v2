@@ -2,17 +2,20 @@ import React, { useState, useEffect, useRef } from 'react';
 import styled, { keyframes, css } from 'styled-components';
 import axios from 'axios';
 
-// --- ANIMATIONS ---
+// ==========================================
+// 1. HIGH-END ANIMATIONS
+// ==========================================
+
 const flashGreen = keyframes`
   0% { color: var(--color-text-primary); }
-  50% { color: #3FB950; text-shadow: 0 0 10px #3FB950; }
-  100% { color: var(--color-text-primary); }
+  50% { color: #3FB950; text-shadow: 0 0 15px rgba(63, 185, 80, 0.5); transform: scale(1.02); }
+  100% { color: var(--color-text-primary); transform: scale(1); }
 `;
 
 const flashRed = keyframes`
   0% { color: var(--color-text-primary); }
-  50% { color: #F85149; text-shadow: 0 0 10px #F85149; }
-  100% { color: var(--color-text-primary); }
+  50% { color: #F85149; text-shadow: 0 0 15px rgba(248, 81, 73, 0.5); transform: scale(1.02); }
+  100% { color: var(--color-text-primary); transform: scale(1); }
 `;
 
 const pulse = keyframes`
@@ -21,7 +24,9 @@ const pulse = keyframes`
   100% { opacity: 1; box-shadow: 0 0 0 0 rgba(63, 185, 80, 0); }
 `;
 
-// --- STYLED COMPONENTS ---
+// ==========================================
+// 2. STYLED COMPONENTS
+// ==========================================
 
 const HeaderContainer = styled.div`
   display: flex;
@@ -37,6 +42,7 @@ const HeaderContainer = styled.div`
   width: 100%;
   box-sizing: border-box;
   box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  transition: all 0.3s ease;
 
   @media (min-width: 768px) {
     flex-direction: row;
@@ -61,6 +67,7 @@ const CompanyLogo = styled.img`
   object-fit: contain;
   box-shadow: 0 4px 12px rgba(0,0,0,0.3);
   flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.1);
   
   @media (min-width: 768px) {
       width: 64px;
@@ -82,6 +89,7 @@ const CompanyName = styled.h1`
   color: var(--color-text-primary);
   white-space: normal; 
   word-wrap: break-word;
+  letter-spacing: -0.5px;
 
   @media (min-width: 768px) {
     font-size: 2.2rem;
@@ -90,15 +98,16 @@ const CompanyName = styled.h1`
 `;
 
 const CompanySymbol = styled.span`
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   color: var(--color-text-secondary);
   font-weight: 600;
   background: rgba(255,255,255,0.05);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 6px;
   margin-top: 6px;
   display: inline-block;
   font-family: 'Roboto Mono', monospace;
+  border: 1px solid rgba(255,255,255,0.05);
   
   @media (min-width: 768px) {
       font-size: 1rem;
@@ -126,9 +135,9 @@ const CurrentPrice = styled.div`
   font-family: 'Roboto Mono', monospace;
   color: var(--color-text-primary);
   
-  /* Blinking Logic */
-  ${({ flash }) => flash === 'up' && css`animation: ${flashGreen} 1s ease;`}
-  ${({ flash }) => flash === 'down' && css`animation: ${flashRed} 1s ease;`}
+  /* Dynamic Flash Animation props */
+  ${({ flash }) => flash === 'up' && css`animation: ${flashGreen} 0.8s ease-out;`}
+  ${({ flash }) => flash === 'down' && css`animation: ${flashRed} 0.8s ease-out;`}
 
   @media (min-width: 768px) {
       font-size: 2.8rem;
@@ -145,6 +154,7 @@ const PriceChange = styled.div`
   background: ${({ isPositive }) => (isPositive ? 'rgba(63, 185, 80, 0.1)' : 'rgba(248, 81, 73, 0.1)')};
   padding: 4px 12px;
   border-radius: 20px;
+  border: 1px solid ${({ isPositive }) => (isPositive ? 'rgba(63, 185, 80, 0.2)' : 'rgba(248, 81, 73, 0.2)')};
   
   @media (min-width: 768px) {
       font-size: 1.2rem;
@@ -159,8 +169,20 @@ const LiveDot = styled.div`
   animation: ${pulse} 2s infinite;
 `;
 
-// --- Helper ---
-const getCurrencySymbol = (currencyCode) => {
+// ==========================================
+// 3. INTELLIGENT HELPER FUNCTIONS
+// ==========================================
+
+const getCurrencySymbol = (currencyCode, symbol) => {
+    // 1. Priority: Explicit Symbol Check for India
+    if (symbol) {
+        const s = symbol.toUpperCase();
+        if (s.includes('.NS') || s.includes('.BO') || s.includes('NIFTY') || s.includes('SENSEX') || s.includes('BANKNIFTY')) {
+            return '₹';
+        }
+    }
+    
+    // 2. Fallback: Currency Code
     switch (currencyCode) {
         case 'INR': return '₹';
         case 'USD': return '$';
@@ -171,20 +193,24 @@ const getCurrencySymbol = (currencyCode) => {
     }
 };
 
+// ==========================================
+// 4. MAIN COMPONENT LOGIC
+// ==========================================
+
 const StockHeader = ({ profile, quote: initialQuote }) => {
+  // State for Real-Time Data
   const [liveData, setLiveData] = useState({
     price: initialQuote?.price || 0,
     change: initialQuote?.change || 0,
     pct: initialQuote?.changesPercentage || 0
   });
   
-  const [flash, setFlash] = useState(null); // 'up' or 'down' or null
+  const [flash, setFlash] = useState(null); // 'up', 'down', or null
   const prevPriceRef = useRef(initialQuote?.price || 0);
   const intervalRef = useRef(null);
 
-  // --- REAL-TIME POLLING ENGINE ---
+  // --- A. Sync State on Load ---
   useEffect(() => {
-    // Reset state on symbol change
     if (initialQuote) {
         setLiveData({
             price: initialQuote.price,
@@ -193,22 +219,28 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
         });
         prevPriceRef.current = initialQuote.price;
     }
+  }, [initialQuote]);
 
+  // --- B. Real-Time Polling Engine ---
+  useEffect(() => {
     const fetchLivePrice = async () => {
       try {
         const symbol = profile.symbol;
         if (!symbol) return;
 
-        // Determine correct endpoint based on asset type
-        // Index -> use indices router. Stock -> use chart as proxy (fastest).
         let url = '';
-        const isIndex = profile.sector === 'Market Index' || profile.exchange === 'INDEX' || symbol.includes('.INDX');
+        // Smart Detection: Index vs Stock
+        const isIndex = 
+            profile.sector === 'Market Index' || 
+            profile.exchange === 'INDEX' || 
+            symbol.includes('.INDX') || 
+            symbol.includes('^');
         
         if (isIndex) {
-            // Encode symbol to handle ^NSEI etc safely
+            // Use specific lightweight Index Endpoint
             url = `/api/indices/${encodeURIComponent(symbol)}/live-price`;
         } else {
-            // Fetch only 1 day of chart data (lightweight) to get the latest close
+            // Use Chart Endpoint (1D) as a lightweight proxy for Stocks
             url = `/api/stocks/${symbol}/chart?range=1D`;
         }
 
@@ -219,44 +251,51 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
         let newPct = 0;
 
         if (isIndex) {
-            // Index response: { price, change, changesPercentage ... }
+            // Index Format: Object { price, change, ... }
             newPrice = res.data.price;
             newChange = res.data.change;
             newPct = res.data.changesPercentage;
         } else {
-            // Stock response (Chart array): [{close: ...}, ...]
+            // Stock Format: Array of Candles [{close: ...}, ...]
             const candles = res.data;
             if (candles && candles.length > 0) {
                 const last = candles[candles.length - 1];
                 newPrice = last.close;
                 
-                // Keep the change relative to the initial Previous Close to be consistent
+                // Calculate change relative to initial previous close to maintain consistency
+                // Fallback to first candle open if prevClose missing
                 const prevClose = initialQuote.previousClose || candles[0].open;
-                newChange = newPrice - prevClose;
-                newPct = (newChange / prevClose) * 100;
+                
+                if (prevClose && prevClose > 0) {
+                    newChange = newPrice - prevClose;
+                    newPct = (newChange / prevClose) * 100;
+                }
             }
         }
 
-        // Only update if we have a valid price
-        if (newPrice > 0) {
-            // Trigger Flash Animation
+        // Logic: Only update if price changed and is valid
+        if (newPrice > 0 && newPrice !== prevPriceRef.current) {
+            // Determine Flash Direction
             if (newPrice > prevPriceRef.current) setFlash('up');
             else if (newPrice < prevPriceRef.current) setFlash('down');
             
-            // Remove flash class after animation
-            setTimeout(() => setFlash(null), 1000);
+            // Clear Flash Animation after 800ms
+            setTimeout(() => setFlash(null), 800);
 
+            // Update State
             setLiveData({ price: newPrice, change: newChange, pct: newPct });
+            
+            // Update Ref
             prevPriceRef.current = newPrice;
         }
 
       } catch (err) {
-        // Silent fail on polling error to keep UI stable
-        // console.error("Poll skip");
+        // Silent fail: If polling fails, just keep showing old price.
+        // console.error("Polling skipped", err);
       }
     };
 
-    // 2-Second Polling for "Live" Feel
+    // Poll every 2 seconds (Optimum balance of "Live" feel vs Server Load)
     intervalRef.current = setInterval(fetchLivePrice, 2000);
 
     return () => {
@@ -266,14 +305,24 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
 
   if (!profile) return null;
   
-  const currencySymbol = getCurrencySymbol(profile.currency);
+  // Robust Currency Symbol
+  const currencySymbol = getCurrencySymbol(profile.currency, profile.symbol);
+  
+  // Formatting
   const isPositive = liveData.change >= 0;
+  const formattedPrice = (liveData.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formattedChange = (liveData.change || 0).toFixed(2);
+  const formattedPct = (liveData.pct || 0).toFixed(2);
 
   return (
     <HeaderContainer>
       <CompanyInfo>
         {profile.image ? (
-            <CompanyLogo src={profile.image} alt={`${profile.companyName} logo`} onError={(e) => e.target.style.display='none'} />
+            <CompanyLogo 
+                src={profile.image} 
+                alt={`${profile.companyName} logo`} 
+                onError={(e) => e.target.style.display='none'} 
+            />
         ) : null}
         <TextContainer>
           <CompanyName>
@@ -287,11 +336,11 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
       
       <PriceInfo>
         <CurrentPrice flash={flash}>
-          {currencySymbol}{(liveData.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {currencySymbol}{formattedPrice}
         </CurrentPrice>
         <PriceChange isPositive={isPositive}>
             <LiveDot />
-            {isPositive ? '+' : ''}{(liveData.change || 0).toFixed(2)} ({isPositive ? '+' : ''}{(liveData.pct || 0).toFixed(2)}%)
+            {isPositive ? '+' : ''}{formattedChange} ({isPositive ? '+' : ''}{formattedPct}%)
         </PriceChange>
       </PriceInfo>
     </HeaderContainer>

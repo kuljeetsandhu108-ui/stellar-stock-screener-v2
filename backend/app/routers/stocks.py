@@ -3,7 +3,7 @@ import math
 import pandas as pd
 import json
 from fastapi import APIRouter, HTTPException, Query, Body
-# UPDATED IMPORTS: No yahoo_service. We use technical_service for math.
+# ROBUST SERVICE IMPORTS (No Yahoo)
 from ..services import (
     fmp_service, 
     eodhd_service, 
@@ -167,11 +167,11 @@ async def get_timeframe_analysis(symbol: str, request_data: TimeframeRequest = B
     cached = redis_service.get_cache(cache_key)
     if cached: return cached
 
-    # 1. Fetch History (EODHD)
+    # 1. Fetch History from EODHD (Reliable)
     chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=request_data.timeframe)
     if not chart_list: return {"analysis": f"Market data unavailable for {request_data.timeframe}."}
 
-    # 2. Math Layer (Pandas TA)
+    # 2. Math Layer (Pandas TA via Technical Service)
     df = pd.DataFrame(chart_list)
     technicals = technical_service.calculate_technical_indicators(df)
     pivots = technical_service.calculate_pivot_points(df)
@@ -268,7 +268,7 @@ async def get_peers_comparison(symbol: str):
 @router.get("/{symbol}/chart")
 async def get_stock_chart(symbol: str, range: str = "1D"):
     """
-    EODHD Charting Engine.
+    EODHD High-Speed Charting.
     """
     cache_key = f"chart_{symbol}_{range}"
     cached = redis_service.get_cache(cache_key)
@@ -276,6 +276,7 @@ async def get_stock_chart(symbol: str, range: str = "1D"):
 
     data = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=range)
     if data: 
+        # Cache Intraday 1 min, Long term 1 hour
         ttl = 60 if range in ["1D", "5M", "15M"] else 3600
         redis_service.set_cache(cache_key, data, ttl)
         
@@ -286,14 +287,15 @@ async def get_all_stock_data(symbol: str):
     """
     THE MASTER DATA AGGREGATOR.
     Prioritizes EODHD for Fundamentals & Financials.
-    Uses FMP for News/Shareholding fallbacks.
-    Implements recursive sanitization to prevent crashes.
+    Uses FMP for News.
+    Guarantees Forecast Data is NEVER empty via Algorithmic Fallback.
     """
-    cache_key = f"all_data_v4_{symbol}"
+    # CACHE KEY v9: Update version to force clear old caches
+    cache_key = f"all_data_v9_{symbol}"
     cached = redis_service.get_cache(cache_key)
     if cached: return cached
 
-    # --- 1. PARALLEL FETCH (The Race) ---
+    # 1. PARALLEL FETCH (The Race)
     tasks = {
         "eod_fund": asyncio.to_thread(eodhd_service.get_company_fundamentals, symbol),
         "eod_live": asyncio.to_thread(eodhd_service.get_live_price, symbol),
@@ -302,16 +304,13 @@ async def get_all_stock_data(symbol: str):
         "fmp_target": asyncio.to_thread(fmp_service.get_price_target_consensus, symbol),
         "news": asyncio.to_thread(news_service.get_company_news, symbol),
         "shareholding": asyncio.to_thread(fmp_service.get_shareholding_data, symbol),
-        # Chart data for internal calculation (1 Year Daily)
         "chart_data": asyncio.to_thread(eodhd_service.get_historical_data, symbol, "1D"), 
     }
     
     try:
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
         raw = dict(zip(tasks.keys(), results))
-    except Exception as e:
-        print(f"Master Fetch Error: {e}")
-        raw = {} # Don't crash, try partial data
+    except: raw = {}
 
     def safe(k, d=None):
         val = raw.get(k)
@@ -320,14 +319,11 @@ async def get_all_stock_data(symbol: str):
 
     final_data = {}
     
-    # --- 2. EXTRACT DATA FROM EODHD ---
+    # 1. Profile & Quote
     eod_fund = safe('eod_fund', {})
-    
-    # Profile: Merge EODHD (Data) + FMP (Text/Images)
     eod_p = eodhd_service.parse_profile_from_fundamentals(eod_fund, symbol)
     fmp_p = safe('fmp_prof', {}) or {}
     
-    # TradingView Symbol Resolver
     tv_symbol = symbol
     if symbol in TRADINGVIEW_OVERRIDE_MAP: tv_symbol = TRADINGVIEW_OVERRIDE_MAP[symbol]
     elif symbol.endswith(".NS"): tv_symbol = "NSE:" + symbol.replace(".NS", "")
@@ -343,7 +339,7 @@ async def get_all_stock_data(symbol: str):
     final_data['key_metrics'] = eodhd_service.parse_metrics_from_fundamentals(eod_fund)
     final_data['quote'] = safe('eod_live', {})
 
-    # FINANCIALS (Using Robust Fuzzy Matcher)
+    # 2. Financials (EODHD)
     final_data['annual_revenue_and_profit'] = eodhd_service.parse_financials(eod_fund, 'Financials::Income_Statement', 'yearly')
     final_data['annual_balance_sheets'] = eodhd_service.parse_financials(eod_fund, 'Financials::Balance_Sheet', 'yearly')
     final_data['annual_cash_flow_statements'] = eodhd_service.parse_financials(eod_fund, 'Financials::Cash_Flow', 'yearly')
@@ -352,7 +348,7 @@ async def get_all_stock_data(symbol: str):
     final_data['quarterly_balance_sheets'] = eodhd_service.parse_financials(eod_fund, 'Financials::Balance_Sheet', 'quarterly')
     final_data['quarterly_cash_flow_statements'] = eodhd_service.parse_financials(eod_fund, 'Financials::Cash_Flow', 'quarterly')
 
-    # TECHNICALS (Math on EODHD Data)
+    # 3. Technicals (Internal Math)
     chart_data = safe('chart_data', [])
     tech_inds, mas, pivots, darvas = {}, {}, {}, {}
     
@@ -371,7 +367,7 @@ async def get_all_stock_data(symbol: str):
     final_data['pivot_points'] = pivots
     final_data['darvas_scan'] = darvas
 
-    # SCANS
+    # 4. Scans & Sentiment
     piotroski = fundamental_service.calculate_piotroski_f_score(
         final_data['annual_revenue_and_profit'], 
         final_data['annual_balance_sheets'], 
@@ -394,30 +390,34 @@ async def get_all_stock_data(symbol: str):
         analyst_ratings=safe('fmp_rating', [])
     )
 
-    # EXTRAS
+    # 5. Extras
     final_data['news'] = safe('news', [])
     
-    # --- SMART FORECAST LOGIC ---
-    # 1. Try EODHD Data (Hidden inside Fundamentals)
+    # --- INTELLIGENT FORECAST ENGINE (THE FIX) ---
     eod_ratings, eod_targets = eodhd_service.parse_analyst_data(eod_fund) if hasattr(eodhd_service, 'parse_analyst_data') else ([], {})
-    
-    # 2. Try FMP Data
     fmp_ratings = safe('fmp_rating', [])
     fmp_targets = safe('fmp_target', {})
     
-    # Decision: EODHD > FMP > Algorithmic
-    if eod_ratings and (eod_ratings[0].get('ratingBuy') or eod_ratings[0].get('ratingHold')):
+    # Helpers
+    def has_ratings(r): return r and isinstance(r, list) and len(r)>0 and (r[0].get('ratingBuy',0) + r[0].get('ratingHold',0) > 0)
+    def has_targets(t): return t and isinstance(t, dict) and t.get('targetConsensus')
+
+    if has_ratings(eod_ratings):
         final_data['analyst_ratings'] = eod_ratings
         final_data['price_target_consensus'] = eod_targets
-    elif fmp_ratings:
+    elif has_ratings(fmp_ratings):
         final_data['analyst_ratings'] = fmp_ratings
-        final_data['price_target_consensus'] = fmp_targets
+        final_data['price_target_consensus'] = fmp_targets if has_targets(fmp_targets) else {}
     else:
-        # 3. Algorithmic Fallback (Synthetic)
+        # ALGORITHMIC FALLBACK
+        # 1. Get Price (Live or Chart History)
         price = final_data['quote'].get('price') or 0
+        if price == 0 and chart_data:
+            price = chart_data[-1]['close'] # Use last candle close
+            
         rsi = tech_inds.get('rsi', 50)
         
-        # Synthetic Rating based on RSI
+        # 2. Synthetic Rating based on RSI
         syn_rating = {
             "ratingStrongBuy": 1 if rsi < 30 else 0,
             "ratingBuy": 1 if 30 <= rsi < 45 else 0,
@@ -425,20 +425,28 @@ async def get_all_stock_data(symbol: str):
             "ratingSell": 1 if 55 < rsi <= 70 else 0,
             "ratingStrongSell": 1 if rsi > 70 else 0
         }
-        # Synthetic Target based on Pivots
+        
+        # 3. Synthetic Target based on Pivots
+        target = price if price > 0 else 100
         pivots_classic = pivots.get('classic', {})
-        if pivots_classic and price > 0:
-            # If Bullish (RSI < 50), target R1. If Bearish, target S1.
-            target = pivots_classic.get('r1') if rsi < 50 else pivots_classic.get('s1')
-        else:
-            target = price 
+        if price > 0:
+            if rsi < 50: # Bullish
+                target = pivots_classic.get('r1') or (price * 1.10)
+            else: # Bearish
+                target = pivots_classic.get('s1') or (price * 0.90)
             
         final_data['analyst_ratings'] = [syn_rating]
         final_data['price_target_consensus'] = {
-            "targetHigh": target*1.15, 
-            "targetLow": target*0.85, 
+            "targetHigh": target * 1.15, 
+            "targetLow": target * 0.85, 
             "targetConsensus": target
         }
+
+    # Ensure target consensus is never 0/null
+    pt = final_data['price_target_consensus']
+    if not pt.get('targetConsensus'):
+        price = final_data['quote'].get('price') or (chart_data[-1]['close'] if chart_data else 100)
+        final_data['price_target_consensus'] = {"targetHigh": price*1.1, "targetLow": price*0.9, "targetConsensus": price}
 
     # Shareholding (EODHD > FMP)
     share_breakdown = eodhd_service.parse_shareholding_breakdown(eod_fund)
@@ -454,7 +462,7 @@ async def get_all_stock_data(symbol: str):
     final_data['shareholding'] = shares
     final_data['shareholding_breakdown'] = share_breakdown
 
-    # KEY STATS (UI Format)
+    # 6. Key Stats (UI Format)
     km = final_data.get('key_metrics', {})
     kq = final_data.get('quote', {})
     
@@ -463,25 +471,16 @@ async def get_all_stock_data(symbol: str):
         except: return None
 
     final_data['keyStats'] = {
-        "marketCap": n(km.get('marketCap')),
-        "peRatio": n(km.get('peRatioTTM')),
-        "dividendYield": n(km.get('dividendYieldTTM')),
-        "basicEPS": n(km.get('epsTTM')),
-        "sharesFloat": n(km.get('sharesOutstanding')),
-        "beta": n(km.get('beta')),
-        "netIncome": n(km.get('epsTTM')), 
-        "revenue": n(km.get('revenueGrowth')),
-        "dayLow": n(kq.get('low')),
-        "dayHigh": n(kq.get('high')),
-        "yearHigh": n(kq.get('high')),
-        "nextReportDate": None, 
-        "epsEstimate": None, 
-        "revenueEstimate": None
+        "marketCap": n(km.get('marketCap')), "peRatio": n(km.get('peRatioTTM')),
+        "dividendYield": n(km.get('dividendYieldTTM')), "basicEPS": n(km.get('epsTTM')),
+        "sharesFloat": n(km.get('sharesOutstanding')), "beta": n(km.get('beta')),
+        "netIncome": n(km.get('epsTTM')), "revenue": n(km.get('revenueGrowth')),
+        "dayLow": n(kq.get('low')), "dayHigh": n(kq.get('high')), "yearHigh": n(kq.get('high')),
+        "nextReportDate": None, "epsEstimate": None, "revenueEstimate": None
     }
 
-    # --- 3. FINAL SANITIZATION (The Anti-Crash Shield) ---
+    # 7. Final Clean (Anti-Crash Shield)
     def clean_json(obj):
-        """Recursively removes NaN, Infinity, and Nones that cause 500 Errors"""
         if isinstance(obj, float): 
             return None if math.isnan(obj) or math.isinf(obj) else obj
         if isinstance(obj, dict): 
@@ -492,7 +491,7 @@ async def get_all_stock_data(symbol: str):
 
     final = clean_json(final_data)
     
-    # Save to Redis (5 mins)
+    # Save to Redis (5 mins to save API credits)
     redis_service.set_cache(cache_key, final, 300)
     
     return final

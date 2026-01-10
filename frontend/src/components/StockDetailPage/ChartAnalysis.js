@@ -6,10 +6,12 @@ import Card from '../common/Card';
 import { 
   FaArrowUp, FaArrowDown, FaExchangeAlt, FaGem, FaExclamationTriangle, 
   FaBullseye, FaChartLine, FaMoneyBillWave, FaCrosshairs, FaStopCircle, 
-  FaTachometerAlt, FaMicrochip, FaLayerGroup, FaRedo
+  FaTachometerAlt, FaLayerGroup, FaRedo, FaRobot
 } from 'react-icons/fa';
 
-// --- STYLED COMPONENTS & ANIMATIONS ---
+// ==========================================
+// 1. ANIMATIONS & STYLES
+// ==========================================
 
 const fadeIn = keyframes`
   from { opacity: 0; transform: translateY(20px); }
@@ -76,6 +78,9 @@ const TimeframeButton = styled.button`
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 
   &:hover {
     color: ${({ active }) => (active ? '#ffffff' : 'var(--color-text-primary)')};
@@ -93,6 +98,8 @@ const VerdictCard = styled(Card)`
   text-align: center;
   border-left: 4px solid ${({ color }) => color};
   box-shadow: 0 4px 15px ${({ color }) => color}22;
+  padding: 2rem;
+  background: linear-gradient(180deg, rgba(22, 27, 34, 0.6) 0%, rgba(13, 17, 23, 1) 100%);
 `;
 
 const TrendDisplay = styled.div`
@@ -101,15 +108,12 @@ const TrendDisplay = styled.div`
   justify-content: center;
   gap: 0.75rem;
   font-size: 1.8rem;
-  font-weight: 700;
+  font-weight: 800;
   margin-bottom: 1rem;
   color: ${({ color }) => color};
-  
-  @media (max-width: 768px) {
-    font-size: 1.4rem;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  text-shadow: 0 0 20px ${({ color }) => color}44;
 `;
 
 const ConclusionText = styled.p`
@@ -119,11 +123,8 @@ const ConclusionText = styled.p`
   max-width: 85%;
   margin: 0 auto;
   line-height: 1.6;
-  
-  @media (max-width: 768px) {
-    font-size: 1rem;
-    max-width: 100%;
-  }
+  opacity: 0.9;
+  font-weight: 500;
 `;
 
 const TradeTicket = styled.div`
@@ -135,20 +136,17 @@ const TradeTicket = styled.div`
   overflow: hidden;
   box-shadow: 0 10px 30px rgba(0,0,0,0.2);
   
-  @media (max-width: 768px) {
-    padding: 1.5rem;
-  }
-  
   &::before {
     content: '${({ action }) => action}';
     position: absolute;
-    top: -10px;
+    top: -15px;
     right: -10px;
     font-size: 6rem;
     font-weight: 900;
-    opacity: 0.05;
+    opacity: 0.03;
     color: ${({ action }) => (action === 'BUY' ? 'var(--color-success)' : action === 'SELL' ? 'var(--color-danger)' : '#FFF')};
     pointer-events: none;
+    z-index: 0;
   }
 `;
 
@@ -159,17 +157,20 @@ const TicketHeader = styled.div`
   margin-bottom: 2rem;
   border-bottom: 1px solid rgba(255,255,255,0.1);
   padding-bottom: 1rem;
+  position: relative;
+  z-index: 1;
 `;
 
 const ActionBadge = styled.span`
-  background-color: ${({ action }) => (action === 'BUY' ? 'rgba(16, 185, 129, 0.2)' : action === 'SELL' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(100, 116, 139, 0.2)')};
+  background-color: ${({ action }) => (action === 'BUY' ? 'rgba(16, 185, 129, 0.15)' : action === 'SELL' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(100, 116, 139, 0.15)')};
   color: ${({ action }) => (action === 'BUY' ? 'var(--color-success)' : action === 'SELL' ? 'var(--color-danger)' : '#94A3B8')};
   border: 1px solid ${({ action }) => (action === 'BUY' ? 'var(--color-success)' : action === 'SELL' ? 'var(--color-danger)' : '#94A3B8')};
   padding: 0.5rem 1.5rem;
-  border-radius: 50px;
+  border-radius: 6px;
   font-weight: 800;
-  font-size: 1.2rem;
+  font-size: 1rem;
   letter-spacing: 1px;
+  box-shadow: 0 0 15px ${({ action }) => (action === 'BUY' ? 'rgba(16, 185, 129, 0.1)' : action === 'SELL' ? 'rgba(239, 68, 68, 0.1)' : 'transparent')};
 `;
 
 const TradeMetricGrid = styled.div`
@@ -177,6 +178,8 @@ const TradeMetricGrid = styled.div`
   grid-template-columns: repeat(4, 1fr);
   gap: 1.5rem;
   margin-bottom: 2rem;
+  position: relative;
+  z-index: 1;
 
   @media (max-width: 768px) {
     grid-template-columns: 1fr 1fr;
@@ -192,7 +195,7 @@ const TradeMetric = styled.div`
 `;
 
 const MetricLabel = styled.span`
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--color-text-secondary);
@@ -200,26 +203,24 @@ const MetricLabel = styled.span`
   display: flex;
   align-items: center;
   gap: 5px;
-  @media (max-width: 768px) {
-    font-size: 0.7rem;
-  }
+  font-weight: 600;
 `;
 
 const MetricValue = styled.span`
-  font-size: 1.3rem;
+  font-size: 1.2rem;
   font-weight: 700;
+  font-family: 'Roboto Mono', monospace;
   color: ${({ color }) => color || 'var(--color-text-primary)'};
   word-break: break-word;
-  @media (max-width: 768px) {
-    font-size: 1.1rem;
-  }
 `;
 
 const RationaleBox = styled.div`
   background: rgba(255,255,255,0.03);
-  padding: 1rem;
+  padding: 1.25rem;
   border-radius: 8px;
   border-left: 3px solid var(--color-primary);
+  position: relative;
+  z-index: 1;
 `;
 
 const DetailsGrid = styled.div`
@@ -238,13 +239,15 @@ const InfoCard = styled(Card)`
 `;
 
 const SectionTitle = styled.h4`
-  font-size: 1.2rem;
+  font-size: 1.1rem;
   font-weight: 600;
   color: var(--color-text-primary);
-  margin-bottom: 1rem;
+  margin-bottom: 1.25rem;
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 `;
 
 const InfoList = styled.ul`
@@ -259,10 +262,13 @@ const InfoListItem = styled.li`
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
+  font-size: 0.95rem;
+  
   & > svg {
     flex-shrink: 0;
-    margin-top: 5px;
+    margin-top: 4px;
     color: var(--color-primary);
+    opacity: 0.8;
   }
 `;
 
@@ -273,6 +279,7 @@ const ContentText = styled.p`
   white-space: pre-wrap;
 `;
 
+// --- SCANNER / LOADING STATE ---
 const ScannerContainer = styled.div`
   position: relative;
   width: 100%;
@@ -299,7 +306,7 @@ const ScannerLine = styled.div`
   z-index: 1;
 `;
 
-const ProcessingIcon = styled(FaMicrochip)`
+const ProcessingIcon = styled(FaRobot)`
   font-size: 3.5rem;
   color: var(--color-primary);
   margin-bottom: 1.5rem;
@@ -361,16 +368,20 @@ const RefreshButton = styled.button`
   }
 `;
 
-// --- MAIN COMPONENT ---
+// ==========================================
+// 2. MAIN COMPONENT LOGIC
+// ==========================================
 
 const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
   const { symbol } = useParams();
   
+  // State for caching analysis of different timeframes
   const [analysisCache, setAnalysisCache] = useState({ 'Image': initialAnalysisData });
   const [activeTimeframe, setActiveTimeframe] = useState('Image');
   const [isUpdating, setIsUpdating] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
 
+  // Initialize with passed data
   useEffect(() => {
     setAnalysisCache({ 'Image': initialAnalysisData });
     setActiveTimeframe('Image');
@@ -379,6 +390,7 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
 
   const timeframes = ['5m', '15m', '1h', '4h', '1d'];
 
+  // Fetch new analysis when switching timeframes
   const fetchAnalysisData = useCallback(async (tf) => {
     setIsUpdating(true);
     setErrorMessage(null);
@@ -389,6 +401,7 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
         
         const newData = response.data.analysis;
         
+        // Basic validation of AI response
         if (!newData || newData.length < 20 || newData.includes("RATIONALE: Analysis failed") || newData.includes("TREND: Error")) {
             throw new Error("Invalid Response");
         }
@@ -396,17 +409,19 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
         setAnalysisCache(prev => ({ ...prev, [tf]: newData }));
     } catch (error) {
         console.error("Timeframe analysis failed:", error);
-        setErrorMessage("AI Connection Interrupted.");
+        setErrorMessage("AI Connection Interrupted. Please try again.");
     } finally {
         setIsUpdating(false);
     }
   }, [symbol]);
 
+  // Handle Tab Click
   const handleTimeframeChange = (tf) => {
     if (activeTimeframe === tf) return;
     setActiveTimeframe(tf);
     
-    if (analysisCache[tf] && !analysisCache[tf].includes("TREND: Error")) {
+    // Check cache first
+    if (analysisCache[tf] && !analysisCache[tf].includes("TREND: Error")) { 
         setErrorMessage(null); 
         return; 
     }
@@ -414,74 +429,75 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
     fetchAnalysisData(tf);
   };
 
+  // Retry Logic
   const handleRetry = () => {
-      setAnalysisCache(prev => {
-          const newCache = { ...prev };
-          delete newCache[activeTimeframe];
-          return newCache;
+      setAnalysisCache(prev => { 
+          const newCache = { ...prev }; 
+          delete newCache[activeTimeframe]; 
+          return newCache; 
       });
       fetchAnalysisData(activeTimeframe);
   };
 
   const currentAnalysis = analysisCache[activeTimeframe];
 
-  // --- PARSER ---
+  // --- 3. ROBUST PARSER (The Key to Clean UI) ---
   const parsedAnalysis = useMemo(() => {
     if (!currentAnalysis || typeof currentAnalysis !== 'string') return null;
     
     const rawKeys = [
-      'TREND', 'PATTERNS', 'LEVELS', 'VOLUME', 'MOMENTUM', 'INDICATORS', 'CONCLUSION', 
-      'ACTION', 'ENTRY_ZONE', 'STOP_LOSS', 'TARGET_1', 'TARGET_2', 'RISK_REWARD', 'CONFIDENCE', 'RATIONALE'
+        'TREND', 'PATTERNS', 'LEVELS', 'VOLUME', 'MOMENTUM', 'INDICATORS', 'CONCLUSION', 
+        'ACTION', 'ENTRY_ZONE', 'STOP_LOSS', 'TARGET_1', 'TARGET_2', 'RISK_REWARD', 'CONFIDENCE', 'RATIONALE'
     ];
-
     const sections = {};
-    let normalizedText = "\n" + currentAnalysis.replace(/\*\*/g, '');
+    
+    // Clean artifacts like "**" bold markers and "-- TRADE TICKET --" separators
+    let text = "\n" + currentAnalysis.replace(/\*\*/g, '').replace(/-- TRADE TICKET --/g, '');
 
     rawKeys.forEach(key => {
+      // Regex finds the content after "KEY:" until the next newline followed by a "KEY:"
       const regex = new RegExp(`(?:^|\\n)\\s*${key}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*[A-Z_]{3,}\\s*:|$)`, 'i');
-      const match = normalizedText.match(regex);
-      if (match && match[1]) {
-        sections[key] = match[1].trim();
-      }
+      const match = text.match(regex);
+      if (match) sections[key] = match[1].trim();
     });
-
     return sections;
   }, [currentAnalysis]);
 
-  // --- RENDER HELPERS ---
+  // --- 4. RENDER HELPERS ---
   const getTrendInfo = () => {
     const trend = parsedAnalysis?.TREND?.toLowerCase() || '';
-    if (trend.includes('uptrend') || trend.includes('bullish')) return { Icon: FaArrowUp, color: 'var(--color-success)', text: 'Bullish Trend' };
-    if (trend.includes('downtrend') || trend.includes('bearish')) return { Icon: FaArrowDown, color: 'var(--color-danger)', text: 'Bearish Trend' };
+    if (trend.includes('uptrend') || trend.includes('bullish')) 
+        return { Icon: FaArrowUp, color: 'var(--color-success)', text: 'Bullish Trend' };
+    if (trend.includes('downtrend') || trend.includes('bearish')) 
+        return { Icon: FaArrowDown, color: 'var(--color-danger)', text: 'Bearish Trend' };
     return { Icon: FaExchangeAlt, color: 'var(--color-text-secondary)', text: 'Sideways / Range' };
   };
 
   const action = parsedAnalysis?.ACTION ? parsedAnalysis.ACTION.toUpperCase() : 'WAIT';
   const { Icon: TrendIcon, color: trendColor, text: trendText } = getTrendInfo();
 
-  // --- ERROR CHECK ---
+  // Logic to show/hide states
   const isBackendError = parsedAnalysis?.TREND && parsedAnalysis.TREND.includes('Error');
-  const isMissingData = !parsedAnalysis || Object.keys(parsedAnalysis).length < 2; 
-  const showRefreshButton = !isUpdating && (errorMessage || isBackendError || isMissingData);
+  const showRefreshButton = !isUpdating && (errorMessage || isBackendError);
   const showContent = parsedAnalysis && !isBackendError && !showRefreshButton && !isUpdating;
 
   return (
     <div style={{ position: 'relative' }}>
       
-      {/* Timeframe Selector (Chart Removed) */}
+      {/* Timeframe Selector */}
       <TimeframeBar>
         <TimeframeButton 
             active={activeTimeframe === 'Image'} 
-            onClick={() => handleTimeframeChange('Image')}
+            onClick={() => handleTimeframeChange('Image')} 
             disabled={isUpdating}
         >
-            <FaGem style={{marginRight:'5px'}}/> Original Image
+            <FaGem /> Original Image
         </TimeframeButton>
         {timeframes.map(tf => (
             <TimeframeButton 
                 key={tf} 
                 active={activeTimeframe === tf} 
-                onClick={() => handleTimeframeChange(tf)}
+                onClick={() => handleTimeframeChange(tf)} 
                 disabled={isUpdating}
             >
                 {tf.toUpperCase()}
@@ -489,44 +505,40 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
         ))}
       </TimeframeBar>
 
-      {/* Loading State */}
+      {/* State 1: Loading */}
       {isUpdating ? (
         <ScannerContainer>
             <ScannerLine />
             <ProcessingIcon />
             <ProcessingText>SYSTEM ANALYST INITIALIZING</ProcessingText>
             <ProcessingSubtext>
-                Scanning {activeTimeframe === 'Image' ? 'Chart' : activeTimeframe} Market Structure...
+                Scanning {activeTimeframe === 'Image' ? 'Chart Image' : `${activeTimeframe.toUpperCase()} Data`}...
             </ProcessingSubtext>
         </ScannerContainer>
       ) : showRefreshButton ? (
-        /* Error/Refresh State */
+        /* State 2: Error / Retry */
         <Card>
             <ErrorStateContainer>
                 <FaExclamationTriangle style={{fontSize: '3rem', color: 'var(--color-text-secondary)', marginBottom: '1rem'}} />
                 <h3 style={{color: 'var(--color-text-primary)', marginBottom: '0.5rem'}}>Analysis Unavailable</h3>
-                <p style={{color: 'var(--color-text-secondary)', maxWidth: '400px'}}>
-                    The AI signal was interrupted or returned incomplete data.
-                </p>
-                <RefreshButton onClick={handleRetry}>
-                    <FaRedo /> Regenerate Analysis
-                </RefreshButton>
+                <RefreshButton onClick={handleRetry}><FaRedo /> Regenerate Analysis</RefreshButton>
             </ErrorStateContainer>
         </Card>
       ) : showContent ? (
-        /* Content State */
+        /* State 3: Analysis Content */
         <AnalysisGrid $isUpdating={isUpdating}>
             
+            {/* Trend Verdict */}
             <VerdictCard color={trendColor}>
               <TrendDisplay color={trendColor}>
-                  <TrendIcon />
-                  {trendText}
+                  <TrendIcon /> {trendText}
               </TrendDisplay>
               <ConclusionText>
-                  "{parsedAnalysis?.CONCLUSION || parsedAnalysis?.TREND || 'Analysis summary unavailable.'}"
+                  "{parsedAnalysis?.CONCLUSION || parsedAnalysis?.RATIONALE}"
               </ConclusionText>
             </VerdictCard>
 
+            {/* Trade Ticket (Only if Action is clear) */}
             {parsedAnalysis?.ENTRY_ZONE && (
                 <TradeTicket action={action}>
                 <TicketHeader>
@@ -560,12 +572,13 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
                 </TradeMetricGrid>
 
                 <RationaleBox>
-                    <strong style={{color: 'var(--color-primary)', display: 'block', marginBottom: '0.5rem'}}>Trade Rationale:</strong>
-                    <span style={{color: 'var(--color-text-secondary)', lineHeight: '1.6'}}>{parsedAnalysis.RATIONALE}</span>
+                    <strong style={{color: 'var(--color-primary)', display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', textTransform: 'uppercase'}}>Trade Rationale</strong>
+                    <span style={{color: 'var(--color-text-secondary)', lineHeight: '1.6', fontSize: '0.95rem'}}>{parsedAnalysis.RATIONALE}</span>
                 </RationaleBox>
                 </TradeTicket>
             )}
             
+            {/* Deep Dive Grid */}
             <DetailsGrid>
               <InfoCard>
                   <SectionTitle><FaLayerGroup /> Key Patterns</SectionTitle>
@@ -574,7 +587,7 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
                       parsedAnalysis.PATTERNS.split('\n').map((item, index) => (
                         <InfoListItem key={index}><FaChartLine /> {item.replace(/^- /, '')}</InfoListItem>
                       ))
-                  ) : <p style={{color: 'var(--color-text-secondary)'}}>No specific chart patterns detected.</p>}
+                  ) : <p style={{color: 'var(--color-text-secondary)', fontStyle: 'italic'}}>No specific chart patterns detected.</p>}
                   </InfoList>
               </InfoCard>
 
@@ -587,17 +600,9 @@ const ChartAnalysis = ({ analysisData: initialAnalysisData }) => {
                   {parsedAnalysis?.MOMENTUM && (
                       <InfoListItem><strong><FaTachometerAlt /> Momentum:</strong> {parsedAnalysis.MOMENTUM}</InfoListItem>
                   )}
-                  <InfoListItem><strong><FaBullseye /> Indicators:</strong> {parsedAnalysis?.INDICATORS || 'Neutral'}</InfoListItem>
                   </InfoList>
               </InfoCard>
             </DetailsGrid>
-
-            <InfoCard>
-              <SectionTitle><FaGem /> Key Price Levels</SectionTitle>
-              <ContentText>
-                  {parsedAnalysis?.LEVELS || 'Support and resistance levels not clearly identified.'}
-              </ContentText>
-            </InfoCard>
         </AnalysisGrid>
       ) : null}
     </div>
