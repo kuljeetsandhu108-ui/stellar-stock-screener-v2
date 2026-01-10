@@ -44,7 +44,7 @@ def get_ticker_from_query(query: str):
     """Identifies the stock ticker from a natural language query."""
     try:
         configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         prompt = f"""Analyze the following user query: "{query}". Return ONLY the official stock ticker symbol (e.g., "AAPL" for Apple, "RELIANCE.NS" for Reliance Industries). If a clear ticker cannot be found, return the text "NOT_FOUND"."""
         response = model.generate_content(prompt)
         return response.text.strip().replace("`", "").upper()
@@ -56,7 +56,7 @@ def generate_swot_analysis(company_name: str, description: str, news_headlines: 
     """Generates a SWOT analysis."""
     try:
         configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         news_string = "\n- ".join(news_headlines)
         prompt = f"""Generate a 4-section SWOT analysis for {company_name}. Use the following data for context. Structure the output with clear headers for Strengths, Weaknesses, Opportunities, and Threats, each followed by bullet points.\n\n**Company Description:**\n{description}\n\n**Recent News Headlines:**\n- {news_string}"""
         response = model.generate_content(prompt)
@@ -69,7 +69,7 @@ def generate_forecast_analysis(company_name: str, analyst_ratings: list, price_t
     """Generates a summary of analyst forecasts with correct currency."""
     try:
         configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         ratings_summary = "\n".join([f"- {r.get('ratingStrongBuy', 0)} Strong Buy, {r.get('ratingBuy', 0)} Buy, {r.get('ratingHold', 0)} Hold, {r.get('ratingSell', 0)} Sell, {r.get('ratingStrongSell', 0)} Strong Sell" for r in analyst_ratings[:1]])
         news_string = "\n- ".join(news_headlines)
@@ -117,7 +117,7 @@ def generate_investment_philosophy_assessment(company_name: str, key_metrics: di
     try:
         # --- PLAN A: ASK AI ---
         configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         data_summary = (
             f"- Price to Earnings (P/E): {pe_str}\n"
@@ -183,7 +183,7 @@ def generate_canslim_assessment(company_name: str, quote: dict, quarterly_earnin
     """Generates a CANSLIM checklist."""
     try:
         configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         c_growth, a_growth, is_new_high, is_high_demand = "N/A", "N/A", "No", "No"
         if len(quarterly_earnings) > 4:
@@ -215,7 +215,7 @@ def generate_fundamental_conclusion(company_name: str, piotroski_data: dict, gra
     """Performs a meta-analysis summary."""
     try:
         configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         p_score = piotroski_data.get('score', 'N/A') if piotroski_data else 'N/A'
         g_score = graham_data.get('score', 'N/A') if graham_data else 'N/A'
@@ -239,7 +239,7 @@ def find_peer_tickers_by_industry(company_name: str, sector: str, industry: str,
     """Uses Gemini AI to find competitor tickers."""
     try:
         configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         prompt = f"""Act as an expert financial data analyst. The company is {company_name}, in the "{industry}" industry within the "{sector}" sector in {country}. Identify top 5 publicly traded competitors. Return comma-separated tickers ONLY. US: AAPL, MSFT. India: RELIANCE.NS, TCS.NS."""
         response = model.generate_content(prompt)
         peers_str = response.text.strip().replace(" ", "").upper()
@@ -255,7 +255,7 @@ def identify_ticker_from_image(image_bytes: bytes):
     """Identifies ticker from chart image, supports Stocks & Indices."""
     try:
         configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         prompt = """
         Analyze this financial chart image. Identify the symbol/ticker.
@@ -288,7 +288,7 @@ def analyze_chart_technicals_from_image(image_bytes: bytes):
     """
     try:
         configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         image_part = {"mime_type": "image/jpeg", "data": image_bytes}
         
         prompt = """
@@ -331,7 +331,7 @@ def generate_timeframe_analysis(symbol: str, timeframe: str, technical_data: dic
     """
     try:
         configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
 
         # Safe extraction of data with defaults
         rsi = technical_data.get('rsi', 'N/A')
