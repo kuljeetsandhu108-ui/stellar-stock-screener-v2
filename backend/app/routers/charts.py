@@ -19,14 +19,15 @@ TIMEFRAMES_TO_ANALYZE = ["5M", "1H", "4H", "1D"]
 async def resolve_symbol_with_eodhd(ai_text: str, context_type: str):
     """
     Maps AI text to a valid EODHD Ticker. 
-    PRIORITY: NSE (India) > US > Crypto.
-    This fixes the 'Production Freeze' by ensuring a valid suffix exists.
+    PRIORITY: Indices -> Crypto -> NSE (India) -> US.
+    High-End Logic to handle variations like 'Nifty', 'BTCUSDT', 'Reliance'.
     """
     symbol = ai_text.strip().upper()
+    clean_sym = symbol.replace("/", "").replace("-", "").replace(" ", "")
     
-    # 1. Handle Indices (Hardcoded for stability)
+    # --- 1. Handle INDICES (Hardcoded for stability) ---
     # AI often just says "Nifty" or "BankNifty", we map to EODHD Index tickers
-    if context_type == 'index' or '^' in symbol or 'NIFTY' in symbol or 'SENSEX' in symbol:
+    if context_type == 'index' or '^' in symbol or 'NIFTY' in symbol or 'SENSEX' in symbol or 'SPX' in symbol:
         if "BANK" in symbol: return "NSEBANK.INDX"
         if "NIFTY" in symbol: return "NSEI.INDX"
         if "SENSEX" in symbol: return "BSESN.INDX"
@@ -34,26 +35,47 @@ async def resolve_symbol_with_eodhd(ai_text: str, context_type: str):
         if "NDX" in symbol or "NASDAQ" in symbol: return "NDX.INDX"
         if "DOW" in symbol or "DJI" in symbol: return "DJI.INDX"
         if "VIX" in symbol: return "INDIAVIX.INDX"
+        if "DAX" in symbol: return "GDAXI.INDX"
+        if "NIKKEI" in symbol: return "N225.INDX"
 
-    # 2. Handle Crypto
-    if "BTC" in symbol: return "BTC-USD.CC"
-    if "ETH" in symbol: return "ETH-USD.CC"
+    # --- 2. Handle CRYPTO (Expanded High-End Support) ---
+    # Smart Map for Top Coins to EODHD's .CC exchange
+    crypto_map = {
+        "BTC": "BTC-USD.CC", "BITCOIN": "BTC-USD.CC",
+        "ETH": "ETH-USD.CC", "ETHEREUM": "ETH-USD.CC",
+        "SOL": "SOL-USD.CC", "SOLANA": "SOL-USD.CC",
+        "XRP": "XRP-USD.CC",
+        "BNB": "BNB-USD.CC",
+        "DOGE": "DOGE-USD.CC",
+        "ADA": "ADA-USD.CC", "CARDANO": "ADA-USD.CC",
+        "AVAX": "AVAX-USD.CC",
+        "MATIC": "MATIC-USD.CC",
+        "LTC": "LTC-USD.CC",
+        "DOT": "DOT-USD.CC",
+        "LINK": "LINK-USD.CC",
+        "SHIB": "SHIB-USD.CC"
+    }
 
-    # 3. Handle Stocks (Explicit Suffixes)
+    # Check for direct matches or common variations (e.g., BTCUSDT, ETH/USD)
+    for key, ticker in crypto_map.items():
+        # Match 'BTC', 'BTCUSD', 'BTCUSDT'
+        if clean_sym == key or clean_sym == f"{key}USD" or clean_sym == f"{key}USDT":
+            return ticker
+
+    # --- 3. Handle STOCKS (Explicit Suffixes) ---
     # If AI read the suffix from the image, convert to EODHD format
     if ".NS" in symbol: return symbol.replace(".NS", ".NSE")
     if ".BO" in symbol: return symbol.replace(".BO", ".BSE")
     if ".US" in symbol: return symbol 
     if "." in symbol: return symbol # Trust other existing suffixes
 
-    # 4. Suffix Discovery (The Robust Fallback)
-    # If symbol is "KOTAKBANK", we check if it exists in India first.
+    # --- 4. Suffix Discovery (The Robust Fallback) ---
+    # If symbol is "KOTAKBANK" or "AAPL", check India first, then US.
     candidates = [f"{symbol}.NSE", f"{symbol}.US"]
     
     for cand in candidates:
         try:
             # Short timeout check to see if symbol exists on EODHD
-            # We use get_live_price as it's the fastest way to check existence
             check = await asyncio.to_thread(eodhd_service.get_live_price, cand)
             if check and 'price' in check:
                 return cand
@@ -61,8 +83,6 @@ async def resolve_symbol_with_eodhd(ai_text: str, context_type: str):
             continue
             
     # 5. FINAL SAFETY NET (Priority: India)
-    # If API check fails (e.g. network latency on Railway), assume India (.NSE).
-    # This prevents the app from breaking by returning a "naked" symbol.
     return f"{symbol}.NSE"
 
 # ==========================================
@@ -75,11 +95,11 @@ async def analyze_chart_image(
     analysis_type: str = Form("stock")
 ):
     """
-    1. AI identifies symbol.
+    1. AI identifies symbol (Stock, Index, or Crypto).
     2. Backend resolves to valid EODHD ticker.
     3. Backend fetches multi-timeframe data & math.
     4. AI analyzes visuals.
-    5. Returns normalized symbol to Frontend for seamless redirect.
+    5. Returns normalized symbol to Frontend.
     """
     if not chart_image.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image.")
@@ -96,8 +116,7 @@ async def analyze_chart_image(
             "technical_data": None
         }
     
-    # --- Step 2: Resolve & Normalize Symbol ---
-    # This ensures we have a valid EODHD ticker (e.g., "KOTAKBANK.NSE")
+    # --- Step 2: Resolve & Normalize Symbol (Crypto Aware) ---
     final_symbol = await resolve_symbol_with_eodhd(raw_symbol, analysis_type)
     
     # --- Step 3: Parallel Execution (Visuals + Data) ---
@@ -130,21 +149,20 @@ async def analyze_chart_image(
     technical_data = {tf: data for tf, data in tech_results if data is not None}
 
     # --- Step 4: Final Response Formatting ---
-    # CRITICAL: Convert EODHD format (.NSE) back to Frontend format (.NS)
-    # This ensures the React Router redirects to a URL that StockHeader.js understands.
-    
+    # Convert EODHD format back to Frontend format for routing
     frontend_symbol = final_symbol
+    
+    # India Mapping
     if final_symbol.endswith(".NSE"):
         frontend_symbol = final_symbol.replace(".NSE", ".NS")
     elif final_symbol.endswith(".BSE"):
         frontend_symbol = final_symbol.replace(".BSE", ".BO")
     
-    # For Indices, we can keep the mapped symbol or use the common name logic in frontend.
-    # Usually sending the EODHD index symbol (NSEI.INDX) is fine if index pages handle it,
-    # but strictly for stocks, .NS is preferred.
+    # Crypto Mapping (Keep as is, Frontend chart handles it if symbol is passed correctly)
+    # The CustomChart component and Header will adapt based on the symbol string.
 
     return {
-        "identified_symbol": frontend_symbol, # This triggers the correct page load
+        "identified_symbol": frontend_symbol,
         "analysis_data": analysis_text,
         "technical_data": technical_data
     }

@@ -1,21 +1,16 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
 
-// --- COMPONENT IMPORTS ---
-// Header & Navigation
+// --- COMPONENTS ---
 import StockHeader from '../components/Header/StockHeader';
 import { Tabs, TabPanel } from '../components/common/Tabs/Tabs';
-
-// Overview Components
 import CustomChart from '../components/Chart/CustomChart';
 import SwotAnalysis from '../components/SWOT/SwotAnalysis';
 import OverallSentiment from '../components/Sentiment/OverallSentiment';
 import PriceLevels from '../components/Overview/PriceLevels';
 import NewsList from '../components/News/NewsList';
-
-// Deep Dive Components
 import ChartAnalysis from '../components/StockDetailPage/ChartAnalysis';
 import Fundamentals from '../components/Fundamentals/Fundamentals';
 import Financials from '../components/Financials/Financials';
@@ -23,70 +18,65 @@ import Forecasts from '../components/Forecasts/Forecasts';
 import PeersComparison from '../components/Peers/PeersComparison';
 import Shareholding from '../components/Shareholding/Shareholding';
 import Technicals from '../components/Technicals/Technicals';
-
 import { FaArrowLeft } from 'react-icons/fa';
 
-// --- STYLED COMPONENTS ---
-
+// --- ANIMATIONS ---
 const fadeIn = keyframes`
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 `;
 
-const StockDetailPageContainer = styled.div`
+// --- STYLED COMPONENTS ---
+const PageContainer = styled.div`
   padding: 2rem 3rem;
   max-width: 1800px;
   margin: 0 auto;
-  animation: ${fadeIn} 0.5s ease-in;
+  animation: ${fadeIn} 0.4s ease-out;
   
-  /* Mobile Optimization */
   @media (max-width: 768px) {
     padding: 1rem;
   }
 `;
 
-const TabContentGrid = styled.div`
+const TabGrid = styled.div`
   display: grid;
-  /* Desktop: 2/3 Chart+SWOT, 1/3 Dashboard+News */
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: 2fr 1fr; /* 66% Chart, 33% Data */
   gap: 2rem;
 
-  /* Mobile: Stack vertically */
   @media (max-width: 1200px) {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr; /* Stack on smaller screens */
   }
 `;
 
-const LeftColumn = styled.div`
+const LeftCol = styled.div`
   display: flex;
   flex-direction: column;
   gap: 2rem;
 `;
 
-const RightColumn = styled.div`
+const RightCol = styled.div`
   display: flex;
   flex-direction: column;
   gap: 2rem;
 `;
 
-const LoadingContainer = styled.div`
+const LoadingBox = styled.div`
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 90vh;
+  height: 80vh;
   color: var(--color-primary);
-  font-size: 1.5rem;
+  font-size: 1.2rem;
   font-weight: 500;
   gap: 1rem;
 `;
 
-const ErrorContainer = styled(LoadingContainer)`
+const ErrorBox = styled(LoadingBox)`
   color: var(--color-danger);
-  text-align: center;
 `;
 
-const BackButton = styled.button`
+const BackBtn = styled.button`
   background: none;
   border: 1px solid var(--color-border);
   color: var(--color-text-secondary);
@@ -107,294 +97,224 @@ const BackButton = styled.button`
   }
 `;
 
-// --- MAIN COMPONENT ---
-
 const StockDetailPage = () => {
   const { symbol } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  
-  // Check if we arrived here via the Chart Upload feature
+
+  // State from Chart Upload (if any)
   const chartAnalysisData = location.state?.chartAnalysis;
   const chartTechnicalData = location.state?.technicalData;
-  
-  // --- CORE DATA STATE ---
-  const [stockData, setStockData] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+
+  // Data States
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // --- AI ANALYSIS STATES ---
-  const [swotAnalysis, setSwotAnalysis] = useState('');
-  const [isLoadingSwot, setIsLoadingSwot] = useState(true);
+  // AI States
+  const [swot, setSwot] = useState('');
+  const [loadingSwot, setLoadingSwot] = useState(true);
   
-  const [philosophyAssessment, setPhilosophyAssessment] = useState('');
-  const [canslimAssessment, setCanslimAssessment] = useState('');
+  const [philosophy, setPhilosophy] = useState('');
+  const [canslim, setCanslim] = useState('');
   const [conclusion, setConclusion] = useState('');
   
-  const [isLoadingPhilosophy, setIsLoadingPhilosophy] = useState(true);
-  const [isLoadingCanslim, setIsLoadingCanslim] = useState(true);
-  const [isLoadingConclusion, setIsLoadingConclusion] = useState(true);
+  const [loadingFundAI, setLoadingFundAI] = useState(true);
+
+  // --- SMART ASSET DETECTION ---
+  const isCrypto = useMemo(() => symbol.includes('.CC') || symbol.includes('BTC') || symbol.includes('ETH') || (symbol.includes('USD') && !symbol.includes('.')), [symbol]);
+  const isIndex = useMemo(() => symbol.includes('.INDX') || symbol.includes('^'), [symbol]);
+  const isCommodity = useMemo(() => symbol.includes('GOLD') || symbol.includes('OIL') || symbol.includes('XAU') || symbol.includes('USO'), [symbol]);
+  
+  // "Traditional Stock" means it has Balance Sheets, Earnings, etc.
+  const isStock = !isCrypto && !isIndex && !isCommodity;
 
   // --- 1. FETCH MASTER DATA ---
   useEffect(() => {
-    const fetchAllData = async () => {
-      setIsLoading(true);
+    const fetchData = async () => {
+      setLoading(true);
       setError(null);
-      // Reset AI states when switching stocks
-      setSwotAnalysis(''); 
-      setPhilosophyAssessment(''); 
-      setCanslimAssessment(''); 
-      setConclusion('');
+      // Reset AI
+      setSwot(''); setPhilosophy(''); setCanslim(''); setConclusion('');
       
       try {
-        // Call the Master Endpoint
-        const response = await axios.get(`/api/stocks/${symbol}/all`);
-        setStockData(response.data);
+        // One call to rule them all (Using our optimized backend router)
+        const res = await axios.get(`/api/stocks/${symbol}/all`);
+        setData(res.data);
       } catch (err) {
-        console.error("Failed to fetch stock data:", err);
-        setError(`Could not retrieve data for ${symbol}. The ticker might be invalid or the data source is momentarily down.`);
+        console.error("Fetch Error:", err);
+        setError("Unable to retrieve market data. Please try again.");
       } finally {
-        setIsLoading(false);
+        setLoading(false);
       }
     };
-    fetchAllData();
+    fetchData();
   }, [symbol]);
 
-  // --- 2. REUSABLE SWOT FETCH (For Refresh Button) ---
-  const fetchSwotAnalysis = useCallback(() => {
-      if (!stockData?.profile?.companyName) { 
-          setIsLoadingSwot(false); 
-          return; 
-      }
-      setIsLoadingSwot(true);
+  // --- 2. AI HANDLERS (Lazy Loading) ---
+  
+  // SWOT: Runs for ALL asset types (Crypto, Stocks, Indices)
+  const fetchSwot = useCallback(() => {
+      if (!data?.profile?.companyName) { setLoadingSwot(false); return; }
+      setLoadingSwot(true);
+      
       const payload = { 
-          companyName: stockData.profile.companyName, 
-          description: stockData.profile.description || "No description available."
+          companyName: data.profile.companyName, 
+          description: data.profile.description || "Financial Asset"
       };
+      
       axios.post(`/api/stocks/${symbol}/swot`, payload)
-        .then(res => setSwotAnalysis(res.data.swot_analysis))
-        .catch(() => setSwotAnalysis("Could not generate SWOT analysis. Please try regenerating."))
-        .finally(() => setIsLoadingSwot(false));
-  }, [stockData, symbol]);
+        .then(res => setSwot(res.data.swot_analysis))
+        .catch(() => setSwot("Analysis currently unavailable."))
+        .finally(() => setLoadingSwot(false));
+  }, [data, symbol]);
 
-  // --- 3. TRIGGER AI ANALYSES (Lazy Loading) ---
+  // FUNDAMENTAL AI: Only runs for STOCKS (Saves Server Load)
   useEffect(() => {
-    if (!stockData) return;
+    if (!data) return;
 
-    // A. Trigger SWOT
-    fetchSwotAnalysis();
+    // Trigger SWOT immediately
+    fetchSwot();
 
-    // B. Trigger Fundamentals AI (Philosophy & CANSLIM)
-    const fetchFundamentalAI = () => {
-        // Philosophy Check
-        if (stockData.profile && stockData.key_metrics) {
-            setIsLoadingPhilosophy(true);
-            const payload = { companyName: stockData.profile.companyName, keyMetrics: stockData.key_metrics };
-            axios.post(`/api/stocks/${symbol}/fundamental-analysis`, payload)
-                .then(res => setPhilosophyAssessment(res.data.assessment))
-                .catch(() => setPhilosophyAssessment("Could not generate assessment."))
-                .finally(() => setIsLoadingPhilosophy(false));
-        } else { setIsLoadingPhilosophy(false); }
+    if (isStock) {
+        setLoadingFundAI(true);
+        
+        // Parallel requests for speed
+        const req1 = axios.post(`/api/stocks/${symbol}/fundamental-analysis`, { 
+            companyName: data.profile.companyName, 
+            keyMetrics: data.key_metrics 
+        }).then(r => setPhilosophy(r.data.assessment)).catch(() => setPhilosophy("N/A"));
 
-        // CANSLIM Check
-        if (stockData.profile && stockData.quote && stockData.quarterly_income_statements) {
-             setIsLoadingCanslim(true);
-             const payload = {
-                companyName: stockData.profile.companyName, 
-                quote: stockData.quote, 
-                quarterlyEarnings: stockData.quarterly_income_statements,
-                annualEarnings: stockData.annual_revenue_and_profit || [], 
-                institutionalHolders: stockData.shareholding ? stockData.shareholding.length : 0,
-             };
-             axios.post(`/api/stocks/${symbol}/canslim-analysis`, payload)
-                .then(res => setCanslimAssessment(res.data.assessment))
-                .catch(() => setCanslimAssessment("Could not generate CANSLIM assessment."))
-                .finally(() => setIsLoadingCanslim(false));
-        } else { setIsLoadingCanslim(false); }
-    };
+        const req2 = axios.post(`/api/stocks/${symbol}/canslim-analysis`, {
+            companyName: data.profile.companyName, 
+            quote: data.quote, 
+            quarterlyEarnings: data.quarterly_income_statements,
+            annualEarnings: data.annual_revenue_and_profit, 
+            institutionalHolders: data.shareholding ? data.shareholding.length : 0
+        }).then(r => setCanslim(r.data.assessment)).catch(() => setCanslim("N/A"));
 
-    // C. Trigger Conclusion (Dependent on basic data)
-    const fetchConclusion = () => {
-        if (!stockData.piotroski_f_score || !stockData.graham_scan || !stockData.keyStats) { 
-            setIsLoadingConclusion(false); 
-            return; 
-        }
-        setIsLoadingConclusion(true);
-        const payload = {
-            companyName: stockData.profile.companyName, 
-            piotroskiData: stockData.piotroski_f_score,
-            grahamData: stockData.graham_scan, 
-            darvasData: stockData.darvas_scan,
-            canslimAssessment: "Generated", // Placeholder signal
-            philosophyAssessment: "Generated", // Placeholder signal
-            keyStats: stockData.keyStats,
-            newsHeadlines: stockData.news ? stockData.news.slice(0, 5).map(n => n.title) : []
-        };
-        axios.post(`/api/stocks/${symbol}/conclusion-analysis`, payload)
-            .then(res => setConclusion(res.data.conclusion))
-            .catch(() => setConclusion("GRADE: N/A\nTHESIS: Could not generate conclusion."))
-            .finally(() => setIsLoadingConclusion(false));
-    };
+        const req3 = axios.post(`/api/stocks/${symbol}/conclusion-analysis`, {
+            companyName: data.profile.companyName, 
+            piotroskiData: data.piotroski_f_score,
+            grahamData: data.graham_scan, 
+            darvasData: data.darvas_scan,
+            canslimAssessment: "Generated", 
+            philosophyAssessment: "Generated",
+            keyStats: data.keyStats,
+            newsHeadlines: data.news ? data.news.slice(0, 5).map(n => n.title) : []
+        }).then(r => setConclusion(r.data.conclusion)).catch(() => setConclusion("N/A"));
 
-    fetchFundamentalAI();
-    // Delay conclusion slightly to ensure system stability
-    setTimeout(fetchConclusion, 1500);
+        Promise.allSettled([req1, req2, req3]).finally(() => setLoadingFundAI(false));
+    } else {
+        setLoadingFundAI(false); // No fundamental AI for Crypto/Indices
+    }
+  }, [data, symbol, isStock, fetchSwot]);
 
-  }, [stockData, symbol, fetchSwotAnalysis]);
+  // --- RENDER ---
 
-  // --- RENDER LOGIC ---
-
-  if (isLoading) {
-    return (
-      <LoadingContainer>
-        <div className="spinner" /> 
-        <p>Loading Financial Universe for {symbol}...</p>
-      </LoadingContainer>
-    );
-  }
-
-  if (error) {
-    return (
-      <ErrorContainer>
-        <h2>Connection Error</h2>
-        <p>{error}</p>
-        <BackButton style={{ marginTop: '2rem' }} onClick={() => navigate('/')}>
-          <FaArrowLeft /> Return to Home
-        </BackButton>
-      </ErrorContainer>
-    );
-  }
-
-  if (!stockData) return null;
+  if (loading) return <LoadingBox><div className="spinner" /><p>Accessing Global Data Feeds...</p></LoadingBox>;
+  if (error) return <ErrorBox><h2>Connection Interrupted</h2><p>{error}</p><BackBtn onClick={() => navigate('/')}><FaArrowLeft /> Return Home</BackBtn></ErrorBox>;
+  if (!data) return null;
 
   return (
-    <StockDetailPageContainer>
-      <BackButton onClick={() => navigate('/')}>
-        <FaArrowLeft /> Back to Search
-      </BackButton>
+    <PageContainer>
+      <BackBtn onClick={() => navigate('/')}><FaArrowLeft /> Back to Command Center</BackBtn>
       
-      <StockHeader profile={stockData.profile} quote={stockData.quote} />
+      {/* Dynamic Header (Live Pulse) */}
+      <StockHeader profile={data.profile} quote={data.quote} />
       
       <Tabs>
         
-        {/* --- TAB 1: CHART AI (Conditional) --- */}
+        {/* TAB 1: CHART AI (Conditional) */}
         {chartAnalysisData && (
           <TabPanel label="Chart Insight">
-            {/* Shows the custom chart + AI Analysis */}
             <ChartAnalysis analysisData={chartAnalysisData} technicalData={chartTechnicalData} />
           </TabPanel>
         )}
 
-        {/* --- TAB 2: OVERVIEW (The Cockpit) --- */}
+        {/* TAB 2: OVERVIEW (Universal) */}
         <TabPanel label="Overview">
-          <TabContentGrid>
-            <LeftColumn>
-              {/* High-Performance Custom Chart */}
+          <TabGrid>
+            <LeftCol>
+              {/* High-Performance Chart with Timezone Fix */}
               <CustomChart symbol={symbol} />
-              
-              {/* AI SWOT with Regenerate Button */}
-              <SwotAnalysis
-                analysisText={swotAnalysis}
-                isLoading={isLoadingSwot}
-                onRegenerate={fetchSwotAnalysis}
-              />
-            </LeftColumn>
-            
-            <RightColumn>
-              {/* Sentiment Dashboard */}
-              <OverallSentiment sentimentData={stockData.overall_sentiment} />
-              
-              {/* Cyber-Ladder Price Levels */}
-              <PriceLevels 
-                pivotPoints={stockData.pivot_points} 
-                quote={stockData.quote}
-                profile={stockData.profile}
-              />
-
-              {/* Latest News */}
-              <NewsList newsArticles={stockData.news} />
-            </RightColumn>
-          </TabContentGrid>
+              {/* Smart SWOT with Regenerate */}
+              <SwotAnalysis analysisText={swot} isLoading={loadingSwot} onRegenerate={fetchSwot} />
+            </LeftCol>
+            <RightCol>
+              {/* Sentiment only for Stocks (Crypto uses Tech Forecast) */}
+              {isStock && <OverallSentiment sentimentData={data.overall_sentiment} />}
+              <PriceLevels pivotPoints={data.pivot_points} quote={data.quote} profile={data.profile} />
+              <NewsList newsArticles={data.news} />
+            </RightCol>
+          </TabGrid>
         </TabPanel>
         
-        {/* --- TAB 3: FUNDAMENTALS --- */}
-        <TabPanel label="Fundamentals">
-            <Fundamentals
-                symbol={symbol}
-                profile={stockData.profile}
-                quote={stockData.quote}
-                keyMetrics={stockData.key_metrics}
-                piotroskiData={stockData.piotroski_f_score}
-                darvasScanData={stockData.darvas_scan}
-                grahamScanData={stockData.graham_scan}
-                quarterlyEarnings={stockData.quarterly_income_statements}
-                annualEarnings={stockData.annual_revenue_and_profit}
-                shareholding={stockData.shareholding}
-                delay={300}
-                philosophyAssessment={philosophyAssessment}
-                canslimAssessment={canslimAssessment}
-                isLoadingPhilosophy={isLoadingPhilosophy}
-                isLoadingCanslim={isLoadingCanslim}
-                isLoadingConclusion={isLoadingConclusion}
-                conclusion={conclusion}
+        {/* TAB 3: FUNDAMENTALS (Stocks Only) */}
+        {isStock && (
+            <TabPanel label="Fundamentals">
+                <Fundamentals
+                    symbol={symbol} profile={data.profile} quote={data.quote} keyMetrics={data.key_metrics}
+                    piotroskiData={data.piotroski_f_score} darvasScanData={data.darvas_scan}
+                    grahamScanData={data.graham_scan} quarterlyEarnings={data.quarterly_income_statements}
+                    annualEarnings={data.annual_revenue_and_profit} shareholding={data.shareholding}
+                    delay={0} 
+                    philosophyAssessment={philosophy} canslimAssessment={canslim} conclusion={conclusion}
+                    isLoadingPhilosophy={loadingFundAI} isLoadingCanslim={loadingFundAI} isLoadingConclusion={loadingFundAI}
+                />
+            </TabPanel>
+        )}
+
+        {/* TAB 4: FINANCIALS (Stocks Only) */}
+        {isStock && (
+          <TabPanel label="Financials">
+            <Financials 
+              profile={data.profile} keyStats={data.keyStats}
+              financialData={data.annual_revenue_and_profit} balanceSheetData={data.annual_balance_sheets}
+              annualCashFlow={data.annual_cash_flow_statements} quarterlyIncome={data.quarterly_income_statements}
+              quarterlyBalance={data.quarterly_balance_sheets} quarterlyCashFlow={data.quarterly_cash_flow_statements}
             />
-        </TabPanel>
-
-        {/* --- TAB 4: FINANCIALS --- */}
-        <TabPanel label="Financials">
-          <Financials 
-            profile={stockData.profile}
-            keyStats={stockData.keyStats}
-            financialData={stockData.annual_revenue_and_profit} 
-            balanceSheetData={stockData.annual_balance_sheets}
-            annualCashFlow={stockData.annual_cash_flow_statements}
-            quarterlyIncome={stockData.quarterly_income_statements}
-            quarterlyBalance={stockData.quarterly_balance_sheets}
-            quarterlyCashFlow={stockData.quarterly_cash_flow_statements}
-          />
-        </TabPanel>
+          </TabPanel>
+        )}
         
-        {/* --- TAB 5: FORECASTS --- */}
+        {/* TAB 5: FORECASTS (Universal - Auto Fallback) */}
         <TabPanel label="Forecasts">
             <Forecasts 
-                symbol={symbol}
-                quote={stockData.quote}
-                analystRatings={stockData.analyst_ratings}
-                priceTarget={stockData.price_target_consensus}
-                keyStats={stockData.keyStats}
-                news={stockData.news}
-                delay={200}
-                currency={stockData.profile?.currency} // Passes currency for AI
+                symbol={symbol} quote={data.quote} analystRatings={data.analyst_ratings}
+                priceTarget={data.price_target_consensus} keyStats={data.keyStats}
+                news={data.news} delay={0} currency={data.profile?.currency}
             />
         </TabPanel>
 
-        {/* --- TAB 6: PEERS --- */}
-        <TabPanel label="Peers">
-            <PeersComparison symbol={symbol} />
-        </TabPanel>
+        {/* TAB 6: PEERS (Stocks Only) */}
+        {isStock && (
+            <TabPanel label="Peers">
+                <PeersComparison symbol={symbol} />
+            </TabPanel>
+        )}
         
-        {/* --- TAB 7: SHAREHOLDING --- */}
-        <TabPanel label="Shareholding">
-            <Shareholding 
-                shareholdingData={stockData.shareholding}
-                historicalStatements={stockData.annual_revenue_and_profit}
-                shareholdingBreakdown={stockData.shareholding_breakdown}
-            />
-        </TabPanel>
+        {/* TAB 7: SHAREHOLDING (Stocks Only) */}
+        {isStock && (
+            <TabPanel label="Shareholding">
+                <Shareholding 
+                    shareholdingData={data.shareholding}
+                    historicalStatements={data.annual_revenue_and_profit}
+                    shareholdingBreakdown={data.shareholding_breakdown}
+                />
+            </TabPanel>
+        )}
         
-        {/* --- TAB 8: TECHNICALS --- */}
+        {/* TAB 8: TECHNICALS (Universal) */}
         <TabPanel label="Technicals">
             <Technicals 
-              analystRatings={stockData.analyst_ratings} 
-              technicalIndicators={stockData.technical_indicators}
-              movingAverages={stockData.moving_averages}
-              pivotPoints={stockData.pivot_points}
-              quote={stockData.quote} // Passes price for Signal calculation
+              analystRatings={data.analyst_ratings} technicalIndicators={data.technical_indicators}
+              movingAverages={data.moving_averages} pivotPoints={data.pivot_points}
+              quote={data.quote}
             />
         </TabPanel>
 
       </Tabs>
-    </StockDetailPageContainer>
+    </PageContainer>
   );
 };
 
