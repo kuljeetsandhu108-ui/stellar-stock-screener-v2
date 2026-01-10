@@ -1,7 +1,7 @@
 import asyncio
 import pandas as pd
 from fastapi import APIRouter, HTTPException
-# Importing our robust EODHD service and redis
+# Import robust services
 from ..services import eodhd_service, redis_service, technical_service
 
 router = APIRouter()
@@ -9,8 +9,6 @@ router = APIRouter()
 # ==========================================
 # 1. ROBUST INDEX CONFIGURATION
 # ==========================================
-# We map the Display Name to the specific EODHD Ticker (.INDX).
-# Stable ordering ensures the UI never "jumps" or blinks.
 
 INDICES_CONFIG = [
     # --- INDIA MARKETS (Priority) ---
@@ -18,6 +16,10 @@ INDICES_CONFIG = [
     {"name": "Bank Nifty",  "symbol": "NSEBANK.INDX", "currency": "INR"},
     {"name": "Sensex",      "symbol": "BSESN.INDX",   "currency": "INR"},
     {"name": "India VIX",   "symbol": "INDIAVIX.INDX","currency": "INR"},
+    
+    # --- COMMODITIES ---
+    {"name": "Gold (Global)", "symbol": "XAU-USD.CC", "currency": "USD"}, 
+    {"name": "Crude Oil",     "symbol": "USO.US",     "currency": "USD"}, 
     
     # --- US MARKETS ---
     {"name": "Dow Jones",   "symbol": "DJI.INDX",     "currency": "USD"},
@@ -28,115 +30,99 @@ INDICES_CONFIG = [
     {"name": "Nikkei 225",  "symbol": "N225.INDX",    "currency": "JPY"},
     {"name": "DAX",         "symbol": "GDAXI.INDX",   "currency": "EUR"},
     
-    # --- COMMODITIES & CRYPTO (Proxies/Direct) ---
-    {"name": "Gold",        "symbol": "GLD.US",       "currency": "USD"}, # ETF Proxy for stability
-    {"name": "Crude Oil",   "symbol": "USO.US",       "currency": "USD"}, # ETF Proxy for stability
+    # --- CRYPTO ---
     {"name": "Bitcoin",     "symbol": "BTC-USD.CC",   "currency": "USD"},
 ]
 
 # ==========================================
-# 2. HOMEPAGE TICKER (High-Speed Engine)
+# 2. HOMEPAGE TICKER (BULK + CRASH PROOF)
 # ==========================================
 
 @router.get("/summary")
 async def get_indices_summary():
     """
-    Fetches live data for all indices in PARALLEL.
-    Optimized for "No-Blink" performance using Redis + AsyncIO.
+    Fetches ALL indices in ONE single API call.
+    Includes robust 'NA' handling to prevent 500 Errors.
     """
-    cache_key = "indices_banner_live_v3"
+    cache_key = "indices_banner_v5_fix"
     
-    # 1. Try Cache First (Instant Response)
     cached = redis_service.get_cache(cache_key)
     if cached: return cached
 
-    # 2. Define Single Fetch Task
-    async def fetch_index(idx_config):
-        try:
-            # Use EODHD Live Price (Fastest Endpoint)
-            data = await asyncio.to_thread(eodhd_service.get_live_price, idx_config["symbol"])
-            
-            # Crash Guard: Ensure price exists
-            if not data or data.get('price') is None:
-                # If live fails, try getting yesterday's close from history as fallback
-                # This ensures the card doesn't disappear (causing layout shift/blink)
-                return {
-                    "name": idx_config["name"],
-                    "symbol": idx_config["symbol"],
-                    "price": 0.0,
-                    "change": 0.0,
-                    "percent_change": 0.0,
-                    "currency": idx_config["currency"],
-                    "is_stale": True
-                }
-
-            return {
-                "name": idx_config["name"],
-                "symbol": idx_config["symbol"],
-                "price": data.get('price'),
-                "change": data.get('change'),
-                "percent_change": data.get('changesPercentage'),
-                "currency": idx_config["currency"],
-                "is_stale": False
-            }
-        except:
-            # Absolute worst case: Return structure with zeros to maintain layout
-            return {
-                "name": idx_config["name"],
-                "symbol": idx_config["symbol"],
-                "price": 0.0, "change": 0.0, "percent_change": 0.0,
-                "currency": idx_config["currency"]
-            }
-
-    # 3. Fire ALL requests simultaneously
-    tasks = [fetch_index(idx) for idx in INDICES_CONFIG]
-    results = await asyncio.gather(*tasks)
+    # 1. Fetch Bulk Data
+    symbols_list = [item["symbol"] for item in INDICES_CONFIG]
+    raw_data = await asyncio.to_thread(eodhd_service.get_real_time_bulk, symbols_list)
     
-    # 4. Cache Strategy
-    # We cache for 5 seconds. This allows "Live" feeling updates without hitting
-    # API limits (2000 users * 1 request/sec = 2000 req/sec without cache).
-    # With cache: 1 req/5sec total.
-    redis_service.set_cache(cache_key, results, 5)
+    # 2. Map Results
+    data_map = {}
+    if raw_data and isinstance(raw_data, list):
+        data_map = {item['code']: item for item in raw_data}
+    elif raw_data and isinstance(raw_data, dict):
+        data_map = {raw_data['code']: raw_data}
+
+    final_results = []
+    
+    # --- SAFE FLOAT CONVERTER (The Crash Fix) ---
+    def safe_float(val):
+        try:
+            if val is None or val == 'NA' or val == 'None': return 0.0
+            return float(val)
+        except: return 0.0
+
+    for config in INDICES_CONFIG:
+        ticker = config["symbol"]
+        code_only = ticker.split('.')[0] 
         
-    return results
+        market_data = data_map.get(ticker) or data_map.get(code_only)
+        
+        if market_data:
+            final_results.append({
+                "name": config["name"],
+                "symbol": config["symbol"],
+                "price": safe_float(market_data.get('close')),
+                "change": safe_float(market_data.get('change')),
+                "percent_change": safe_float(market_data.get('change_p')),
+                "currency": config["currency"]
+            })
+        else:
+            # Fallback for missing data
+            final_results.append({
+                "name": config["name"],
+                "symbol": config["symbol"],
+                "price": 0.0, "change": 0.0, "percent_change": 0.0,
+                "currency": config["currency"]
+            })
+
+    # 3. Cache
+    has_data = any(x['price'] > 0 for x in final_results)
+    if has_data:
+        redis_service.set_cache(cache_key, final_results, 5)
+    
+    return final_results
 
 # ==========================================
-# 3. HEADER PRICE (Lightweight)
+# 3. HEADER PRICE (Index Details)
 # ==========================================
 
 @router.get("/{index_symbol:path}/live-price")
 async def get_index_live_price(index_symbol: str):
-    """
-    Specific endpoint for the Index Details Header.
-    """
-    # Normalize input (Frontend might send ^NSEI, we need NSEI.INDX)
     symbol = eodhd_service.format_symbol_for_eodhd(index_symbol)
-    
     data = await asyncio.to_thread(eodhd_service.get_live_price, symbol)
-    
-    if not data:
-        raise HTTPException(status_code=404, detail="Index price unavailable")
-        
+    if not data: raise HTTPException(status_code=404, detail="Unavailable")
     return data
 
 # ==========================================
-# 4. INDEX DETAILS PAGE (Deep Dive)
+# 4. INDEX DETAILS PAGE
 # ==========================================
 
 @router.get("/{index_symbol:path}/details")
 async def get_index_details(index_symbol: str):
-    """
-    Fetches Chart, Price, and Technicals for an Index.
-    Completely replaces Yahoo with EODHD.
-    """
-    # 1. Normalize Symbol
     symbol = eodhd_service.format_symbol_for_eodhd(index_symbol)
+    cache_key = f"index_details_v3_{symbol}"
     
-    cache_key = f"index_details_v2_{symbol}"
     cached = redis_service.get_cache(cache_key)
     if cached: return cached
 
-    # 2. Parallel Fetch: Chart (History) + Quote (Live)
     tasks = {
         "chart": asyncio.to_thread(eodhd_service.get_historical_data, symbol, "1D"),
         "quote": asyncio.to_thread(eodhd_service.get_live_price, symbol)
@@ -145,57 +131,44 @@ async def get_index_details(index_symbol: str):
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     raw = dict(zip(tasks.keys(), results))
     
-    # Safe Extraction
-    chart_data = raw.get('chart') if isinstance(raw.get('chart'), list) else []
-    quote = raw.get('quote') if isinstance(raw.get('quote'), dict) else {}
+    chart_data = raw.get('chart', [])
+    quote = raw.get('quote', {})
 
-    # 3. Calculate Technicals (Server-Side Math on EODHD Data)
-    technicals = {}
-    mas = {}
-    pivots = {}
-    
-    # We need at least ~30 candles to calculate RSI/MACD accurately
+    technicals, mas, pivots = {}, {}, {}
     if chart_data and len(chart_data) > 30:
         try:
             df = pd.DataFrame(chart_data)
             technicals = technical_service.calculate_technical_indicators(df)
             mas = technical_service.calculate_moving_averages(df)
             pivots = technical_service.calculate_pivot_points(df)
-        except Exception: 
-            pass # Keep empty if calculation fails
+        except: pass
 
-    # 4. Construct Synthetic Profile
-    # Indices don't have standard "Profiles" like companies, so we generate a clean one
-    # to prevent Frontend crashes.
-    
-    # Find config for pretty name
+    # Profile Construction
     config_match = next((i for i in INDICES_CONFIG if i["symbol"] == symbol), None)
     name = config_match["name"] if config_match else index_symbol
-    currency = config_match["currency"] if config_match else "USD"
+    curr = config_match["currency"] if config_match else "USD"
 
     profile = {
-        "companyName": name,
-        "symbol": symbol,
+        "companyName": name, 
+        "symbol": symbol, 
         "exchange": "INDEX",
-        "description": f"Market Index - {name}. Tracks the performance of the underlying sector or market segment.",
+        "description": f"Market Index - {name}", 
         "sector": "Market Index",
-        "industry": "Global Markets",
-        "image": "", # Frontend will handle default icon
-        "currency": currency,
-        "tradingview_symbol": symbol # EODHD symbols map reasonably well
+        "industry": "Global Markets", 
+        "image": "", 
+        "currency": curr,
+        "tradingview_symbol": symbol
     }
 
     final_data = {
-        "profile": profile,
+        "profile": profile, 
         "quote": quote,
-        "technical_indicators": technicals,
-        "moving_averages": mas,
+        "technical_indicators": technicals, 
+        "moving_averages": mas, 
         "pivot_points": pivots,
-        "analyst_ratings": [], # Indices don't have analyst ratings
-        "keyStats": {} # Indices don't have P/E, EPS in the standard way
+        "analyst_ratings": [], 
+        "keyStats": {}
     }
     
-    # Cache for 60 seconds (Details page doesn't need sub-second updates)
     redis_service.set_cache(cache_key, final_data, 60)
-    
     return final_data

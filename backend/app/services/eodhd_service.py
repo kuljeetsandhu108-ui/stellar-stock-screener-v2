@@ -155,34 +155,29 @@ def get_real_time_bulk(symbols: list):
         return []
 
 def get_historical_data(symbol: str, range_type: str = "1d"):
-    """
-    Fetches Chart Data (OHLCV).
-    CRITICAL FIXES: 
-    1. Filters 'None' values.
-    2. Converts IST Timezone to UTC for correct chart alignment.
-    """
     if not EODHD_API_KEY: return []
     eod_symbol = format_symbol_for_eodhd(symbol)
     data = []
     
-    # Check if Asset is Indian (needs IST conversion)
-    is_indian = any(x in eod_symbol for x in ['.NSE', '.BSE', 'NSEI', 'BSESN', 'BANK', 'INDIA']) and 'US' not in eod_symbol
-    
+    # 1. Identify Indian Assets
+    is_indian = ".NSE" in eod_symbol or ".BSE" in eod_symbol or ".INDX" in eod_symbol
+    if "US" in eod_symbol or "CC" in eod_symbol: is_indian = False
+
+    # 2. Define Offset (5.5 Hours = 19800 Seconds)
+    # EODHD Intraday is UTC. We MUST add 5.5h to make it IST.
+    offset = 19800 if is_indian else 0
+
     try:
         url = ""
-        # Intraday Logic
+        is_intraday = False
         if range_type in ["1D", "5M", "15M"]:
-            interval = "5m"
-            url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval={interval}&fmt=json"
+            url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval=5m&fmt=json"
+            is_intraday = True
         elif range_type in ["1H", "4H"]:
             url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval=1h&fmt=json"
+            is_intraday = True
         else:
-            # EOD Logic
-            period = "d"
-            if range_type == "1W": period = "w"
-            if range_type == "1M": period = "m"
-            
-            # Limit to 3 years data to optimize payload
+            period = "w" if range_type == "1W" else "m" if range_type == "1M" else "d"
             from_date = (datetime.now() - timedelta(days=1095)).strftime('%Y-%m-%d')
             url = f"{BASE_URL}/eod/{eod_symbol}?api_token={EODHD_API_KEY}&period={period}&from={from_date}&fmt=json"
 
@@ -190,35 +185,23 @@ def get_historical_data(symbol: str, range_type: str = "1d"):
         
         if response.status_code == 200:
             raw_data = response.json()
-            
-            # Timezones
-            tz_utc = pytz.utc
-            tz_ist = pytz.timezone('Asia/Kolkata')
-            
             for candle in raw_data:
                 ts = 0
                 try:
-                    # Date Parsing & Timezone Handling
                     if "date" in candle:
-                        # EOD (YYYY-MM-DD) -> Assume Midnight UTC
+                        # EOD Date (YYYY-MM-DD) - Already Midnight
                         dt = datetime.strptime(candle['date'], "%Y-%m-%d")
-                        ts = int(dt.replace(tzinfo=tz_utc).timestamp())
+                        ts = int(dt.replace(tzinfo=pytz.utc).timestamp())
                     elif "datetime" in candle:
-                        # Intraday (YYYY-MM-DD HH:MM:SS) -> Exchange Time
-                        dt_naive = datetime.strptime(candle['datetime'], "%Y-%m-%d %H:%M:%S")
+                        # Intraday (YYYY-MM-DD HH:MM:SS) - Usually UTC
+                        dt = datetime.strptime(candle['datetime'], "%Y-%m-%d %H:%M:%S")
+                        base_ts = int(dt.replace(tzinfo=pytz.utc).timestamp())
                         
-                        if is_indian:
-                            # Convert IST -> UTC Timestamp
-                            dt_aware = tz_ist.localize(dt_naive)
-                            ts = int(dt_aware.timestamp())
-                        else:
-                            # Assume UTC for US/Crypto
-                            ts = int(dt_naive.replace(tzinfo=tz_utc).timestamp())
+                        # APPLY OFFSET HERE
+                        ts = base_ts + offset
                 except: continue 
                 
-                # CRASH PROTECTION: Filter Nulls
                 o, h, l, c, v = candle.get('open'), candle.get('high'), candle.get('low'), candle.get('close'), candle.get('volume')
-                
                 if o is None or h is None or l is None or c is None: continue
                 
                 data.append({
@@ -230,8 +213,9 @@ def get_historical_data(symbol: str, range_type: str = "1d"):
             return data
         return []
     except Exception as e:
-        print(f"EODHD Chart Error {symbol}: {e}")
+        print(f"EODHD Chart Error: {e}")
         return []
+
 
 # ==========================================
 # 3. ROBUST PARSERS (THE BRAIN)
