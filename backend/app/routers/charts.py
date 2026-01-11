@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+# Import our high-performance EODHD and Calculation services
 from ..services import gemini_service, eodhd_service, technical_service
 import asyncio
 import pandas as pd
@@ -9,7 +10,8 @@ router = APIRouter()
 # ==========================================
 # 1. CONFIGURATION
 # ==========================================
-# We fetch hard data for these timeframes to verify the AI's visual analysis
+
+# The timeframes we want "Hard Numbers" for to verify the AI's visual analysis
 TIMEFRAMES_TO_ANALYZE = ["5M", "1H", "4H", "1D"]
 
 # ==========================================
@@ -18,15 +20,15 @@ TIMEFRAMES_TO_ANALYZE = ["5M", "1H", "4H", "1D"]
 
 async def resolve_symbol_with_eodhd(ai_text: str, context_type: str):
     """
-    Maps AI text to a valid EODHD Ticker. 
-    PRIORITY: Indices -> Crypto -> NSE (India) -> US.
-    High-End Logic to handle variations like 'Nifty', 'BTCUSDT', 'Reliance'.
+    Intelligently maps AI text (e.g., "Reliance", "Nifty", "BTC") 
+    to a valid EODHD Ticker (e.g., "RELIANCE.NSE", "NSEI.INDX", "BTC-USD.CC").
+    
+    PRIORITY: Indices -> Crypto -> India Stocks -> US Stocks.
     """
     symbol = ai_text.strip().upper()
     clean_sym = symbol.replace("/", "").replace("-", "").replace(" ", "")
     
     # --- 1. Handle INDICES (Hardcoded for stability) ---
-    # AI often just says "Nifty" or "BankNifty", we map to EODHD Index tickers
     if context_type == 'index' or '^' in symbol or 'NIFTY' in symbol or 'SENSEX' in symbol or 'SPX' in symbol:
         if "BANK" in symbol: return "NSEBANK.INDX"
         if "NIFTY" in symbol: return "NSEI.INDX"
@@ -40,11 +42,12 @@ async def resolve_symbol_with_eodhd(ai_text: str, context_type: str):
 
     # --- 2. Handle CRYPTO (Expanded High-End Support) ---
     # Smart Map for Top Coins to EODHD's .CC exchange
+    # This prevents "BTC" (Bitcoin) from matching "BTC" (Grayscale Trust)
     crypto_map = {
-        "BTC": "BTC-USD.CC", "BITCOIN": "BTC-USD.CC",
-        "ETH": "ETH-USD.CC", "ETHEREUM": "ETH-USD.CC",
+        "BTC": "BTC-USD.CC", "BITCOIN": "BTC-USD.CC", "BTCUSD": "BTC-USD.CC",
+        "ETH": "ETH-USD.CC", "ETHEREUM": "ETH-USD.CC", "ETHUSD": "ETH-USD.CC",
         "SOL": "SOL-USD.CC", "SOLANA": "SOL-USD.CC",
-        "XRP": "XRP-USD.CC",
+        "XRP": "XRP-USD.CC", "RIPPLE": "XRP-USD.CC",
         "BNB": "BNB-USD.CC",
         "DOGE": "DOGE-USD.CC",
         "ADA": "ADA-USD.CC", "CARDANO": "ADA-USD.CC",
@@ -56,11 +59,12 @@ async def resolve_symbol_with_eodhd(ai_text: str, context_type: str):
         "SHIB": "SHIB-USD.CC"
     }
 
-    # Check for direct matches or common variations (e.g., BTCUSDT, ETH/USD)
+    # Check for direct matches or common variations
     for key, ticker in crypto_map.items():
-        # Match 'BTC', 'BTCUSD', 'BTCUSDT'
-        if clean_sym == key or clean_sym == f"{key}USD" or clean_sym == f"{key}USDT":
-            return ticker
+        # Exact match
+        if clean_sym == key: return ticker
+        # Variation match (e.g., BTCUSDT)
+        if clean_sym == f"{key}USD" or clean_sym == f"{key}USDT": return ticker
 
     # --- 3. Handle STOCKS (Explicit Suffixes) ---
     # If AI read the suffix from the image, convert to EODHD format
@@ -70,12 +74,12 @@ async def resolve_symbol_with_eodhd(ai_text: str, context_type: str):
     if "." in symbol: return symbol # Trust other existing suffixes
 
     # --- 4. Suffix Discovery (The Robust Fallback) ---
-    # If symbol is "KOTAKBANK" or "AAPL", check India first, then US.
+    # If no suffix, we check India first, then US.
     candidates = [f"{symbol}.NSE", f"{symbol}.US"]
     
     for cand in candidates:
         try:
-            # Short timeout check to see if symbol exists on EODHD
+            # Check if symbol exists on EODHD by getting live price
             check = await asyncio.to_thread(eodhd_service.get_live_price, cand)
             if check and 'price' in check:
                 return cand
@@ -92,21 +96,23 @@ async def resolve_symbol_with_eodhd(ai_text: str, context_type: str):
 @router.post("/analyze")
 async def analyze_chart_image(
     chart_image: UploadFile = File(...),
-    analysis_type: str = Form("stock")
+    analysis_type: str = Form("stock") # 'stock' or 'index' passed from frontend
 ):
     """
-    1. AI identifies symbol (Stock, Index, or Crypto).
-    2. Backend resolves to valid EODHD ticker.
-    3. Backend fetches multi-timeframe data & math.
-    4. AI analyzes visuals.
-    5. Returns normalized symbol to Frontend.
+    Master AI Chart Analyst.
+    1. Visual Recognition (Gemini Vision)
+    2. Symbol Verification (EODHD)
+    3. Multi-Timeframe Data Fetch (EODHD Intraday/EOD)
+    4. Technical Calculation (Pandas TA)
+    5. Synthesis & Response
     """
     if not chart_image.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image.")
 
     image_bytes = await chart_image.read()
 
-    # --- Step 1: AI Vision (Identify Ticker) ---
+    # --- Step 1: Identify Symbol (AI Vision) ---
+    # We ask Gemini to look at the top-left of the chart image
     raw_symbol = await asyncio.to_thread(gemini_service.identify_ticker_from_image, image_bytes)
 
     if not raw_symbol or raw_symbol == "NOT_FOUND":
@@ -116,53 +122,63 @@ async def analyze_chart_image(
             "technical_data": None
         }
     
-    # --- Step 2: Resolve & Normalize Symbol (Crypto Aware) ---
+    # --- Step 2: Normalize Symbol for EODHD ---
     final_symbol = await resolve_symbol_with_eodhd(raw_symbol, analysis_type)
+    print(f"Chart Upload: AI detected '{raw_symbol}' -> Resolved to '{final_symbol}'")
+
+    # --- Step 3: Parallel Execution (Visual Analysis + Mathematical Data) ---
     
-    # --- Step 3: Parallel Execution (Visuals + Data) ---
-    
-    # Task A: AI Visual Strategy
+    # Task A: Gemini Vision Analysis (The Strategy)
     vision_task = asyncio.to_thread(gemini_service.analyze_chart_technicals_from_image, image_bytes)
 
-    # Task B: Mathematical Data Verification (Multi-Timeframe)
+    # Task B: Fetch Data for Multiple Timeframes (The Confirmation)
     async def fetch_and_calc(tf):
         try:
+            # 1. Fetch from EODHD (Uses our new robust service)
             raw_data = await asyncio.to_thread(eodhd_service.get_historical_data, final_symbol, range_type=tf)
             
-            # Validate data
-            if not raw_data or len(raw_data) < 20: return tf, None
+            # 2. Validation
+            if not raw_data or len(raw_data) < 20: 
+                return tf, None
             
-            # Math
+            # 3. Convert to Pandas for Math
             df = pd.DataFrame(raw_data)
+            
+            # 4. Calculate Indicators (RSI, MACD, EMAs, Pivots)
             technicals = await asyncio.to_thread(technical_service.calculate_extended_technicals, df)
             
             return tf, technicals
-        except: return tf, None
+        except Exception as e:
+            print(f"Error analyzing {tf} for {final_symbol}: {e}")
+            return tf, None
 
-    # Run everything concurrently
+    # Run all data fetches in parallel
     data_tasks = [fetch_and_calc(tf) for tf in TIMEFRAMES_TO_ANALYZE]
+    
+    # Execute Vision + Data simultaneously
     results = await asyncio.gather(vision_task, *data_tasks)
 
-    # Unpack
-    analysis_text = results[0]
-    tech_results = results[1:]
+    # Unpack Results
+    analysis_text = results[0] # The text report from Gemini
+    tech_results = results[1:] # The list of (tf, data) tuples from EODHD
+
+    # Structure Technical Data for Frontend
     technical_data = {tf: data for tf, data in tech_results if data is not None}
 
     # --- Step 4: Final Response Formatting ---
-    # Convert EODHD format back to Frontend format for routing
+    # Convert EODHD format back to Frontend format for seamless routing
     frontend_symbol = final_symbol
     
-    # India Mapping
+    # India Mapping (.NSE -> .NS)
     if final_symbol.endswith(".NSE"):
         frontend_symbol = final_symbol.replace(".NSE", ".NS")
     elif final_symbol.endswith(".BSE"):
         frontend_symbol = final_symbol.replace(".BSE", ".BO")
     
-    # Crypto Mapping (Keep as is, Frontend chart handles it if symbol is passed correctly)
-    # The CustomChart component and Header will adapt based on the symbol string.
-
+    # Crypto Mapping is handled automatically by the frontend if it receives "BTC-USD.CC"
+    
     return {
         "identified_symbol": frontend_symbol,
         "analysis_data": analysis_text,
-        "technical_data": technical_data
+        "technical_data": technical_data 
     }
