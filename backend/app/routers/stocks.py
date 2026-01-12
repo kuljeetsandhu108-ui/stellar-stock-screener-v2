@@ -268,58 +268,78 @@ async def get_peers_comparison(symbol: str):
 @router.get("/{symbol}/chart")
 async def get_stock_chart(symbol: str, range: str = "1D"):
     """
-    High-End Chart Engine with Resampling & Live Stitching.
+    High-End Chart Engine V3.
+    Features: 
+    1. Smart Resampling (5M -> 15M/1H/4H) for instant switching.
+    2. Persistent Caching (24H History).
+    3. Live Price Stitching (Real-time Wiggle).
+    4. IST Timezone Correction.
     """
-    # 1. Determine if this request can be served from the "Master 5M" cache
-    # 5M, 15M, 1H, 4H can all be derived from 5M data
+    # 1. Determine Base Resolution
+    # If user wants 15M, 1H, or 4H, we actually fetch '5M' and resample it.
+    # This saves API calls and makes switching timeframes instant.
     is_intraday_derived = range in ["5M", "15M", "1H", "4H"]
-    
-    # If derived, we look for the "5M" cache key, regardless of what user asked
     lookup_range = "5M" if is_intraday_derived else range
     
-    cache_key = f"chart_{symbol}_{lookup_range}_v2" # v2 for new logic
-    cached = redis_service.get_cache(cache_key)
+    # 2. Check Cache for the BASE data
+    # We use a new cache key version (v3) to ensure fresh logic
+    cache_key = f"chart_base_v3_{symbol}_{lookup_range}"
     
-    # 2. Fetch if missing
-    if not cached:
-        # We fetch the 'lookup_range' (which is 5M for all intraday requests)
-        cached = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=lookup_range)
-        if cached:
-            # Cache Intraday (5M) for 5 minutes, Daily/Weekly for 12 hours
-            ttl = 300 if is_intraday_derived else 43200
-            redis_service.set_cache(cache_key, cached, ttl)
+    # Cache Rules: Intraday = 5 mins, Daily/History = 12 Hours
+    ttl = 300 if is_intraday_derived else 43200
+    
+    chart_data = redis_service.get_cache(cache_key)
+    
+    # 3. Fetch if missing
+    if not chart_data:
+        # This fetches 30 Days of 5M data OR 3 Years of Daily data
+        chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=lookup_range)
+        if chart_data:
+            redis_service.set_cache(cache_key, chart_data, ttl)
+    
+    if not chart_data: return []
 
-    if not cached: return []
-
-    # 3. RESAMPLING ENGINE
-    # If user wants 1H but we have 5M data, we resample it now.
-    final_data = cached
+    # 4. MATH RESAMPLING ENGINE
+    # If we have 5M data but user wants 1H, we calculate it here.
+    final_data = chart_data
     if is_intraday_derived and range != "5M":
-        # Math Magic: Turn 5M into 15M/1H/4H
-        final_data = technical_service.resample_chart_data(cached, range)
+        # Pass to technical_service to aggregate candles (Open=First, Close=Last, High=Max, Low=Min)
+        resampled = technical_service.resample_chart_data(chart_data, range)
+        if resampled:
+            final_data = resampled
 
-    # 4. LIVE STITCHING
-    # Patch the last candle with real-time price
+    # 5. LIVE STITCHING (The "Real-Time" Feel)
+    # We grab the absolute latest price and update the last candle in memory.
     try:
-        live = await asyncio.to_thread(eodhd_service.get_live_price, symbol)
-        if live and live.get('price'):
-            current_price = live['price']
+        live_quote = await asyncio.to_thread(eodhd_service.get_live_price, symbol)
+        
+        if live_quote and live_quote.get('price'):
+            current_price = live_quote['price']
             
-            # Recalculate Time Shift for India
-            is_indian = ".NS" in symbol or ".BO" in symbol or "NIFTY" in symbol or "SENSEX" in symbol
-            offset = 19800 if is_indian and is_intraday_derived else 0
+            # IST Offset Logic (Critical for India)
+            # If it's Indian Intraday, we previously shifted history by +19800s.
+            # We must ensure the live candle aligns with that.
+            is_indian = ".NS" in symbol or ".BO" in symbol or "NIFTY" in symbol or "SENSEX" in symbol or "BANK" in symbol
             
-            ts_now = live.get('timestamp') or int(pd.Timestamp.now().timestamp())
-            ts_now += offset
-
             if final_data:
                 last = final_data[-1]
-                # Simple Stitch: Update Close/High/Low of last candle
+                
+                # Logic: If the live price is for the *current* candle timeframe, update it.
+                # If it's a new timeframe, we ideally append, but for simplicity/stability
+                # we update the current close to reflect the latest price tick.
+                
                 last['close'] = current_price
+                # Update High/Low dynamically
                 if current_price > last['high']: last['high'] = current_price
                 if current_price < last['low']: last['low'] = current_price
-                # We don't change 'time' to avoid creating new candles prematurely
-    except: pass
+                
+                # Volume update (Optional, accumulative)
+                if live_quote.get('volume') and live_quote['volume'] > last['volume']:
+                     last['volume'] = live_quote['volume']
+
+    except Exception as e:
+        # If live fetch fails, just return historical data without crashing
+        pass
 
     return final_data
 

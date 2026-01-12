@@ -157,78 +157,105 @@ def get_real_time_bulk(symbols: list):
 def get_historical_data(symbol: str, range_type: str = "1d"):
     """
     Fetches Chart Data.
-    Optimized for Long-Term Caching.
+    High-End Logic: 
+    1. Fetches 'Master' 5M dataset for all Intraday requests (enables instant resampling).
+    2. Forces IST Timezone for Indian Assets.
+    3. Filters nulls to prevent crashes.
     """
     if not EODHD_API_KEY: return []
     eod_symbol = format_symbol_for_eodhd(symbol)
     data = []
     
-    
-        # 1. Identify Indian Assets
+    # 1. Identify Indian Assets for Timezone Offset
+    # (.INDX covers Nifty/BankNifty, .NSE/.BSE covers stocks)
     is_indian = ".NSE" in eod_symbol or ".BSE" in eod_symbol or ".INDX" in eod_symbol
+    # Exclude if it accidentally matched a US ticker
     if "US" in eod_symbol or "CC" in eod_symbol: is_indian = False
 
-    # 2. Calculate Offset (19800s for India Intraday)
-    # Apply to 1D, 5M, 15M, 1H, 4H
-    offset = 19800 if is_indian and range_type not in ["1W", "1M"] else 0
+    # 2. Define Timezone Offset (5 Hours 30 Mins = 19800 Seconds)
+    # We only apply this to Intraday. EOD dates are usually fine.
+    offset = 19800 if is_indian else 0
 
     try:
         url = ""
-        # MASTER INTRADAY FETCH
-        # If user asks for 1D, 5M, 15M, 1H, 4H -> We basically want the 5M data
-        # because we can resample it.
-        # Exception: 1D chart is usually 1-Year daily candles, so that is separate.
+        is_intraday_request = range_type in ["5M", "15M", "1H", "4H"]
         
-        if range_type in ["5M", "15M", "1H", "4H"]:
-            # Fetch 30 Days of 5M data (Massive Dataset for local resampling)
-            # This allows constructing 1H charts for the last month purely from 5M data
+        # --- SMART FETCH STRATEGY ---
+        
+        if is_intraday_request:
+            # MASTER FETCH: Get 30 Days of 5-Minute Data.
+            # Why? Because 5M is the "Atom". We can build 15M, 1H, 4H from this 
+            # mathematically in the Router without calling the API again.
             ts_from = int((datetime.now() - timedelta(days=30)).timestamp())
             url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval=5m&from={ts_from}&fmt=json"
             
         elif range_type == "1D":
-            # 1D is special. Sometimes we want Intraday 1D view (Today), sometimes History.
-            # Your chart defaults to History 1D.
-            # So we use EOD endpoint for 1D.
+            # Daily History: Fetch 3 Years (Standard Analysis depth)
             period = "d"
-            from_date = (datetime.now() - timedelta(days=1095)).strftime('%Y-%m-%d') # 3 Years
+            from_date = (datetime.now() - timedelta(days=1095)).strftime('%Y-%m-%d')
             url = f"{BASE_URL}/eod/{eod_symbol}?api_token={EODHD_API_KEY}&period={period}&from={from_date}&fmt=json"
             
         else:
-            # Weekly/Monthly
+            # Weekly/Monthly: Fetch 5 Years
             period = "w" if range_type == "1W" else "m"
-            from_date = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d') # 5 Years
+            from_date = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')
             url = f"{BASE_URL}/eod/{eod_symbol}?api_token={EODHD_API_KEY}&period={period}&from={from_date}&fmt=json"
 
+        # 3. Execute Request
+        response = requests.get(url, timeout=15)
         
         if response.status_code == 200:
             raw_data = response.json()
+            
             for candle in raw_data:
                 ts = 0
                 try:
+                    # Parse EOD Date (YYYY-MM-DD)
                     if "date" in candle:
-                        # EOD Date
                         dt = datetime.strptime(candle['date'], "%Y-%m-%d")
                         ts = int(dt.replace(tzinfo=pytz.utc).timestamp())
+                        
+                    # Parse Intraday Date (YYYY-MM-DD HH:MM:SS)
                     elif "datetime" in candle:
-                        # Intraday Date
                         dt = datetime.strptime(candle['datetime'], "%Y-%m-%d %H:%M:%S")
                         base_ts = int(dt.replace(tzinfo=pytz.utc).timestamp())
-                        ts = base_ts + offset # Apply IST Offset
-                except: continue 
+                        
+                        # CRITICAL: Apply IST Offset here
+                        # If we are fetching Intraday for India, shift +5.5 hours
+                        if is_intraday_request:
+                            ts = base_ts + offset
+                        else:
+                            ts = base_ts
+                except: 
+                    continue # Skip malformed dates
                 
-                o, h, l, c, v = candle.get('open'), candle.get('high'), candle.get('low'), candle.get('close'), candle.get('volume')
-                if o is None or h is None or l is None or c is None: continue
+                # 4. CRASH PROTECTION (Null Filter)
+                # Lightweight Charts crashes if any OHLC value is None
+                o = candle.get('open')
+                h = candle.get('high')
+                l = candle.get('low')
+                c = candle.get('close')
+                v = candle.get('volume')
+                
+                if o is None or h is None or l is None or c is None: 
+                    continue
                 
                 data.append({
                     "time": ts,
-                    "open": float(o), "high": float(h), "low": float(l), "close": float(c), "volume": float(v) if v else 0.0
+                    "open": float(o), 
+                    "high": float(h), 
+                    "low": float(l), 
+                    "close": float(c), 
+                    "volume": float(v) if v is not None else 0.0
                 })
             
+            # Sort Oldest -> Newest (Required for Charts)
             data.sort(key=lambda x: x['time'])
             return data
+            
         return []
     except Exception as e:
-        print(f"EODHD Chart Error: {e}")
+        print(f"EODHD Chart Fetch Error: {e}")
         return []
 # ==========================================
 # 3. ROBUST PARSERS (THE BRAIN)
