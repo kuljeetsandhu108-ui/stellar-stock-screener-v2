@@ -2,7 +2,6 @@ fastapi
 uvicorn[standard]
 python-dotenv
 requests
-yfinance>=0.2.40
 google-generativeai
 pandas
 pandas_ta
@@ -11,3 +10,4 @@ python-multipart
 redis
 async-lru
 beautifulsoup4
+gunicorn
