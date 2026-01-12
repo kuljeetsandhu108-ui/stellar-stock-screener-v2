@@ -268,57 +268,60 @@ async def get_peers_comparison(symbol: str):
 @router.get("/{symbol}/chart")
 async def get_stock_chart(symbol: str, range: str = "1D"):
     """
-    High-End Chart Engine.
-    Features: Smart Stitching + Math Resampling + Persistent Caching.
+    High-End Chart Engine with Resampling & Live Stitching.
     """
-    # 1. Determine Base Request
-    # If user wants 15M/1H/4H, we actually want the 5M base data to resample it
-    # Daily (1D) and Weekly (1W) are their own base.
-    is_intraday_derived = range in ["15M", "1H", "4H"]
-    request_range = "5M" if is_intraday_derived else range
+    # 1. Determine if this request can be served from the "Master 5M" cache
+    # 5M, 15M, 1H, 4H can all be derived from 5M data
+    is_intraday_derived = range in ["5M", "15M", "1H", "4H"]
     
-    # 2. Check Cache for the BASE data
-    cache_key = f"chart_base_v2_{symbol}_{request_range}"
+    # If derived, we look for the "5M" cache key, regardless of what user asked
+    lookup_range = "5M" if is_intraday_derived else range
     
-    # Intraday Cache: 5 mins. Daily Cache: 24 Hours.
-    ttl = 86400 if range in ["1D", "1W", "1M"] else 300 
+    cache_key = f"chart_{symbol}_{lookup_range}_v2" # v2 for new logic
+    cached = redis_service.get_cache(cache_key)
     
-    chart_data = redis_service.get_cache(cache_key)
-    
-    # 3. Fetch if missing
-    if not chart_data:
-        chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=request_range)
-        if chart_data:
-            redis_service.set_cache(cache_key, chart_data, ttl)
-    
-    if not chart_data: return []
+    # 2. Fetch if missing
+    if not cached:
+        # We fetch the 'lookup_range' (which is 5M for all intraday requests)
+        cached = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=lookup_range)
+        if cached:
+            # Cache Intraday (5M) for 5 minutes, Daily/Weekly for 12 hours
+            ttl = 300 if is_intraday_derived else 43200
+            redis_service.set_cache(cache_key, cached, ttl)
 
-    # 4. MATH RESAMPLING ENGINE
-    # If the user asked for 1H, we take our 5M data and calculate the 1H candles mathematically.
-    if is_intraday_derived:
-        df = pd.DataFrame(chart_data)
-        chart_data = technical_service.resample_chart_data(df, range)
+    if not cached: return []
 
-    # 5. LIVE STITCHING (Update Tip)
+    # 3. RESAMPLING ENGINE
+    # If user wants 1H but we have 5M data, we resample it now.
+    final_data = cached
+    if is_intraday_derived and range != "5M":
+        # Math Magic: Turn 5M into 15M/1H/4H
+        final_data = technical_service.resample_chart_data(cached, range)
+
+    # 4. LIVE STITCHING
+    # Patch the last candle with real-time price
     try:
-        live_quote = await asyncio.to_thread(eodhd_service.get_live_price, symbol)
-        if live_quote and live_quote.get('price'):
-            current_price = live_quote['price']
-            # Time shift logic for India (Same as before)
-            is_indian = ".NS" in symbol or ".BO" in symbol or "NIFTY" in symbol
-            ts_now = live_quote.get('timestamp') or int(pd.Timestamp.now().timestamp())
-            if is_indian and range not in ["1D", "1W"]: ts_now += 19800
+        live = await asyncio.to_thread(eodhd_service.get_live_price, symbol)
+        if live and live.get('price'):
+            current_price = live['price']
+            
+            # Recalculate Time Shift for India
+            is_indian = ".NS" in symbol or ".BO" in symbol or "NIFTY" in symbol or "SENSEX" in symbol
+            offset = 19800 if is_indian and is_intraday_derived else 0
+            
+            ts_now = live.get('timestamp') or int(pd.Timestamp.now().timestamp())
+            ts_now += offset
 
-            # Stitch Logic
-            last = chart_data[-1]
-            # Simple update for seamless look
-            last['close'] = current_price
-            if current_price > last['high']: last['high'] = current_price
-            if current_price < last['low']: last['low'] = current_price
-            # Volume accumulation would require complex logic, skipping for speed
+            if final_data:
+                last = final_data[-1]
+                # Simple Stitch: Update Close/High/Low of last candle
+                last['close'] = current_price
+                if current_price > last['high']: last['high'] = current_price
+                if current_price < last['low']: last['low'] = current_price
+                # We don't change 'time' to avoid creating new candles prematurely
     except: pass
 
-    return chart_data
+    return final_data
 
 @router.get("/{symbol}/all")
 async def get_all_stock_data(symbol: str):

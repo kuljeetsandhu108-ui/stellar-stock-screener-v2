@@ -3,14 +3,82 @@ import pandas_ta as ta
 import numpy as np
 
 # ==========================================
-# 1. INDICATORS (RSI, MACD, STOCH, ADX)
+# 1. CHART RESAMPLING ENGINE (High-End Speed)
+# ==========================================
+
+def resample_chart_data(chart_data: list, target_interval: str):
+    """
+    Mathematically converts 5-Minute (Base) candles into higher timeframes.
+    This enables INSTANT switching between 5M -> 15M -> 1H -> 4H without API calls.
+    """
+    if not chart_data or len(chart_data) < 2: 
+        return []
+
+    try:
+        # 1. Convert list of dicts to DataFrame
+        df = pd.DataFrame(chart_data)
+        
+        # 2. Set Index to Datetime (Required for resampling)
+        df['datetime'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('datetime', inplace=True)
+        
+        # 3. Map Frontend Timeframes to Pandas Offset Aliases
+        # The frontend sends "15M", "1H", etc.
+        mapping = {
+            "15M": "15min",
+            "30M": "30min",
+            "1H": "1h",
+            "4H": "4h"
+        }
+        
+        rule = mapping.get(target_interval)
+        
+        # If no rule found (e.g. '1D' or '1W' which are fetched separately), return original
+        if not rule: 
+            return chart_data
+
+        # 4. Resample Logic (OHLCV Aggregation)
+        # Open  = First price of the bucket
+        # High  = Max price of the bucket
+        # Low   = Min price of the bucket
+        # Close = Last price of the bucket
+        # Volume = Sum of volume in the bucket
+        resampled = df.resample(rule).agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        })
+        
+        # 5. Cleanup
+        # Remove rows with NaN (which happen during market close hours)
+        resampled.dropna(inplace=True)
+        
+        # 6. Format back to Lightweight Charts format
+        resampled.reset_index(inplace=True)
+        
+        # Convert timestamp back to Unix Seconds
+        resampled['time'] = resampled['datetime'].astype('int64') // 10**9
+        
+        # Select and order columns
+        final_data = resampled[['time', 'open', 'high', 'low', 'close', 'volume']].to_dict('records')
+        
+        return final_data
+
+    except Exception as e:
+        print(f"Resampling Error: {e}")
+        # On error, fallback to returning the original data to prevent crash
+        return chart_data
+
+# ==========================================
+# 2. INDICATORS (RSI, MACD, STOCH, ADX)
 # ==========================================
 
 def calculate_technical_indicators(df: pd.DataFrame):
     """
-    Calculates technical indicators using pandas_ta.
-    Input: DataFrame with ['open', 'high', 'low', 'close', 'volume']
-    Output: Dictionary of latest values.
+    Calculates RSI, MACD, Stoch, ADX, ATR using Pandas TA.
+    Expects DataFrame with lowercase columns: 'open', 'high', 'low', 'close', 'volume'
     """
     if df is None or df.empty or len(df) < 50:
         return {}
@@ -19,28 +87,16 @@ def calculate_technical_indicators(df: pd.DataFrame):
         # Create a copy to prevent SettingWithCopy warnings
         wdf = df.copy()
         
-        # 1. RSI (14)
+        # Calculate Indicators
         wdf.ta.rsi(length=14, append=True)
-        
-        # 2. MACD (12, 26, 9)
         wdf.ta.macd(fast=12, slow=26, signal=9, append=True)
-        
-        # 3. Stochastic (14, 3, 3)
         wdf.ta.stoch(k=14, d=3, smooth_k=3, append=True)
-        
-        # 4. ADX (14)
         wdf.ta.adx(length=14, append=True)
-        
-        # 5. ATR (14)
         wdf.ta.atr(length=14, append=True)
-        
-        # 6. Williams %R (14)
         wdf.ta.willr(length=14, append=True)
-        
-        # 7. Bollinger Bands (20, 2)
         wdf.ta.bbands(length=20, std=2, append=True)
 
-        # Get the most recent row (Latest Data)
+        # Get Latest Data Point
         latest = wdf.iloc[-1]
         prev = wdf.iloc[-2] if len(wdf) > 1 else latest
         
@@ -76,7 +132,7 @@ def calculate_technical_indicators(df: pd.DataFrame):
         return {}
 
 # ==========================================
-# 2. MOVING AVERAGES (SMA)
+# 3. MOVING AVERAGES (SMA)
 # ==========================================
 
 def calculate_moving_averages(df: pd.DataFrame):
@@ -89,11 +145,9 @@ def calculate_moving_averages(df: pd.DataFrame):
         wdf = df.copy()
         mas = {}
         
-        # Calculate standard periods
         periods = [5, 10, 20, 50, 100, 200]
         
         for p in periods:
-            # Only calculate if we have enough data points
             if len(wdf) >= p:
                 # Rolling mean is faster than pandas_ta for simple SMA
                 val = wdf['close'].rolling(window=p).mean().iloc[-1]
@@ -107,7 +161,7 @@ def calculate_moving_averages(df: pd.DataFrame):
         return {}
 
 # ==========================================
-# 3. PIVOT POINTS (Classic, Fib, Camarilla)
+# 4. PIVOT POINTS (Classic, Fib, Camarilla)
 # ==========================================
 
 def calculate_pivot_points(df: pd.DataFrame):
@@ -117,7 +171,7 @@ def calculate_pivot_points(df: pd.DataFrame):
     if df is None or len(df) < 2: return {}
     
     try:
-        # We need the previous completed candle (usually yesterday for Daily chart)
+        # We need the previous completed candle
         prev = df.iloc[-2]
         
         h = float(prev['high'])
@@ -170,7 +224,7 @@ def calculate_pivot_points(df: pd.DataFrame):
         return {}
 
 # ==========================================
-# 4. DARVAS BOX SCAN
+# 5. DARVAS BOX SCAN
 # ==========================================
 
 def calculate_darvas_box(hist_df: pd.DataFrame, quote: dict, currency: str = "USD"):
@@ -182,7 +236,7 @@ def calculate_darvas_box(hist_df: pd.DataFrame, quote: dict, currency: str = "US
 
     try:
         current_price = quote.get('price')
-        # EODHD quote sometimes has missing yearHigh, use chart max as fallback
+        # Use chart high if quote yearHigh is missing
         year_high = quote.get('yearHigh') or hist_df['high'].max()
         
         if not current_price or not year_high:
@@ -220,7 +274,7 @@ def calculate_darvas_box(hist_df: pd.DataFrame, quote: dict, currency: str = "US
         elif current_price <= box_bottom:
              return {
                 "status": "Breakdown",
-                "message": f"Falling below box support ({currency_sym}{box_bottom:.2f}).",
+                "message": f"Falling below support ({currency_sym}{box_bottom:.2f}).",
                 "box_top": box_top, "box_bottom": box_bottom, "result": "Fail"
             }
         else:
@@ -235,22 +289,20 @@ def calculate_darvas_box(hist_df: pd.DataFrame, quote: dict, currency: str = "US
         return {"status": "Error", "message": "Calculation failed."}
 
 # ==========================================
-# 5. EXTENDED TECHNICALS (Multi-Timeframe AI)
+# 6. EXTENDED TECHNICALS (Multi-Timeframe AI)
 # ==========================================
 
 def calculate_extended_technicals(df: pd.DataFrame):
     """
-    Wraps standard calculation but ensures specific keys for the AI analysis endpoint.
+    Wraps standard calculation but flattens the structure for the AI prompt.
     """
     if df is None or df.empty: return None
     
     try:
-        # Calculate standard set first
         inds = calculate_technical_indicators(df)
         mas = calculate_moving_averages(df)
         pivots = calculate_pivot_points(df)
         
-        # Flatten structure for AI prompt
         return {
             "price": inds.get('price_action', {}).get('current_close'),
             "rsi": inds.get('rsi'),
@@ -267,51 +319,3 @@ def calculate_extended_technicals(df: pd.DataFrame):
         }
     except:
         return None
-# ... (Keep existing imports and functions) ...
-
-def resample_chart_data(df: pd.DataFrame, target_interval: str):
-    """
-    High-End Math: Converts 5M candles into 15M, 1H, 4H candles.
-    Saves API calls and makes switching timeframes instant.
-    """
-    if df is None or df.empty: return []
-
-    try:
-        # 1. Convert to Datetime Index for Resampling
-        df['datetime'] = pd.to_datetime(df['time'], unit='s')
-        df.set_index('datetime', inplace=True)
-        
-        # 2. Define Mapping (Pandas Offset Aliases)
-        # 15M -> '15T', 1H -> '1H', 4H -> '4H'
-        mapping = {
-            "15M": "15min",
-            "1H": "1h",
-            "4H": "4h"
-        }
-        rule = mapping.get(target_interval)
-        if not rule: return []
-
-        # 3. Resample Logic (OHLCV Aggregation)
-        # Open=First, High=Max, Low=Min, Close=Last, Volume=Sum
-        resampled = df.resample(rule).agg({
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum'
-        })
-        
-        # 4. Cleanup (Remove empty rows created by market gaps)
-        resampled.dropna(inplace=True)
-        
-        # 5. Format back to Lightweight Charts format (List of Dicts)
-        resampled.reset_index(inplace=True)
-        # Convert timestamp back to Unix Seconds
-        resampled['time'] = resampled['datetime'].astype('int64') // 10**9
-        
-        # Return as list of dicts
-        return resampled[['time', 'open', 'high', 'low', 'close', 'volume']].to_dict('records')
-
-    except Exception as e:
-        print(f"Resampling Error: {e}")
-        return []
