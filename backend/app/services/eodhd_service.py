@@ -155,33 +155,41 @@ def get_real_time_bulk(symbols: list):
         return []
 
 def get_historical_data(symbol: str, range_type: str = "1d"):
+    """
+    Fetches Chart Data.
+    Optimized for Long-Term Caching.
+    """
     if not EODHD_API_KEY: return []
     eod_symbol = format_symbol_for_eodhd(symbol)
     data = []
     
-    # 1. Identify Indian Assets
+    # Identify Indian Assets for Timezone Offset
     is_indian = ".NSE" in eod_symbol or ".BSE" in eod_symbol or ".INDX" in eod_symbol
     if "US" in eod_symbol or "CC" in eod_symbol: is_indian = False
 
-    # 2. Define Offset (5.5 Hours = 19800 Seconds)
-    # EODHD Intraday is UTC. We MUST add 5.5h to make it IST.
+    # Intraday Offset: +5:30 (19800 sec)
     offset = 19800 if is_indian else 0
 
     try:
         url = ""
-        is_intraday = False
+        # 1. Intraday Logic
         if range_type in ["1D", "5M", "15M"]:
-            url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval=5m&fmt=json"
-            is_intraday = True
+            # Last 5 days is enough for 5m/15m (approx 375 candles)
+            ts_from = int((datetime.now() - timedelta(days=20)).timestamp())
+            url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval=5m&from={ts_from}&fmt=json"
+            
         elif range_type in ["1H", "4H"]:
-            url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval=1h&fmt=json"
-            is_intraday = True
+            # Last 30 days is enough for 1H (approx 200-250 candles)
+            ts_from = int((datetime.now() - timedelta(days=30)).timestamp())
+            url = f"{BASE_URL}/intraday/{eod_symbol}?api_token={EODHD_API_KEY}&interval=1h&from={ts_from}&fmt=json"
+            
+        # 2. History Logic (Daily/Weekly)
         else:
             period = "w" if range_type == "1W" else "m" if range_type == "1M" else "d"
+            # Fetch only 3 Years (Standard for Analysis, approx 750 candles)
             from_date = (datetime.now() - timedelta(days=1095)).strftime('%Y-%m-%d')
             url = f"{BASE_URL}/eod/{eod_symbol}?api_token={EODHD_API_KEY}&period={period}&from={from_date}&fmt=json"
-
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=15)
         
         if response.status_code == 200:
             raw_data = response.json()
@@ -189,16 +197,14 @@ def get_historical_data(symbol: str, range_type: str = "1d"):
                 ts = 0
                 try:
                     if "date" in candle:
-                        # EOD Date (YYYY-MM-DD) - Already Midnight
+                        # EOD Date
                         dt = datetime.strptime(candle['date'], "%Y-%m-%d")
                         ts = int(dt.replace(tzinfo=pytz.utc).timestamp())
                     elif "datetime" in candle:
-                        # Intraday (YYYY-MM-DD HH:MM:SS) - Usually UTC
+                        # Intraday Date
                         dt = datetime.strptime(candle['datetime'], "%Y-%m-%d %H:%M:%S")
                         base_ts = int(dt.replace(tzinfo=pytz.utc).timestamp())
-                        
-                        # APPLY OFFSET HERE
-                        ts = base_ts + offset
+                        ts = base_ts + offset # Apply IST Offset
                 except: continue 
                 
                 o, h, l, c, v = candle.get('open'), candle.get('high'), candle.get('low'), candle.get('close'), candle.get('volume')
@@ -215,8 +221,6 @@ def get_historical_data(symbol: str, range_type: str = "1d"):
     except Exception as e:
         print(f"EODHD Chart Error: {e}")
         return []
-
-
 # ==========================================
 # 3. ROBUST PARSERS (THE BRAIN)
 # ==========================================

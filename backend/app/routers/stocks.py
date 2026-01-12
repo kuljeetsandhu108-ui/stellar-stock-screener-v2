@@ -268,19 +268,57 @@ async def get_peers_comparison(symbol: str):
 @router.get("/{symbol}/chart")
 async def get_stock_chart(symbol: str, range: str = "1D"):
     """
-    EODHD High-Speed Charting.
+    High-End Chart Engine.
+    Features: Smart Stitching + Math Resampling + Persistent Caching.
     """
-    cache_key = f"chart_{symbol}_{range}"
-    cached = redis_service.get_cache(cache_key)
-    if cached: return cached
+    # 1. Determine Base Request
+    # If user wants 15M/1H/4H, we actually want the 5M base data to resample it
+    # Daily (1D) and Weekly (1W) are their own base.
+    is_intraday_derived = range in ["15M", "1H", "4H"]
+    request_range = "5M" if is_intraday_derived else range
+    
+    # 2. Check Cache for the BASE data
+    cache_key = f"chart_base_v2_{symbol}_{request_range}"
+    
+    # Intraday Cache: 5 mins. Daily Cache: 24 Hours.
+    ttl = 86400 if range in ["1D", "1W", "1M"] else 300 
+    
+    chart_data = redis_service.get_cache(cache_key)
+    
+    # 3. Fetch if missing
+    if not chart_data:
+        chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=request_range)
+        if chart_data:
+            redis_service.set_cache(cache_key, chart_data, ttl)
+    
+    if not chart_data: return []
 
-    data = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=range)
-    if data: 
-        # Cache Intraday 1 min, Long term 1 hour
-        ttl = 60 if range in ["1D", "5M", "15M"] else 3600
-        redis_service.set_cache(cache_key, data, ttl)
-        
-    return data or []
+    # 4. MATH RESAMPLING ENGINE
+    # If the user asked for 1H, we take our 5M data and calculate the 1H candles mathematically.
+    if is_intraday_derived:
+        df = pd.DataFrame(chart_data)
+        chart_data = technical_service.resample_chart_data(df, range)
+
+    # 5. LIVE STITCHING (Update Tip)
+    try:
+        live_quote = await asyncio.to_thread(eodhd_service.get_live_price, symbol)
+        if live_quote and live_quote.get('price'):
+            current_price = live_quote['price']
+            # Time shift logic for India (Same as before)
+            is_indian = ".NS" in symbol or ".BO" in symbol or "NIFTY" in symbol
+            ts_now = live_quote.get('timestamp') or int(pd.Timestamp.now().timestamp())
+            if is_indian and range not in ["1D", "1W"]: ts_now += 19800
+
+            # Stitch Logic
+            last = chart_data[-1]
+            # Simple update for seamless look
+            last['close'] = current_price
+            if current_price > last['high']: last['high'] = current_price
+            if current_price < last['low']: last['low'] = current_price
+            # Volume accumulation would require complex logic, skipping for speed
+    except: pass
+
+    return chart_data
 
 @router.get("/{symbol}/all")
 async def get_all_stock_data(symbol: str):

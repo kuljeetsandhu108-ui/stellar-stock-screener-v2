@@ -267,3 +267,51 @@ def calculate_extended_technicals(df: pd.DataFrame):
         }
     except:
         return None
+# ... (Keep existing imports and functions) ...
+
+def resample_chart_data(df: pd.DataFrame, target_interval: str):
+    """
+    High-End Math: Converts 5M candles into 15M, 1H, 4H candles.
+    Saves API calls and makes switching timeframes instant.
+    """
+    if df is None or df.empty: return []
+
+    try:
+        # 1. Convert to Datetime Index for Resampling
+        df['datetime'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('datetime', inplace=True)
+        
+        # 2. Define Mapping (Pandas Offset Aliases)
+        # 15M -> '15T', 1H -> '1H', 4H -> '4H'
+        mapping = {
+            "15M": "15min",
+            "1H": "1h",
+            "4H": "4h"
+        }
+        rule = mapping.get(target_interval)
+        if not rule: return []
+
+        # 3. Resample Logic (OHLCV Aggregation)
+        # Open=First, High=Max, Low=Min, Close=Last, Volume=Sum
+        resampled = df.resample(rule).agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        })
+        
+        # 4. Cleanup (Remove empty rows created by market gaps)
+        resampled.dropna(inplace=True)
+        
+        # 5. Format back to Lightweight Charts format (List of Dicts)
+        resampled.reset_index(inplace=True)
+        # Convert timestamp back to Unix Seconds
+        resampled['time'] = resampled['datetime'].astype('int64') // 10**9
+        
+        # Return as list of dicts
+        return resampled[['time', 'open', 'high', 'low', 'close', 'volume']].to_dict('records')
+
+    except Exception as e:
+        print(f"Resampling Error: {e}")
+        return []
