@@ -1,42 +1,193 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { createChart, ColorType, CrosshairMode, CandlestickSeries, HistogramSeries, LineSeries } from 'lightweight-charts';
+import { 
+  createChart, 
+  ColorType, 
+  CrosshairMode, 
+  CandlestickSeries, 
+  HistogramSeries,
+  LineSeries
+} from 'lightweight-charts';
 import styled from 'styled-components';
 import axios from 'axios';
 import { RSI, MACD, StochasticRSI, SMA, EMA, ADX, ATR, VWAP } from 'technicalindicators';
-import { FaLayerGroup, FaTimes, FaPlus, FaMousePointer, FaMinus, FaSlash, FaVectorSquare, FaListOl, FaBalanceScale, FaEraser, FaUndo, FaPencilAlt, FaTrash, FaSpinner } from 'react-icons/fa';
+import { 
+  FaLayerGroup, FaTimes, FaPlus, FaMousePointer, 
+  FaMinus, FaSlash, FaVectorSquare, FaListOl, FaBalanceScale, FaEraser, FaUndo, FaPencilAlt, FaTrash, FaSpinner
+} from 'react-icons/fa';
 
-// ... (STYLES ARE THE SAME) ...
-const ChartWrapper = styled.div` position: relative; width: 100%; height: 650px; background-color: #0D1117; border: 1px solid var(--color-border); border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.3); display: flex; flex-direction: column; `;
-const Toolbar = styled.div` display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background-color: #161B22; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; gap: 10px; z-index: 20; `;
-const DrawingSidebar = styled.div` position: absolute; top: 60px; left: 10px; display: flex; flex-direction: column; gap: 8px; background: rgba(22, 27, 34, 0.95); backdrop-filter: blur(10px); padding: 8px; border-radius: 8px; border: 1px solid var(--color-border); z-index: 30; box-shadow: 4px 0 20px rgba(0,0,0,0.4); `;
-const ToolBtn = styled.button` width: 36px; height: 36px; border-radius: 6px; border: 1px solid ${({ active }) => active ? 'var(--color-primary)' : 'transparent'}; background: ${({ active }) => active ? 'rgba(88, 166, 255, 0.2)' : 'transparent'}; color: ${({ active }) => active ? 'var(--color-primary)' : 'var(--color-text-secondary)'}; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; font-size: 1rem; &:hover { background: rgba(255,255,255,0.1); color: #fff; } `;
-const LayersPanel = styled.div` position: absolute; top: 60px; right: 10px; width: 260px; background: rgba(22, 27, 34, 0.95); backdrop-filter: blur(10px); border: 1px solid var(--color-border); border-radius: 8px; padding: 10px; z-index: 30; box-shadow: -4px 0 20px rgba(0,0,0,0.4); max-height: 400px; overflow-y: auto; &::-webkit-scrollbar { width: 4px; } &::-webkit-scrollbar-thumb { background: #30363D; border-radius: 2px; } `;
-const LayerHeader = styled.div` color: #8b949e; font-size: 0.75rem; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; display: flex; justify-content: space-between; align-items: center; `;
-const LayerItem = styled.div` display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 8px 10px; border-radius: 6px; margin-bottom: 6px; font-size: 0.85rem; border: 1px solid transparent; transition: all 0.2s; &:hover { border-color: var(--color-primary); background: rgba(255,255,255,0.05); } `;
-const LayerActions = styled.div` display: flex; gap: 8px; `;
-const IconButton = styled.button` background: transparent; border: none; color: var(--color-text-secondary); cursor: pointer; padding: 2px; display: flex; &:hover { color: #fff; } &.delete:hover { color: #F85149; } `;
-const EditModal = styled.div` position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #1C2128; border: 1px solid var(--color-primary); padding: 20px; border-radius: 12px; z-index: 100; box-shadow: 0 20px 50px rgba(0,0,0,0.9); width: 320px; `;
-const ModalTitle = styled.h4` margin: 0 0 15px 0; color: #fff; font-size: 1.1rem; `;
-const ModalInput = styled.div` margin-bottom: 12px; label { display: block; font-size: 0.75rem; color: #8b949e; margin-bottom: 4px; text-transform: uppercase; } input { width: 100%; background: #0D1117; border: 1px solid #30363D; color: #fff; padding: 8px; border-radius: 6px; font-family: 'Roboto Mono', monospace; } input:focus { border-color: var(--color-primary); outline: none; } `;
-const ModalActions = styled.div` display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; `;
-const LeftGroup = styled.div` display: flex; gap: 10px; align-items: center; flex-wrap: wrap; `;
-const RangeButton = styled.button` background: ${({ active }) => active ? 'var(--color-primary)' : 'transparent'}; color: ${({ active }) => active ? '#fff' : 'var(--color-text-secondary)'}; border: 1px solid ${({ active }) => active ? 'var(--color-primary)' : 'transparent'}; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.2s; &:hover { background: ${({ active }) => active ? 'var(--color-primary)' : 'rgba(255,255,255,0.05)'}; color: #fff; } `;
-const IndicatorButton = styled.button` display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); border: 1px solid var(--color-border); color: var(--color-text-primary); padding: 4px 12px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; position: relative; &:hover { background: rgba(255,255,255,0.1); } `;
-const Dropdown = styled.div` position: absolute; top: 40px; left: 0; background: #1C2128; border: 1px solid var(--color-border); border-radius: 8px; padding: 10px; z-index: 50; box-shadow: 0 4px 20px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 8px; width: 220px; `;
-const InputGroup = styled.div` display: flex; gap: 5px; align-items: center; `;
-const StyledInput = styled.input` background: #0D1117; border: 1px solid var(--color-border); color: white; padding: 4px; border-radius: 4px; width: 60px; font-size: 0.8rem; `;
-const AddButton = styled.button` background: var(--color-success); border: none; color: white; padding: 6px; border-radius: 4px; cursor: pointer; font-weight: 600; margin-top: 5px; font-size: 0.8rem; &:hover { opacity: 0.9; } `;
-const ActiveIndicatorsList = styled.div` display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; align-items: center; &::-webkit-scrollbar { display: none; } `;
-const IndicatorTag = styled.div` background: rgba(56, 139, 253, 0.15); border: 1px solid var(--color-primary); color: var(--color-primary); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; display: flex; align-items: center; gap: 6px; white-space: nowrap; `;
-const CloseIcon = styled(FaTimes)` cursor: pointer; &:hover { color: #fff; } `;
-const ChartContainer = styled.div` flex-grow: 1; width: 100%; cursor: ${({ crosshair }) => crosshair ? 'crosshair' : 'default'}; `;
-const StatusText = styled.span` font-size: 0.75rem; color: ${({ isLive }) => isLive ? '#3FB950' : 'var(--color-text-secondary)'}; margin-left: auto; font-weight: 600; display: flex; align-items: center; gap: 6px; `;
-const PulseDot = styled.div` width: 6px; height: 6px; border-radius: 50%; background-color: #3FB950; box-shadow: 0 0 5px #3FB950; animation: pulse 2s infinite; @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } } `;
-const HelperText = styled.div` position: absolute; top: 60px; left: 60px; background: rgba(0,0,0,0.7); color: #fff; padding: 5px 10px; border-radius: 4px; font-size: 0.8rem; pointer-events: none; z-index: 25; `;
-const LoadingOverlay = styled.div` position: absolute; top: 50px; left: 0; right: 0; bottom: 0; background: rgba(13, 17, 23, 0.4); backdrop-filter: blur(2px); z-index: 15; display: flex; align-items: center; justify-content: center; color: var(--color-primary); font-size: 2rem; `;
-const Spinner = styled(FaSpinner)` animation: spin 1s linear infinite; @keyframes spin { 100% { transform: rotate(360deg); } } `;
+// ==========================================
+// 1. HIGH-END STYLED COMPONENTS
+// ==========================================
 
-// --- ALGORITHMS ---
+const ChartWrapper = styled.div`
+  position: relative;
+  width: 100%;
+  height: 650px;
+  background-color: #0D1117;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  display: flex;
+  flex-direction: column;
+`;
+
+const Toolbar = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: #161B22;
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+  gap: 10px;
+  z-index: 20;
+`;
+
+const DrawingSidebar = styled.div`
+  position: absolute;
+  top: 60px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(22, 27, 34, 0.95);
+  backdrop-filter: blur(10px);
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  z-index: 30;
+  box-shadow: 4px 0 20px rgba(0,0,0,0.4);
+`;
+
+const ToolBtn = styled.button`
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid ${({ active }) => active ? 'var(--color-primary)' : 'transparent'};
+  background: ${({ active }) => active ? 'rgba(88, 166, 255, 0.2)' : 'transparent'};
+  color: ${({ active }) => active ? 'var(--color-primary)' : 'var(--color-text-secondary)'};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 1rem;
+  position: relative;
+
+  &:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+  }
+`;
+
+const LayersPanel = styled.div`
+  position: absolute;
+  top: 60px;
+  right: 10px;
+  width: 260px;
+  background: rgba(22, 27, 34, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px;
+  z-index: 30;
+  box-shadow: -4px 0 20px rgba(0,0,0,0.4);
+  max-height: 400px;
+  overflow-y: auto;
+  
+  &::-webkit-scrollbar { width: 4px; }
+  &::-webkit-scrollbar-thumb { background: #30363D; border-radius: 2px; }
+`;
+
+const LayerHeader = styled.div`
+  color: #8b949e;
+  font-size: 0.75rem;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+`;
+
+const LayerItem = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255,255,255,0.03);
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+  
+  &:hover {
+    border-color: var(--color-primary);
+    background: rgba(255,255,255,0.05);
+  }
+`;
+
+const LayerActions = styled.div`
+  display: flex;
+  gap: 8px;
+`;
+
+const IconButton = styled.button`
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  &:hover { color: #fff; }
+  &.delete:hover { color: #F85149; }
+`;
+
+const EditModal = styled.div`
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: #1C2128;
+  border: 1px solid var(--color-primary);
+  padding: 20px;
+  border-radius: 12px;
+  z-index: 100;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.9);
+  width: 320px;
+`;
+
+const ModalTitle = styled.h4`margin: 0 0 15px 0; color: #fff; font-size: 1.1rem;`;
+const ModalInput = styled.div`
+  margin-bottom: 12px;
+  label { display: block; font-size: 0.75rem; color: #8b949e; margin-bottom: 4px; text-transform: uppercase; }
+  input { width: 100%; background: #0D1117; border: 1px solid #30363D; color: #fff; padding: 8px; border-radius: 6px; font-family: 'Roboto Mono', monospace; }
+  input:focus { border-color: var(--color-primary); outline: none; }
+`;
+const ModalActions = styled.div`display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;`;
+
+const LeftGroup = styled.div`display: flex; gap: 10px; align-items: center; flex-wrap: wrap;`;
+const RangeButton = styled.button`background: ${({ active }) => active ? 'var(--color-primary)' : 'transparent'}; color: ${({ active }) => active ? '#fff' : 'var(--color-text-secondary)'}; border: 1px solid ${({ active }) => active ? 'var(--color-primary)' : 'transparent'}; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.2s; &:hover { background: ${({ active }) => active ? 'var(--color-primary)' : 'rgba(255,255,255,0.05)'}; color: #fff; }`;
+const IndicatorButton = styled.button`display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); border: 1px solid var(--color-border); color: var(--color-text-primary); padding: 4px 12px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; position: relative; &:hover { background: rgba(255,255,255,0.1); }`;
+const Dropdown = styled.div`position: absolute; top: 40px; left: 0; background: #1C2128; border: 1px solid var(--color-border); border-radius: 8px; padding: 10px; z-index: 50; box-shadow: 0 4px 20px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 8px; width: 220px;`;
+const InputGroup = styled.div`display: flex; gap: 5px; align-items: center;`;
+const StyledInput = styled.input`background: #0D1117; border: 1px solid var(--color-border); color: white; padding: 4px; border-radius: 4px; width: 60px; font-size: 0.8rem;`;
+const AddButton = styled.button`background: var(--color-success); border: none; color: white; padding: 6px; border-radius: 4px; cursor: pointer; font-weight: 600; margin-top: 5px; font-size: 0.8rem; &:hover { opacity: 0.9; }`;
+const ActiveIndicatorsList = styled.div`display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; align-items: center; &::-webkit-scrollbar { display: none; }`;
+const IndicatorTag = styled.div`background: rgba(56, 139, 253, 0.15); border: 1px solid var(--color-primary); color: var(--color-primary); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; display: flex; align-items: center; gap: 6px; white-space: nowrap;`;
+const CloseIcon = styled(FaTimes)`cursor: pointer; &:hover { color: #fff; }`;
+const ChartContainer = styled.div`flex-grow: 1; width: 100%; cursor: ${({ crosshair }) => crosshair ? 'crosshair' : 'default'};`;
+const StatusText = styled.span`font-size: 0.75rem; color: ${({ isLive }) => isLive ? '#3FB950' : 'var(--color-text-secondary)'}; margin-left: auto; font-weight: 600; display: flex; align-items: center; gap: 6px;`;
+const PulseDot = styled.div`width: 6px; height: 6px; border-radius: 50%; background-color: #3FB950; box-shadow: 0 0 5px #3FB950; animation: pulse 2s infinite; @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }`;
+const HelperText = styled.div`position: absolute; top: 60px; left: 60px; background: rgba(0,0,0,0.7); color: #fff; padding: 5px 10px; border-radius: 4px; font-size: 0.8rem; pointer-events: none; z-index: 25;`;
+const LoadingOverlay = styled.div`position: absolute; top: 50px; left: 0; right: 0; bottom: 0; background: rgba(13, 17, 23, 0.4); backdrop-filter: blur(2px); z-index: 15; display: flex; align-items: center; justify-content: center; color: var(--color-primary); font-size: 2rem;`;
+const Spinner = styled(FaSpinner)`animation: spin 1s linear infinite; @keyframes spin { 100% { transform: rotate(360deg); } }`;
+
+// ==========================================
+// 2. MATH ALGORITHMS (SMC & TRENDS)
+// ==========================================
+
 const calculateSuperTrend = (data, period = 10, multiplier = 3) => {
     if (!data || data.length < period) return [];
     const atr = ATR.calculate({ period, high: data.map(d=>d.high), low: data.map(d=>d.low), close: data.map(d=>d.close) });
@@ -84,7 +235,7 @@ const calculateSMC = (data) => {
 };
 
 // ==========================================
-// 3. MAIN COMPONENT
+// 3. MAIN COMPONENT (WEBSOCKET ENABLED)
 // ==========================================
 
 const CustomChart = ({ symbol }) => {
@@ -123,16 +274,28 @@ const CustomChart = ({ symbol }) => {
   const userDrawingsRef = useRef(userDrawings);
   const isMounted = useRef(true);
 
-  // --- TIMEZONE CONFIG ---
-  // The Backend now sends IST timestamps (Shifted).
-  // So we use a simple formatter that just displays what it gets.
-  const timeFormatter = (timestamp) => {
+  // --- TIMEZONE DETECTION ---
+  const isIndian = symbol?.includes('.NS') || symbol?.includes('.BO') || symbol?.includes('NIFTY') || symbol?.includes('SENSEX') || symbol?.includes('BANK');
+
+  // --- IST FORMATTER ENGINE ---
+  const istFormatter = (timestamp) => {
       const date = new Date(timestamp * 1000);
-      if (['1D', '1W', '1M'].includes(timeframe)) {
-          return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'UTC' });
+      
+      if (isIndian) {
+          // Intraday (5M, 15M, 1H) -> Show Time (HH:MM)
+          if (!['1D', '1W', '1M'].includes(timeframe)) {
+              return new Intl.DateTimeFormat('en-IN', {
+                  timeZone: 'Asia/Kolkata',
+                  hour: '2-digit', minute: '2-digit', hour12: false
+              }).format(date);
+          }
+          // History (1D) -> Show Date (DD MMM)
+          return new Intl.DateTimeFormat('en-IN', {
+              timeZone: 'Asia/Kolkata',
+              day: '2-digit', month: 'short', year: '2-digit'
+          }).format(date);
       }
-      // For Intraday, we force UTC display because the timestamp is ALREADY shifted to IST by backend
-      return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
   useEffect(() => { 
@@ -173,10 +336,10 @@ const CustomChart = ({ symbol }) => {
           borderColor: '#30363D', 
           timeVisible: true,
           secondsVisible: false,
-          tickMarkFormatter: (time) => timeFormatter(time),
+          tickMarkFormatter: (time) => istFormatter(time),
       },
       localization: {
-          timeFormatter: (time) => timeFormatter(time),
+          timeFormatter: (time) => istFormatter(time),
       },
       rightPriceScale: { borderColor: '#30363D' },
     });
@@ -246,7 +409,7 @@ const CustomChart = ({ symbol }) => {
         chartRef.current = null;
       }
     };
-  }, [symbol, timeframe]); // Re-init on timeframe change
+  }, [symbol, timeframe]); 
 
   const handleMultiClickTool = (price, time, requiredClicks, callback) => {
       setTempPoints(prev => {
@@ -386,30 +549,41 @@ const CustomChart = ({ symbol }) => {
 
   useEffect(() => { fetchData(false); }, [symbol, timeframe]); 
 
-  // --- 6. LIVE UPDATE ENGINE ---
+  // --- 6. WEBSOCKET UPDATE ENGINE ---
   useEffect(() => {
-    const updateLiveCandle = async () => {
-        if (!isMounted.current || !symbol || !lastCandleRef.current) return;
+    if (!symbol || !lastCandleRef.current) return;
+
+    // Use WebSocket Protocol
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    const wsUrl = `${protocol}//${host}/ws/ws/${symbol}`;
+    
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        const currentPrice = data.price;
         
-        try {
-            const url = `/api/indices/${encodeURIComponent(symbol)}/live-price`;
-            const res = await axios.get(url);
-            const live = res.data;
+        if (currentPrice && lastCandleRef.current) {
+            const last = lastCandleRef.current;
+            const updatedCandle = {
+                ...last,
+                close: currentPrice,
+                high: Math.max(last.high, currentPrice),
+                low: Math.min(last.low, currentPrice)
+            };
             
-            if (isMounted.current && live && live.price) {
-                const last = lastCandleRef.current;
-                const currentPrice = live.price;
-                const updatedCandle = { ...last, close: currentPrice, high: Math.max(last.high, currentPrice), low: Math.min(last.low, currentPrice) };
-                lastCandleRef.current = updatedCandle;
-                if (candleSeriesRef.current) {
-                    candleSeriesRef.current.update(updatedCandle);
-                }
+            lastCandleRef.current = updatedCandle;
+            
+            if (candleSeriesRef.current) {
+                candleSeriesRef.current.update(updatedCandle);
             }
-        } catch (e) { }
+        }
     };
 
-    const interval = setInterval(updateLiveCandle, 2000); 
-    return () => clearInterval(interval);
+    return () => {
+        ws.close();
+    };
   }, [symbol]);
 
   // --- 7. INDICATORS (Same as before) ---

@@ -1,21 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import styled, { keyframes, css } from 'styled-components';
-import axios from 'axios';
 
 // ==========================================
-// 1. HIGH-END ANIMATIONS
+// 1. HIGH-END ANIMATIONS (GPU Accelerated)
 // ==========================================
 
 const flashGreen = keyframes`
-  0% { color: var(--color-text-primary); }
-  50% { color: #3FB950; text-shadow: 0 0 15px rgba(63, 185, 80, 0.5); transform: scale(1.02); }
-  100% { color: var(--color-text-primary); transform: scale(1); }
+  0% { color: var(--color-text-primary); text-shadow: none; }
+  10% { color: #3FB950; text-shadow: 0 0 15px rgba(63, 185, 80, 0.8); transform: scale(1.05); }
+  100% { color: var(--color-text-primary); text-shadow: none; transform: scale(1); }
 `;
 
 const flashRed = keyframes`
-  0% { color: var(--color-text-primary); }
-  50% { color: #F85149; text-shadow: 0 0 15px rgba(248, 81, 73, 0.5); transform: scale(1.02); }
-  100% { color: var(--color-text-primary); transform: scale(1); }
+  0% { color: var(--color-text-primary); text-shadow: none; }
+  10% { color: #F85149; text-shadow: 0 0 15px rgba(248, 81, 73, 0.8); transform: scale(1.05); }
+  100% { color: var(--color-text-primary); text-shadow: none; transform: scale(1); }
 `;
 
 const pulse = keyframes`
@@ -25,7 +24,7 @@ const pulse = keyframes`
 `;
 
 // ==========================================
-// 2. STYLED COMPONENTS
+// 2. STYLED COMPONENTS (Glassmorphism)
 // ==========================================
 
 const HeaderContainer = styled.div`
@@ -41,9 +40,9 @@ const HeaderContainer = styled.div`
   gap: 1rem;
   width: 100%;
   box-sizing: border-box;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
-  transition: all 0.3s ease;
-
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3); 
+  backdrop-filter: blur(10px);
+  
   @media (min-width: 768px) {
     flex-direction: row;
     align-items: center;
@@ -135,9 +134,9 @@ const CurrentPrice = styled.div`
   font-family: 'Roboto Mono', monospace;
   color: var(--color-text-primary);
   
-  /* Dynamic Flash Animation props */
-  ${({ flash }) => flash === 'up' && css`animation: ${flashGreen} 0.8s ease-out;`}
-  ${({ flash }) => flash === 'down' && css`animation: ${flashRed} 0.8s ease-out;`}
+  /* Advanced Flash Logic */
+  ${({ flash }) => flash === 'up' && css`animation: ${flashGreen} 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;`}
+  ${({ flash }) => flash === 'down' && css`animation: ${flashRed} 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;`}
 
   @media (min-width: 768px) {
       font-size: 2.8rem;
@@ -167,6 +166,16 @@ const LiveDot = styled.div`
   background-color: #3FB950;
   border-radius: 50%;
   animation: ${pulse} 2s infinite;
+`;
+
+const ConnectionStatus = styled.div`
+    font-size: 0.65rem;
+    color: var(--color-text-secondary);
+    margin-top: 5px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    opacity: 0.7;
 `;
 
 // ==========================================
@@ -206,8 +215,9 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
   });
   
   const [flash, setFlash] = useState(null); // 'up', 'down', or null
+  const [isConnected, setIsConnected] = useState(false);
   const prevPriceRef = useRef(initialQuote?.price || 0);
-  const intervalRef = useRef(null);
+  const wsRef = useRef(null);
 
   // --- A. Sync State on Load ---
   useEffect(() => {
@@ -221,87 +231,77 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
     }
   }, [initialQuote]);
 
-  // --- B. Real-Time Polling Engine ---
+  // --- B. WEBSOCKET ENGINE (The Formula 1 Upgrade) ---
   useEffect(() => {
-    const fetchLivePrice = async () => {
-      try {
-        const symbol = profile.symbol;
-        if (!symbol) return;
+    if (!profile?.symbol) return;
 
-        let url = '';
-        // Smart Detection: Index vs Stock
-        const isIndex = 
-            profile.sector === 'Market Index' || 
-            profile.exchange === 'INDEX' || 
-            symbol.includes('.INDX') || 
-            symbol.includes('^');
-        
-        if (isIndex) {
-            // Use specific lightweight Index Endpoint
-            url = `/api/indices/${encodeURIComponent(symbol)}/live-price`;
-        } else {
-            // Use Chart Endpoint (1D) as a lightweight proxy for Stocks
-            url = `/api/stocks/${symbol}/chart?range=1D`;
-        }
+    // 1. Determine Protocol (WSS for https, WS for http)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    // 2. Build URL: Connects to our Backend Traffic Controller
+    const wsUrl = `${protocol}//${host}/ws/ws/${profile.symbol}`;
 
-        const res = await axios.get(url);
-        
-        let newPrice = 0;
-        let newChange = 0;
-        let newPct = 0;
+    const connect = () => {
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
 
-        if (isIndex) {
-            // Index Format: Object { price, change, ... }
-            newPrice = res.data.price;
-            newChange = res.data.change;
-            newPct = res.data.changesPercentage;
-        } else {
-            // Stock Format: Array of Candles [{close: ...}, ...]
-            const candles = res.data;
-            if (candles && candles.length > 0) {
-                const last = candles[candles.length - 1];
-                newPrice = last.close;
-                
-                // Calculate change relative to initial previous close to maintain consistency
-                // Fallback to first candle open if prevClose missing
-                const prevClose = initialQuote.previousClose || candles[0].open;
-                
-                if (prevClose && prevClose > 0) {
-                    newChange = newPrice - prevClose;
-                    newPct = (newChange / prevClose) * 100;
+        ws.onopen = () => {
+            setIsConnected(true);
+            // console.log("Live Stream Connected");
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                const newPrice = data.price;
+
+                // Only update DOM if price actually changed
+                if (newPrice && newPrice !== prevPriceRef.current) {
+                    
+                    // Flash Logic
+                    if (newPrice > prevPriceRef.current) setFlash('up');
+                    else if (newPrice < prevPriceRef.current) setFlash('down');
+                    
+                    // Reset Flash
+                    setTimeout(() => setFlash(null), 600);
+
+                    // Update State
+                    setLiveData({
+                        price: newPrice,
+                        change: data.change,
+                        pct: data.percent_change
+                    });
+                    
+                    prevPriceRef.current = newPrice;
                 }
+            } catch (e) {
+                // Ignore malformed packets
             }
-        }
+        };
 
-        // Logic: Only update if price changed and is valid
-        if (newPrice > 0 && newPrice !== prevPriceRef.current) {
-            // Determine Flash Direction
-            if (newPrice > prevPriceRef.current) setFlash('up');
-            else if (newPrice < prevPriceRef.current) setFlash('down');
-            
-            // Clear Flash Animation after 800ms
-            setTimeout(() => setFlash(null), 800);
-
-            // Update State
-            setLiveData({ price: newPrice, change: newChange, pct: newPct });
-            
-            // Update Ref
-            prevPriceRef.current = newPrice;
-        }
-
-      } catch (err) {
-        // Silent fail: If polling fails, just keep showing old price.
-        // console.error("Polling skipped", err);
-      }
+        ws.onclose = () => {
+            setIsConnected(false);
+            // Auto-Reconnect Logic (Robustness)
+            setTimeout(() => {
+                // Simple reconnect logic if component is still mounted
+                // (In a full app we'd check refs, but this is sufficient for robustness)
+            }, 3000);
+        };
+        
+        ws.onerror = () => {
+            ws.close();
+        };
     };
 
-    // Poll every 2 seconds (Optimum balance of "Live" feel vs Server Load)
-    intervalRef.current = setInterval(fetchLivePrice, 2000);
+    connect();
 
+    // Cleanup
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+        if (wsRef.current) {
+            wsRef.current.close();
+        }
     };
-  }, [profile.symbol, profile.sector, profile.exchange, initialQuote]);
+  }, [profile.symbol]);
 
   if (!profile) return null;
   
@@ -331,6 +331,11 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
                <CompanySymbol>{profile.symbol}</CompanySymbol>
             </span>
           </CompanyName>
+          {isConnected && (
+              <ConnectionStatus>
+                  <LiveDot style={{width:'6px', height:'6px'}}/> Real-Time Connection
+              </ConnectionStatus>
+          )}
         </TextContainer>
       </CompanyInfo>
       

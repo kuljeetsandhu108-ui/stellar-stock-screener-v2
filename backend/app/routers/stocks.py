@@ -77,6 +77,61 @@ TRADINGVIEW_OVERRIDE_MAP = {
 # 2. AI & SEARCH ENDPOINTS (Low Latency)
 # ==========================================
 
+# ==========================================
+# 2. AI & SEARCH ENDPOINTS (Low Latency)
+# ==========================================
+
+@router.get("/autocomplete")
+async def get_stock_autocomplete(query: str = Query(..., min_length=1)):
+    """
+    High-Speed Autocomplete Engine.
+    PRIORITY: NSE/BSE Stocks > US Stocks > Others.
+    """
+    # 1. Check Cache (Instant response for common prefixes like "REL", "TATA")
+    cache_key = f"autocomplete_v1_{query.lower().strip()}"
+    cached = redis_service.get_cache(cache_key)
+    if cached: return cached
+
+    # 2. Fetch from FMP (Fetch 20 to ensure we catch the Indian ones buried deep)
+    # We fetch a bit more than needed so we can re-sort them.
+    results = await asyncio.to_thread(fmp_service.search_ticker, query, limit=25)
+    
+    if not results: 
+        return []
+
+    # 3. SMART SORTING ALGORITHM (The Logic You Requested)
+    # We separate results into buckets
+    nse_stocks = []
+    bse_stocks = []
+    us_stocks = []
+    others = []
+
+    for stock in results:
+        sym = stock.get('symbol', '').upper()
+        exch = stock.get('exchangeShortName', '').upper()
+        
+        # Identification Logic
+        is_nse = sym.endswith('.NS') or exch == 'NSE'
+        is_bse = sym.endswith('.BO') or exch == 'BSE'
+        is_us = not (is_nse or is_bse) and ('.' not in sym) # Rough heuristic for US
+
+        if is_nse: nse_stocks.append(stock)
+        elif is_bse: bse_stocks.append(stock)
+        elif is_us: us_stocks.append(stock)
+        else: others.append(stock)
+
+    # 4. Construct Final List (NSE First, then BSE, then US)
+    # We take top 5 from India, then fill rest with US/Others
+    final_list = nse_stocks + bse_stocks + us_stocks + others
+    
+    # Trim to top 10 for UI cleanliness
+    final_list = final_list[:10]
+
+    # 5. Cache for 24 Hours (Search results rarely change)
+    redis_service.set_cache(cache_key, final_list, 86400)
+    
+    return final_list
+
 @router.get("/search")
 async def search_stock_ticker(query: str = Query(..., min_length=2)):
     """

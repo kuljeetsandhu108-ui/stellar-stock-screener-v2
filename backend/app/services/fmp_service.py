@@ -41,9 +41,9 @@ def _fetch(url: str, params: dict = None):
 def search_ticker(query: str, limit: int = 10):
     """
     Primary Search Engine.
-    Used because FMP Search is cheaper/faster than EODHD.
     """
     endpoint = f"{BASE_URL}/search"
+    # Ensure limit is passed correctly to FMP
     params = {'query': query, 'limit': limit}
     res = _fetch(endpoint, params)
     return res if res else []
