@@ -16,7 +16,7 @@ import {
 } from 'react-icons/fa';
 
 // ==========================================
-// 1. HIGH-END STYLED COMPONENTS
+// 1. STYLED COMPONENTS
 // ==========================================
 
 const ChartWrapper = styled.div`
@@ -184,8 +184,9 @@ const HelperText = styled.div`position: absolute; top: 60px; left: 60px; backgro
 const LoadingOverlay = styled.div`position: absolute; top: 50px; left: 0; right: 0; bottom: 0; background: rgba(13, 17, 23, 0.4); backdrop-filter: blur(2px); z-index: 15; display: flex; align-items: center; justify-content: center; color: var(--color-primary); font-size: 2rem;`;
 const Spinner = styled(FaSpinner)`animation: spin 1s linear infinite; @keyframes spin { 100% { transform: rotate(360deg); } }`;
 
+
 // ==========================================
-// 2. MATH ALGORITHMS (SMC & TRENDS)
+// 2. MATH ALGORITHMS (Standard)
 // ==========================================
 
 const calculateSuperTrend = (data, period = 10, multiplier = 3) => {
@@ -235,7 +236,7 @@ const calculateSMC = (data) => {
 };
 
 // ==========================================
-// 3. MAIN COMPONENT (WEBSOCKET ENABLED)
+// 3. MAIN COMPONENT (WITH IST TIMEZONE)
 // ==========================================
 
 const CustomChart = ({ symbol }) => {
@@ -274,7 +275,7 @@ const CustomChart = ({ symbol }) => {
   const userDrawingsRef = useRef(userDrawings);
   const isMounted = useRef(true);
 
-  // --- TIMEZONE DETECTION ---
+  // --- TIMEZONE DETECTION: Indian Market Priority ---
   const isIndian = symbol?.includes('.NS') || symbol?.includes('.BO') || symbol?.includes('NIFTY') || symbol?.includes('SENSEX') || symbol?.includes('BANK');
 
   // --- IST FORMATTER ENGINE ---
@@ -282,14 +283,12 @@ const CustomChart = ({ symbol }) => {
       const date = new Date(timestamp * 1000);
       
       if (isIndian) {
-          // Intraday (5M, 15M, 1H) -> Show Time (HH:MM)
           if (!['1D', '1W', '1M'].includes(timeframe)) {
               return new Intl.DateTimeFormat('en-IN', {
                   timeZone: 'Asia/Kolkata',
                   hour: '2-digit', minute: '2-digit', hour12: false
               }).format(date);
           }
-          // History (1D) -> Show Date (DD MMM)
           return new Intl.DateTimeFormat('en-IN', {
               timeZone: 'Asia/Kolkata',
               day: '2-digit', month: 'short', year: '2-digit'
@@ -409,7 +408,7 @@ const CustomChart = ({ symbol }) => {
         chartRef.current = null;
       }
     };
-  }, [symbol, timeframe]); 
+  }, [symbol, timeframe]);
 
   const handleMultiClickTool = (price, time, requiredClicks, callback) => {
       setTempPoints(prev => {
@@ -549,36 +548,45 @@ const CustomChart = ({ symbol }) => {
 
   useEffect(() => { fetchData(false); }, [symbol, timeframe]); 
 
-  // --- 6. WEBSOCKET UPDATE ENGINE ---
+  // --- 6. LIVE UPDATE ENGINE (WEBSOCKET WIGGLE) ---
   useEffect(() => {
-    if (!symbol || !lastCandleRef.current) return;
-
-    // Use WebSocket Protocol
+    if (!isMounted.current || !symbol) return;
+    
+    // Determine WS Protocol
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const wsHost = isLocal ? '127.0.0.1:8000' : window.location.host;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/ws/ws/${symbol}`;
+    const wsUrl = `${protocol}//${wsHost}/ws/live/${symbol}`;
     
     const ws = new WebSocket(wsUrl);
 
     ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        const currentPrice = data.price;
-        
-        if (currentPrice && lastCandleRef.current) {
-            const last = lastCandleRef.current;
-            const updatedCandle = {
-                ...last,
-                close: currentPrice,
-                high: Math.max(last.high, currentPrice),
-                low: Math.min(last.low, currentPrice)
-            };
+        try {
+            const data = JSON.parse(event.data);
+            const currentPrice = data.price;
             
-            lastCandleRef.current = updatedCandle;
-            
-            if (candleSeriesRef.current) {
-                candleSeriesRef.current.update(updatedCandle);
+            if (isMounted.current && currentPrice && lastCandleRef.current) {
+                const last = lastCandleRef.current;
+                
+                // WIGGLE LOGIC:
+                // Update the *Current* candle's Close/High/Low. 
+                // We use the last candle's existing time (which is already shifted correctly from backend)
+                // so the candle just moves up/down in place.
+                
+                const updatedCandle = { 
+                    ...last, 
+                    close: currentPrice, 
+                    high: Math.max(last.high, currentPrice), 
+                    low: Math.min(last.low, currentPrice) 
+                };
+                
+                lastCandleRef.current = updatedCandle;
+                
+                if (candleSeriesRef.current) {
+                    candleSeriesRef.current.update(updatedCandle);
+                }
             }
-        }
+        } catch (e) {}
     };
 
     return () => {
