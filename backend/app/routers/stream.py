@@ -1,106 +1,58 @@
 import asyncio
-import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from ..services import eodhd_service
+# Import the Singleton Hub Instance
+# This ensures all users connect to the SAME data stream engine
+from ..services.stream_hub import hub
 
 router = APIRouter()
 
-# --- CONNECTION MANAGER ---
-# Keeps track of all 1000 connected users so we can push data to them.
-class ConnectionManager:
-    def __init__(self):
-        # Dictionary to hold lists of connections per symbol
-        # Format: { "RELIANCE.NS": [socket1, socket2], "BTC-USD.CC": [socket3] }
-        self.active_connections: dict[str, list[WebSocket]] = {}
+# ==========================================
+# 1. WEBSOCKET ENDPOINT
+# ==========================================
 
-    async def connect(self, websocket: WebSocket, symbol: str):
-        await websocket.accept()
-        if symbol not in self.active_connections:
-            self.active_connections[symbol] = []
-        self.active_connections[symbol].append(websocket)
-
-    def disconnect(self, websocket: WebSocket, symbol: str):
-        if symbol in self.active_connections:
-            if websocket in self.active_connections[symbol]:
-                self.active_connections[symbol].remove(websocket)
-            if not self.active_connections[symbol]:
-                del self.active_connections[symbol]
-
-    async def broadcast(self, symbol: str, data: dict):
-        if symbol in self.active_connections:
-            # Convert to JSON string once
-            message = json.dumps(data)
-            # Send to all users watching this symbol
-            for connection in self.active_connections[symbol]:
-                try:
-                    await connection.send_text(message)
-                except:
-                    # Clean up dead connections
-                    self.disconnect(connection, symbol)
-
-manager = ConnectionManager()
-
-# --- THE ENGINE ---
-# This background task fetches data and pushes it to the manager.
-# In a true Enterprise setup, this would consume a Kafka/Redis stream.
-# Here, we use high-speed asyncio fetching.
-async def data_streamer():
-    while True:
-        try:
-            # 1. Get list of all symbols currently being watched by users
-            active_symbols = list(manager.active_connections.keys())
-            
-            if not active_symbols:
-                await asyncio.sleep(1)
-                continue
-
-            # 2. Bulk Fetch from EODHD (Extremely Fast)
-            # We fetch up to 50 symbols at a time to stay efficient
-            chunk_size = 20
-            for i in range(0, len(active_symbols), chunk_size):
-                chunk = active_symbols[i:i + chunk_size]
-                
-                # Fetch Real Live Data
-                data_list = await asyncio.to_thread(eodhd_service.get_real_time_bulk, chunk)
-                
-                # 3. Broadcast Updates
-                if data_list:
-                    # Map results to symbols
-                    for item in data_list:
-                        code = item.get('code')
-                        # Find matching full symbol (e.g. NSEI for NSEI.INDX)
-                        # We try to match the code back to the watched symbol
-                        for watched_sym in chunk:
-                            if code in watched_sym:
-                                payload = {
-                                    "price": item.get('close'),
-                                    "change": item.get('change'),
-                                    "percent_change": item.get('change_p'),
-                                    "timestamp": item.get('timestamp')
-                                }
-                                await manager.broadcast(watched_sym, payload)
-            
-            # 4. Frequency (1 second for Crypto feel, 2 seconds for Stocks)
-            await asyncio.sleep(2) 
-            
-        except Exception as e:
-            print(f"Stream Error: {e}")
-            await asyncio.sleep(2)
-
-# --- WEBSOCKET ENDPOINT ---
 @router.websocket("/live/{symbol}")
 async def websocket_endpoint(websocket: WebSocket, symbol: str):
-    await manager.connect(websocket, symbol)
+    """
+    High-Performance WebSocket Gateway.
+    
+    1. Accepts connection from Frontend.
+    2. Registers the user with the Stream Hub for the specific symbol.
+    3. Keeps the connection open until the user leaves.
+    4. Automatically cleans up on disconnect.
+    """
+    
+    # 1. Connect
+    # The Hub handles the accept() and storage logic
+    await hub.connect(websocket, symbol)
+    
     try:
         while True:
-            # Keep connection alive, wait for client messages (ping/pong)
+            # 2. Keep Alive Loop
+            # We wait for messages from the client to keep the socket open.
+            # If the client closes the tab, this line throws WebSocketDisconnect.
+            # We don't expect data FROM the client, but we must listen to keep the pipe open.
             await websocket.receive_text()
+            
     except WebSocketDisconnect:
-        manager.disconnect(websocket, symbol)
+        # 3. Graceful Disconnect
+        # Remove user from the broadcast list to save memory
+        hub.disconnect(websocket, symbol)
+        
+    except Exception as e:
+        # Catch-all for network interruptions
+        # print(f"Socket Error: {e}")
+        hub.disconnect(websocket, symbol)
 
-# --- STARTUP HOOK ---
-# We need to start the background streamer when the app starts
-import asyncio
+# ==========================================
+# 2. LIFECYCLE EVENTS
+# ==========================================
+
 @router.on_event("startup")
 async def startup_event():
-    asyncio.create_task(data_streamer())
+    """
+    SERVER BOOT TRIGGER.
+    This starts the 'Stream Engine' background task as soon as the server launches.
+    It runs forever in the background, fetching data and pushing it to connected users.
+    """
+    # Create a non-blocking background task
+    asyncio.create_task(hub.start_stream_engine())
