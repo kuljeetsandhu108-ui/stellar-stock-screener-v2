@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import os
 
 # Import Routers
-from .routers import stocks, indices, charts, live
+from .routers import stocks, indices, charts, stream 
 
 # Create App
 app = FastAPI(
@@ -34,7 +34,7 @@ app.add_middleware(
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])
 app.include_router(indices.router, prefix="/api/indices", tags=["indices"])
 app.include_router(charts.router, prefix="/api/charts", tags=["charts"])
-app.include_router(live.router, prefix="/ws", tags=["live"])
+app.include_router(stream.router, prefix="/ws", tags=["stream"])
 
 
 # ==========================================

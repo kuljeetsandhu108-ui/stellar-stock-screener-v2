@@ -219,89 +219,65 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
   const prevPriceRef = useRef(initialQuote?.price || 0);
   const wsRef = useRef(null);
 
-  // --- A. Sync State on Load ---
+// --- REAL WEBSOCKET ENGINE ---
   useEffect(() => {
     if (initialQuote) {
-        setLiveData({
-            price: initialQuote.price,
-            change: initialQuote.change,
-            pct: initialQuote.changesPercentage
-        });
+        setLiveData({ price: initialQuote.price, change: initialQuote.change, pct: initialQuote.changesPercentage });
         prevPriceRef.current = initialQuote.price;
     }
-  }, [initialQuote]);
 
-  // --- B. WEBSOCKET ENGINE (The Formula 1 Upgrade) ---
-  useEffect(() => {
-    if (!profile?.symbol) return;
+    if (!profile.symbol) return;
 
-    // 1. Determine Protocol (WSS for https, WS for http)
+    // 1. Construct WebSocket URL
+    // Automatically handles localhost vs production (ws:// vs wss://)
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    // 2. Build URL: Connects to our Backend Traffic Controller
-    const wsUrl = `${protocol}//${host}/ws/ws/${profile.symbol}`;
+    const host = window.location.host; // e.g. localhost:3000 or myapp.railway.app
+    // Note: In development, if frontend is 3000 and backend 8080, you might need hardcoding or proxy.
+    // Production (same domain) works perfectly.
+    const wsUrl = `${protocol}//${host}/ws/live/${profile.symbol}`;
+
+    let ws = null;
 
     const connect = () => {
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
+        ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-            setIsConnected(true);
-            // console.log("Live Stream Connected");
+            // console.log("Connected to Live Stream");
         };
 
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
                 const newPrice = data.price;
-
-                // Only update DOM if price actually changed
+                
                 if (newPrice && newPrice !== prevPriceRef.current) {
-                    
                     // Flash Logic
                     if (newPrice > prevPriceRef.current) setFlash('up');
                     else if (newPrice < prevPriceRef.current) setFlash('down');
-                    
-                    // Reset Flash
-                    setTimeout(() => setFlash(null), 600);
+                    setTimeout(() => setFlash(null), 800);
 
-                    // Update State
                     setLiveData({
                         price: newPrice,
                         change: data.change,
                         pct: data.percent_change
                     });
-                    
                     prevPriceRef.current = newPrice;
                 }
-            } catch (e) {
-                // Ignore malformed packets
-            }
+            } catch (e) {}
         };
 
         ws.onclose = () => {
-            setIsConnected(false);
-            // Auto-Reconnect Logic (Robustness)
-            setTimeout(() => {
-                // Simple reconnect logic if component is still mounted
-                // (In a full app we'd check refs, but this is sufficient for robustness)
-            }, 3000);
-        };
-        
-        ws.onerror = () => {
-            ws.close();
+            // Auto Reconnect if connection drops
+            setTimeout(connect, 3000);
         };
     };
 
     connect();
 
-    // Cleanup
     return () => {
-        if (wsRef.current) {
-            wsRef.current.close();
-        }
+        if (ws) ws.close();
     };
-  }, [profile.symbol]);
+  }, [profile.symbol, initialQuote]);
 
   if (!profile) return null;
   

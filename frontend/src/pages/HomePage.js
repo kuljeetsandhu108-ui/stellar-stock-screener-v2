@@ -2,20 +2,16 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
-import { FaSearch, FaChartBar, FaGlobeAmericas, FaSpinner } from 'react-icons/fa';
+import { FaSearch, FaChartBar, FaGlobeAmericas, FaSpinner, FaBitcoin } from 'react-icons/fa';
+
+// --- COMPONENTS ---
 import IndicesBanner from '../components/Indices/IndicesBanner';
 import ChartUploader from '../components/HomePage/ChartUploader';
 
-// --- 1. HIGH-END ANIMATIONS ---
-
+// --- ANIMATIONS ---
 const fadeIn = keyframes`
   from { opacity: 0; transform: translateY(-20px); }
   to { opacity: 1; transform: translateY(0); }
-`;
-
-const spin = keyframes`
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 `;
 
 const float = keyframes`
@@ -32,7 +28,7 @@ const floatReverse = keyframes`
   100% { transform: translate(0px, 0px) scale(1); }
 `;
 
-// --- 2. STYLED COMPONENTS ---
+// --- STYLED COMPONENTS ---
 
 const HomePageContainer = styled.div`
   display: flex;
@@ -136,7 +132,7 @@ const SearchSection = styled.div`
   max-width: 650px;
   position: relative;
   animation: ${fadeIn} 1.8s ease-out;
-  z-index: 100; /* Ensure this is top level */
+  z-index: 100;
 `;
 
 const SearchWrapper = styled.div`
@@ -149,7 +145,7 @@ const SearchWrapper = styled.div`
 const SearchInput = styled.input`
   width: 100%;
   padding: 18px 25px;
-  padding-right: 70px; /* Space for button */
+  padding-right: 70px;
   font-size: 1.1rem;
   color: var(--color-text-primary);
   background-color: rgba(22, 27, 34, 0.7); 
@@ -224,9 +220,8 @@ const SuggestionsList = styled.ul`
   padding: 0;
   max-height: 350px;
   overflow-y: auto;
-  z-index: 101; /* Higher than Wrapper */
+  z-index: 101;
   
-  /* Smooth Scrollbar */
   &::-webkit-scrollbar { width: 6px; }
   &::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
   &::-webkit-scrollbar-track { background: transparent; }
@@ -245,7 +240,7 @@ const SuggestionItem = styled.li`
   
   &:hover { 
     background-color: rgba(88, 166, 255, 0.15); 
-    padding-left: 25px; /* Slight nudge effect */
+    padding-left: 25px;
   }
 `;
 
@@ -294,42 +289,49 @@ const LoadingText = styled.p`
   font-size: 0.9rem;
 `;
 
-// --- NEW: DUAL UPLOADER GRID ---
+// --- TRIPLE AI UPLOADER GRID ---
 const UploadGrid = styled.div`
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2rem;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
   width: 100%;
-  max-width: 1000px;
+  max-width: 1200px;
   margin-top: 4rem;
   padding: 0 1rem;
   animation: ${fadeIn} 2s ease-out;
 
-  @media (max-width: 768px) {
-    grid-template-columns: 1fr; /* Stack on mobile */
+  @media (max-width: 1024px) {
+    grid-template-columns: 1fr; /* Stack on mobile/tablet */
     gap: 1.5rem;
+    max-width: 500px;
   }
 `;
 
-// --- 3. MAIN COMPONENT LOGIC ---
+const SectionLabel = styled.p`
+  color: var(--color-text-secondary);
+  margin: 2rem 0;
+  font-weight: 500;
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  font-size: 0.8rem;
+`;
+
+// --- MAIN COMPONENT LOGIC ---
 
 const HomePage = () => {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  
-  // State for different loading contexts
   const [isAutoCompleting, setIsAutoCompleting] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  
   const [error, setError] = useState('');
   
   const navigate = useNavigate();
   const searchRef = useRef(null);
 
-  // --- SAFE AUTOCOMPLETE ENGINE ---
+  // --- SMART AUTOCOMPLETE ---
   useEffect(() => {
-    // 1. Clear if empty or short
     if (query.length < 2) {
       setSuggestions([]);
       setShowSuggestions(false);
@@ -338,18 +340,13 @@ const HomePage = () => {
 
     setIsAutoCompleting(true);
 
-    // 2. Debounce API Call (Prevent spamming server)
     const delayDebounceFn = setTimeout(async () => {
       try {
         const response = await axios.get(`/api/stocks/autocomplete?query=${query}`);
-        
-        // --- CRITICAL SAFETY CHECK ---
-        // Prevents "White Screen of Death" if API returns non-array (e.g. error msg)
         if (Array.isArray(response.data)) {
             setSuggestions(response.data);
             setShowSuggestions(true);
         } else {
-            // Graceful fallback
             setSuggestions([]);
         }
       } catch (error) {
@@ -357,12 +354,12 @@ const HomePage = () => {
       } finally {
         setIsAutoCompleting(false);
       }
-    }, 400); // 400ms wait before asking server
+    }, 300); // 300ms delay for snappiness
 
     return () => clearTimeout(delayDebounceFn);
   }, [query]);
 
-  // --- SEARCH HANDLER (Button/Enter) ---
+  // --- SEARCH HANDLER ---
   const performSearch = async (searchQuery = query) => {
     const target = searchQuery.trim();
     if (!target) return;
@@ -372,10 +369,8 @@ const HomePage = () => {
     setShowSuggestions(false);
     
     try {
-      // Use Backend Fallback Search (AI or FMP)
       const response = await axios.get(`/api/stocks/search?query=${target}`);
-      const symbol = response.data.symbol;
-      navigate(`/stock/${symbol}`);
+      navigate(`/stock/${response.data.symbol}`);
     } catch (err) {
       setError('Could not locate stock. Please try a valid ticker.');
     } finally {
@@ -383,7 +378,6 @@ const HomePage = () => {
     }
   };
 
-  // --- CLICK HANDLER (Dropdown Item) ---
   const handleSuggestionClick = (symbol) => {
     setQuery(symbol);
     setSuggestions([]);
@@ -391,14 +385,12 @@ const HomePage = () => {
     navigate(`/stock/${symbol}`);
   };
 
-  // --- KEYBOARD HANDLER ---
   const handleKeyPress = (event) => {
     if (event.key === 'Enter') {
       performSearch();
     }
   };
 
-  // --- CLICK OUTSIDE TO CLOSE ---
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (searchRef.current && !searchRef.current.contains(event.target)) {
@@ -409,21 +401,18 @@ const HomePage = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [searchRef]);
 
-
-  // --- RENDER ---
   return (
     <HomePageContainer>
       
-      {/* 1. Animated Background */}
+      {/* Background FX */}
       <BackgroundLayer>
         <BlobOne />
         <BlobTwo />
       </BackgroundLayer>
       
-      {/* 2. Global Indices Ticker */}
+      {/* Ticker Tape */}
       <IndicesBanner />
       
-      {/* 3. Main Content */}
       <MainContent>
         <Title>Stellar Stock Screener</Title>
         <Subtitle>
@@ -431,12 +420,12 @@ const HomePage = () => {
             technical and fundamental financial insights.
         </Subtitle>
         
-        {/* 4. Search Bar Section */}
+        {/* Search Bar */}
         <SearchSection ref={searchRef}>
           <SearchWrapper>
             <SearchInput
               type="text"
-              placeholder="Search for a company (e.g. Reliance, Apple, Tata Motors)..."
+              placeholder="Search (e.g. Reliance, Bitcoin, Gold, Apple)..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyPress={handleKeyPress}
@@ -445,7 +434,6 @@ const HomePage = () => {
               spellCheck={false}
             />
             
-            {/* Show Spinner inside button if ANY loading is happening */}
             <SearchButton onClick={() => performSearch()} disabled={isSearching || isAutoCompleting} aria-label="Search">
               {isSearching || isAutoCompleting ? (
                   <FaSpinner className="fa-spin" size={20} />
@@ -455,7 +443,6 @@ const HomePage = () => {
             </SearchButton>
           </SearchWrapper>
 
-          {/* 5. Autocomplete Dropdown */}
           {showSuggestions && suggestions.length > 0 && (
             <SuggestionsList>
               {suggestions.map((item) => (
@@ -466,7 +453,6 @@ const HomePage = () => {
                     </SuggestionSymbol>
                     <SuggestionName>{item.name}</SuggestionName>
                   </ItemLeft>
-                  
                   <SuggestionBadge>
                      {item.exchangeShortName || (item.symbol.includes('.') ? 'INTL' : 'US')}
                   </SuggestionBadge>
@@ -476,31 +462,37 @@ const HomePage = () => {
           )}
         </SearchSection>
 
-        {/* 6. Status Text (Only for Main Search Error or Long loading) */}
         <LoadingText>{isSearching ? 'Processing Market Data...' : error || ''}</LoadingText>
         
-        <p style={{ color: 'var(--color-text-secondary)', margin: '2rem 0', fontWeight: '500', opacity: 0.6 }}>
-            — OR —
-        </p>
+        <SectionLabel>— AI ANALYST SUITE —</SectionLabel>
         
-        {/* 7. DUAL UPLOADERS (Stock vs Index) */}
+        {/* TRIPLE AI UPLOADER GRID */}
         <UploadGrid>
-            {/* Stock Uploader (Blue Theme) */}
+            {/* 1. STOCK (Blue) */}
             <ChartUploader 
                 type="stock"
-                title="Stock Chart Analyst"
-                description="Upload a stock chart to identify Breakouts, Trends, and Trade Setups."
+                title="Stocks"
+                description="Analyze Equity Charts & Trends."
                 color="#58A6FF" 
                 icon={<FaChartBar />}
             />
             
-            {/* Index Uploader (Gold Theme) */}
+            {/* 2. INDEX (Gold) */}
             <ChartUploader 
                 type="index"
-                title="Index / Macro Vision"
-                description="Upload a chart of Nifty, BankNifty, or SPX for deep market direction analysis."
+                title="Indices"
+                description="Macro Market Vision (Nifty, SPX)."
                 color="#EBCB8B"
                 icon={<FaGlobeAmericas />}
+            />
+
+            {/* 3. CRYPTO & COMMODITIES (Purple - New High End) */}
+            <ChartUploader 
+                type="crypto"
+                title="Crypto / Commodities"
+                description="Bitcoin, Gold, Oil & Global Assets."
+                color="#D500F9"
+                icon={<FaBitcoin />}
             />
         </UploadGrid>
 
