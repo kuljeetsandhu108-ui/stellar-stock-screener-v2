@@ -12,11 +12,11 @@ import axios from 'axios';
 import { RSI, MACD, StochasticRSI, SMA, EMA, ADX, ATR, VWAP } from 'technicalindicators';
 import { 
   FaLayerGroup, FaTimes, FaPlus, FaMousePointer, 
-  FaMinus, FaSlash, FaVectorSquare, FaListOl, FaBalanceScale, FaEraser, FaUndo, FaPencilAlt, FaTrash, FaSpinner
+  FaMinus, FaSlash, FaVectorSquare, FaListOl, FaBalanceScale, FaEraser, FaUndo, FaPencilAlt, FaTrash, FaSpinner, FaExclamationTriangle
 } from 'react-icons/fa';
 
 // ==========================================
-// 1. STYLED COMPONENTS
+// 1. HIGH-END STYLED COMPONENTS
 // ==========================================
 
 const ChartWrapper = styled.div`
@@ -183,10 +183,10 @@ const PulseDot = styled.div`width: 6px; height: 6px; border-radius: 50%; backgro
 const HelperText = styled.div`position: absolute; top: 60px; left: 60px; background: rgba(0,0,0,0.7); color: #fff; padding: 5px 10px; border-radius: 4px; font-size: 0.8rem; pointer-events: none; z-index: 25;`;
 const LoadingOverlay = styled.div`position: absolute; top: 50px; left: 0; right: 0; bottom: 0; background: rgba(13, 17, 23, 0.4); backdrop-filter: blur(2px); z-index: 15; display: flex; align-items: center; justify-content: center; color: var(--color-primary); font-size: 2rem;`;
 const Spinner = styled(FaSpinner)`animation: spin 1s linear infinite; @keyframes spin { 100% { transform: rotate(360deg); } }`;
-
+const NoDataOverlay = styled.div`position: absolute; top: 50px; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--color-text-secondary); z-index: 10; font-size: 1.2rem; gap: 10px;`;
 
 // ==========================================
-// 2. MATH ALGORITHMS (Standard)
+// 2. MATH ALGORITHMS (SMC + SuperTrend)
 // ==========================================
 
 const calculateSuperTrend = (data, period = 10, multiplier = 3) => {
@@ -217,47 +217,56 @@ const calculateSMC = (data) => {
     if (!data || data.length < 5) return { markers, coloredCandles, priceLines };
     for (let i = 2; i < data.length - 1; i++) {
         const curr = data[i]; const prev = data[i-1]; const prev2 = data[i-2];
+        // Bullish FVG
         if (curr.low > prev2.high) {
             coloredCandles.push({ time: prev.time, color: '#FBBF24', wickColor: '#FBBF24', borderColor: '#FBBF24' });
             if (i > data.length - 80) priceLines.push({ price: prev2.high, color: '#FBBF24', title: 'DEMAND GAP' });
         }
+        // Bearish FVG
         if (curr.high < prev2.low) {
             coloredCandles.push({ time: prev.time, color: '#D500F9', wickColor: '#D500F9', borderColor: '#D500F9' });
             if (i > data.length - 80) priceLines.push({ price: prev2.low, color: '#D500F9', title: 'SUPPLY GAP' });
         }
+        // Order Blocks
         const isRedPrev = prev.close < prev.open; const isGreenCurr = curr.close > curr.open; const engulfsBull = curr.close > prev.open; 
         if (isRedPrev && isGreenCurr && engulfsBull) markers.push({ time: prev.time, position: 'belowBar', color: '#3FB950', shape: 'arrowUp', text: 'OB', size: 1 });
         const isGreenPrev = prev.close > prev.open; const isRedCurr = curr.close < curr.open; const engulfsBear = curr.close < prev.open;
         if (isGreenPrev && isRedCurr && engulfsBear) markers.push({ time: prev.time, position: 'aboveBar', color: '#F85149', shape: 'arrowDown', text: 'OB', size: 1 });
     }
+    // De-dupe markers
     const uniqueMarkers = []; const seenTimes = new Set();
     for (let m of markers) { if (!seenTimes.has(m.time)) { uniqueMarkers.push(m); seenTimes.add(m.time); } }
     return { markers: uniqueMarkers, coloredCandles, priceLines };
 };
 
 // ==========================================
-// 3. MAIN COMPONENT (WITH IST TIMEZONE)
+// 3. MAIN COMPONENT (SYNCED LIVE ENGINE)
 // ==========================================
 
 const CustomChart = ({ symbol }) => {
   const chartContainerRef = useRef();
+  
+  // Instance Refs
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
   const abortControllerRef = useRef(null); 
   
+  // Drawing Storage
   const priceLinesRef = useRef([]); 
   const drawingLinesRef = useRef([]); 
   const drawingSeriesRef = useRef([]); 
   const previewObjectsRef = useRef([]); 
   const lastCandleRef = useRef(null); 
   
+  // State
   const [timeframe, setTimeframe] = useState('1D'); 
   const [chartData, setChartData] = useState([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeIndicators, setActiveIndicators] = useState([]);
   const [isLive, setIsLive] = useState(false);
   const [isChartLoading, setIsChartLoading] = useState(false);
+  const [hasError, setHasError] = useState(false);
   
   const [drawMode, setDrawMode] = useState('cursor'); 
   const [tempPoints, setTempPoints] = useState([]);
@@ -281,18 +290,11 @@ const CustomChart = ({ symbol }) => {
   // --- IST FORMATTER ENGINE ---
   const istFormatter = (timestamp) => {
       const date = new Date(timestamp * 1000);
-      
       if (isIndian) {
           if (!['1D', '1W', '1M'].includes(timeframe)) {
-              return new Intl.DateTimeFormat('en-IN', {
-                  timeZone: 'Asia/Kolkata',
-                  hour: '2-digit', minute: '2-digit', hour12: false
-              }).format(date);
+              return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
           }
-          return new Intl.DateTimeFormat('en-IN', {
-              timeZone: 'Asia/Kolkata',
-              day: '2-digit', month: 'short', year: '2-digit'
-          }).format(date);
+          return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: '2-digit' }).format(date);
       }
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
@@ -353,7 +355,7 @@ const CustomChart = ({ symbol }) => {
     });
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 
-    // Listeners
+    // Click Handler (Drawings)
     chart.subscribeClick((param) => {
       if (!isMounted.current || !param.point || !param.time || !candleSeries) return;
       const price = candleSeries.coordinateToPrice(param.point.y);
@@ -372,6 +374,7 @@ const CustomChart = ({ symbol }) => {
       }
     });
 
+    // Crosshair Handler (Preview)
     chart.subscribeCrosshairMove((param) => {
         if (!isMounted.current) return;
         const mode = drawModeRef.current;
@@ -403,54 +406,27 @@ const CustomChart = ({ symbol }) => {
     return () => {
       isMounted.current = false;
       resizeObserver.disconnect();
+      
+      // --- CRITICAL DISPOSAL FIX ---
       if (chartRef.current) {
-        try { chartRef.current.remove(); } catch(e) {}
+        try { chartRef.current.remove(); } catch(e) { /* Ignore disposal error */ }
         chartRef.current = null;
+        candleSeriesRef.current = null;
+        volumeSeriesRef.current = null;
       }
     };
   }, [symbol, timeframe]);
 
-  const handleMultiClickTool = (price, time, requiredClicks, callback) => {
-      setTempPoints(prev => {
-          const newPoints = [...prev, { price, time }];
-          if (newPoints.length === requiredClicks) { clearPreview(); callback(newPoints); setDrawMode('cursor'); return []; }
-          return newPoints;
-      });
-  };
+  // --- DRAWING HELPERS ---
+  const handleMultiClickTool = (price, time, requiredClicks, callback) => { setTempPoints(prev => { const newPoints = [...prev, { price, time }]; if (newPoints.length === requiredClicks) { clearPreview(); callback(newPoints); setDrawMode('cursor'); return []; } return newPoints; }); };
+  const clearPreview = () => { previewObjectsRef.current.forEach(obj => { if (obj.type === 'line' && candleSeriesRef.current) try{ candleSeriesRef.current.removePriceLine(obj.ref); } catch(e){} if (obj.type === 'series' && chartRef.current) try{ chartRef.current.removeSeries(obj.ref); } catch(e){} }); previewObjectsRef.current = []; };
+  const drawPreviewShape = (type, p1, p2, chart, series) => { clearPreview(); if (type === 'trend') { const sorted = p1.time > p2.time ? [p2, p1] : [p1, p2]; const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }]; const lineSeries = chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }); lineSeries.setData(data); previewObjectsRef.current.push({ type: 'series', ref: lineSeries }); } else if (type === 'fib') { const low = Math.min(p1.price, p2.price); const high = Math.max(p1.price, p2.price); const diff = high - low; const levels = [0, 0.5, 1]; levels.forEach(lvl => { const line = series.createPriceLine({ price: low + (diff * lvl), color: '#FFD700', lineWidth: 1, lineStyle: 2, axisLabelVisible: false }); previewObjectsRef.current.push({ type: 'line', ref: line }); }); } else if (type === 'longshort') { const l1 = series.createPriceLine({ price: p1.price, color: '#888', title: 'ENTRY' }); const l2 = series.createPriceLine({ price: p2.price, color: '#3FB950', title: 'TARGET' }); previewObjectsRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 }); } };
+  const handleEdit = (d) => { setEditingDrawing(d.id); if (d.points) { setEditValues({ p1: d.points[0]?.price, p2: d.points[1]?.price, p3: d.points[2]?.price }); } else { setEditValues({ p1: d.price }); } };
+  const saveEdit = () => { setUserDrawings(prev => prev.map(d => { if (d.id !== editingDrawing) return d; if (d.points) { const newPoints = [...d.points]; if (editValues.p1) newPoints[0].price = parseFloat(editValues.p1); if (editValues.p2) newPoints[1].price = parseFloat(editValues.p2); if (editValues.p3 && newPoints[2]) newPoints[2].price = parseFloat(editValues.p3); return { ...d, points: newPoints }; } else { return { ...d, price: parseFloat(editValues.p1) }; } })); setEditingDrawing(null); };
+  const deleteDrawing = (id) => setUserDrawings(prev => prev.filter(d => d.id !== id));
+  const clearDrawings = () => { setUserDrawings([]); };
+  const undoLastDrawing = () => { if (userDrawings.length > 0) setUserDrawings(prev => prev.slice(0, -1)); };
 
-  const clearPreview = () => {
-      previewObjectsRef.current.forEach(obj => {
-          if (obj.type === 'line' && candleSeriesRef.current) try{ candleSeriesRef.current.removePriceLine(obj.ref); } catch(e){}
-          if (obj.type === 'series' && chartRef.current) try{ chartRef.current.removeSeries(obj.ref); } catch(e){}
-      });
-      previewObjectsRef.current = [];
-  };
-
-  const drawPreviewShape = (type, p1, p2, chart, series) => {
-      clearPreview(); 
-      if (type === 'trend') {
-          const sorted = p1.time > p2.time ? [p2, p1] : [p1, p2];
-          const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }];
-          const lineSeries = chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
-          lineSeries.setData(data);
-          previewObjectsRef.current.push({ type: 'series', ref: lineSeries });
-      }
-      else if (type === 'fib') {
-          const low = Math.min(p1.price, p2.price); const high = Math.max(p1.price, p2.price); const diff = high - low;
-          const levels = [0, 0.5, 1]; 
-          levels.forEach(lvl => {
-              const line = series.createPriceLine({ price: low + (diff * lvl), color: '#FFD700', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
-              previewObjectsRef.current.push({ type: 'line', ref: line });
-          });
-      }
-      else if (type === 'longshort') {
-          const l1 = series.createPriceLine({ price: p1.price, color: '#888', title: 'ENTRY' });
-          const l2 = series.createPriceLine({ price: p2.price, color: '#3FB950', title: 'TARGET' });
-          previewObjectsRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 });
-      }
-  };
-
-  // --- 2. RENDER USER DRAWINGS ---
   useEffect(() => {
       if (!isMounted.current || !candleSeriesRef.current || !chartRef.current) return;
       drawingLinesRef.current.forEach(item => { try { candleSeriesRef.current.removePriceLine(item.ref); } catch(e){} });
@@ -459,46 +435,13 @@ const CustomChart = ({ symbol }) => {
       drawingSeriesRef.current = [];
 
       userDrawings.forEach(d => {
-          if (d.type === 'horizontal') {
-              const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#38bdf8', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: d.title });
-              drawingLinesRef.current.push({ type: 'line', ref: line });
-          }
-          else if (d.type === 'rect') {
-              const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#FBBF24', lineWidth: 3, lineStyle: 2, axisLabelVisible: false, title: d.title });
-              drawingLinesRef.current.push({ type: 'line', ref: line });
-          }
-          else if (d.type === 'fib') {
-              const p1 = d.points[0]; const p2 = d.points[1];
-              const low = Math.min(p1.price, p2.price); const high = Math.max(p1.price, p2.price); const diff = high - low;
-              const levels = [{l:0,c:'#fff',w:1},{l:0.382,c:'#FFD700',w:2},{l:0.5,c:'#3FB950',w:2},{l:0.618,c:'#FFD700',w:2},{l:1,c:'#fff',w:1}];
-              levels.forEach(lvl => {
-                  const line = candleSeriesRef.current.createPriceLine({ price: low + (diff * lvl.l), color: lvl.c, lineWidth: lvl.w, lineStyle: 0, axisLabelVisible: true, title: `Fib ${lvl.l}` });
-                  drawingLinesRef.current.push({ type: 'line', ref: line });
-              });
-          }
-          else if (d.type === 'trend') {
-              const sorted = d.points[0].time > d.points[1].time ? [d.points[1], d.points[0]] : [d.points[0], d.points[1]];
-              const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }];
-              const series = chartRef.current.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, lastValueVisible: false, priceLineVisible: false });
-              series.setData(data);
-              drawingSeriesRef.current.push({ type: 'series', ref: series });
-          }
-          else if (d.type === 'longshort') {
-               const entry = d.points[0].price; const stop = d.points[1].price; const target = d.points[2].price;
-               const rr = Math.abs((target - entry) / (entry - stop)).toFixed(2);
-               const l1 = candleSeriesRef.current.createPriceLine({ price: entry, color: '#888', title: 'ENTRY' });
-               const l2 = candleSeriesRef.current.createPriceLine({ price: stop, color: '#F85149', title: 'STOP' });
-               const l3 = candleSeriesRef.current.createPriceLine({ price: target, color: '#3FB950', title: `TARGET R:R ${rr}` });
-               drawingLinesRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 }, { type: 'line', ref: l3 });
-          }
+          if (d.type === 'horizontal') { const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#38bdf8', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: d.title }); drawingLinesRef.current.push({ type: 'line', ref: line }); }
+          else if (d.type === 'rect') { const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#FBBF24', lineWidth: 3, lineStyle: 2, axisLabelVisible: false, title: d.title }); drawingLinesRef.current.push({ type: 'line', ref: line }); }
+          else if (d.type === 'fib') { const p1 = d.points[0]; const p2 = d.points[1]; const low = Math.min(p1.price, p2.price); const high = Math.max(p1.price, p2.price); const diff = high - low; const levels = [{l:0,c:'#fff',w:1},{l:0.382,c:'#FFD700',w:2},{l:0.5,c:'#3FB950',w:2},{l:0.618,c:'#FFD700',w:2},{l:1,c:'#fff',w:1}]; levels.forEach(lvl => { const line = candleSeriesRef.current.createPriceLine({ price: low + (diff * lvl.l), color: lvl.c, lineWidth: lvl.w, lineStyle: 0, axisLabelVisible: true, title: `Fib ${lvl.l}` }); drawingLinesRef.current.push({ type: 'line', ref: line }); }); }
+          else if (d.type === 'trend') { const sorted = d.points[0].time > d.points[1].time ? [d.points[1], d.points[0]] : [d.points[0], d.points[1]]; const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }]; const series = chartRef.current.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }); series.setData(data); drawingSeriesRef.current.push({ type: 'series', ref: series }); }
+          else if (d.type === 'longshort') { const entry = d.points[0].price; const stop = d.points[1].price; const target = d.points[2].price; const rr = Math.abs((target - entry) / (entry - stop)).toFixed(2); const l1 = candleSeriesRef.current.createPriceLine({ price: entry, color: '#888', title: 'ENTRY' }); const l2 = candleSeriesRef.current.createPriceLine({ price: stop, color: '#F85149', title: 'STOP' }); const l3 = candleSeriesRef.current.createPriceLine({ price: target, color: '#3FB950', title: `TARGET R:R ${rr}` }); drawingLinesRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 }, { type: 'line', ref: l3 }); }
       });
   }, [userDrawings]);
-  
-  const handleEdit = (d) => { setEditingDrawing(d.id); if (d.points) { setEditValues({ p1: d.points[0]?.price, p2: d.points[1]?.price, p3: d.points[2]?.price }); } else { setEditValues({ p1: d.price }); } };
-  const saveEdit = () => { setUserDrawings(prev => prev.map(d => { if (d.id !== editingDrawing) return d; if (d.points) { const newPoints = [...d.points]; if (editValues.p1) newPoints[0].price = parseFloat(editValues.p1); if (editValues.p2) newPoints[1].price = parseFloat(editValues.p2); if (editValues.p3 && newPoints[2]) newPoints[2].price = parseFloat(editValues.p3); return { ...d, points: newPoints }; } else { return { ...d, price: parseFloat(editValues.p1) }; } })); setEditingDrawing(null); };
-  const deleteDrawing = (id) => setUserDrawings(prev => prev.filter(d => d.id !== id));
-  const clearDrawings = () => { setUserDrawings([]); };
-  const undoLastDrawing = () => { if (userDrawings.length > 0) setUserDrawings(prev => prev.slice(0, -1)); };
 
   const updateLayout = () => {
       if (!isMounted.current || !chartRef.current || !volumeSeriesRef.current) return;
@@ -522,79 +465,87 @@ const CustomChart = ({ symbol }) => {
     if (!isSilent) abortControllerRef.current = new AbortController();
 
     try {
-      if (!isSilent) setIsChartLoading(true);
+      if (!isSilent) {
+          setIsChartLoading(true);
+          setHasError(false);
+      }
       const response = await axios.get(`/api/stocks/${symbol}/chart?range=${timeframe}`, { signal: !isSilent ? abortControllerRef.current.signal : undefined });
       const data = response.data;
       
-      const validData = (data || []).filter(d => d && d.time && typeof d.open === 'number' && !isNaN(d.open) && typeof d.high === 'number' && !isNaN(d.high) && typeof d.low === 'number' && !isNaN(d.low) && typeof d.close === 'number' && !isNaN(d.close));
+      const validData = (data || []).filter(d => d && d.time && typeof d.open === 'number');
 
-      if (isMounted.current && chartRef.current && candleSeriesRef.current && validData.length > 0) {
-        setChartData(validData);
-        lastCandleRef.current = validData[validData.length - 1];
-        
-        const isSMC = activeIndicators.some(i => i.type === 'SMC');
-        if (isSMC) applySMC(validData); 
-        else candleSeriesRef.current.setData(validData);
-        
-        if (volumeSeriesRef.current) {
-             const volData = validData.map(d => ({ time: d.time, value: d.volume || 0, color: d.close >= d.open ? 'rgba(63, 185, 80, 0.4)' : 'rgba(248, 81, 73, 0.4)' }));
-            volumeSeriesRef.current.setData(volData);
-        }
-        setIsLive(true);
+      if (isMounted.current && chartRef.current) {
+          if (validData.length > 0) {
+              setChartData(validData);
+              lastCandleRef.current = validData[validData.length - 1];
+              
+              if (candleSeriesRef.current) {
+                  const isSMC = activeIndicators.some(i => i.type === 'SMC');
+                  if (isSMC) applySMC(validData); 
+                  else candleSeriesRef.current.setData(validData);
+              }
+              if (volumeSeriesRef.current) {
+                  const volData = validData.map(d => ({ time: d.time, value: d.volume || 0, color: d.close >= d.open ? 'rgba(63, 185, 80, 0.4)' : 'rgba(248, 81, 73, 0.4)' }));
+                  volumeSeriesRef.current.setData(volData);
+              }
+              if (!isSilent) chartRef.current.timeScale().fitContent();
+              setIsLive(true);
+          } else {
+              setHasError(true);
+              setChartData([]);
+          }
       }
-    } catch (err) { if (!axios.isCancel(err)) console.error("Chart Error:", err); setIsLive(false); } 
-    finally { if (!isSilent && isMounted.current) setIsChartLoading(false); }
+    } catch (err) { 
+        if (!axios.isCancel(err)) {
+            setHasError(true);
+        }
+        setIsLive(false); 
+    } 
+    finally { 
+        if (!isSilent && isMounted.current) setIsChartLoading(false); 
+    }
   }, [symbol, timeframe]); 
 
   useEffect(() => { fetchData(false); }, [symbol, timeframe]); 
 
-  // --- 6. LIVE UPDATE ENGINE (WEBSOCKET WIGGLE) ---
+  // --- 6. WEBSOCKET CHART ADAPTER (WITH HEARTBEAT) ---
   useEffect(() => {
-    if (!isMounted.current || !symbol) return;
-    
-    // Determine WS Protocol
+    if (!symbol) return;
     const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     const wsHost = isLocal ? '127.0.0.1:8000' : window.location.host;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${wsHost}/ws/live/${symbol}`;
-    
-    const ws = new WebSocket(wsUrl);
+    let ws = null; let pingInterval = null;
 
-    ws.onmessage = (event) => {
+    const connect = () => {
         try {
-            const data = JSON.parse(event.data);
-            const currentPrice = data.price;
-            
-            if (isMounted.current && currentPrice && lastCandleRef.current) {
-                const last = lastCandleRef.current;
-                
-                // WIGGLE LOGIC:
-                // Update the *Current* candle's Close/High/Low. 
-                // We use the last candle's existing time (which is already shifted correctly from backend)
-                // so the candle just moves up/down in place.
-                
-                const updatedCandle = { 
-                    ...last, 
-                    close: currentPrice, 
-                    high: Math.max(last.high, currentPrice), 
-                    low: Math.min(last.low, currentPrice) 
-                };
-                
-                lastCandleRef.current = updatedCandle;
-                
-                if (candleSeriesRef.current) {
-                    candleSeriesRef.current.update(updatedCandle);
-                }
-            }
-        } catch (e) {}
+            ws = new WebSocket(wsUrl);
+            ws.onopen = () => {
+                pingInterval = setInterval(() => { if (ws.readyState === WebSocket.OPEN) { ws.send("ping"); } }, 10000); 
+            };
+            ws.onmessage = (event) => {
+                // GUARD CLAUSE: Strict null check to prevent "Object is disposed"
+                if (!chartRef.current || !candleSeriesRef.current || !isMounted.current) return;
+                try {
+                    const data = JSON.parse(event.data);
+                    const currentPrice = data.price;
+                    if (currentPrice && lastCandleRef.current) {
+                        const last = lastCandleRef.current;
+                        const updatedCandle = { ...last, close: currentPrice, high: Math.max(last.high, currentPrice), low: Math.min(last.low, currentPrice) };
+                        lastCandleRef.current = updatedCandle;
+                        // Wrap in Try/Catch to suppress spurious disposal errors
+                        try { candleSeriesRef.current.update(updatedCandle); } catch(e){}
+                    }
+                } catch(e) {}
+            };
+            ws.onclose = () => { if (pingInterval) clearInterval(pingInterval); setTimeout(connect, 3000); };
+        } catch (e) { console.error("Chart WS Error"); }
     };
-
-    return () => {
-        ws.close();
-    };
+    connect();
+    return () => { if (pingInterval) clearInterval(pingInterval); if (ws) ws.close(); };
   }, [symbol]);
 
-  // --- 7. INDICATORS (Same as before) ---
+  // --- INDICATORS ---
   const applySMC = (data) => {
       if (!isMounted.current || !candleSeriesRef.current) return;
       const { markers, coloredCandles, priceLines } = calculateSMC(data);
@@ -605,19 +556,7 @@ const CustomChart = ({ symbol }) => {
       priceLinesRef.current = [];
       priceLines.slice(-5).forEach(lineData => { if (candleSeriesRef.current.createPriceLine) { const lineObj = candleSeriesRef.current.createPriceLine({ price: lineData.price, color: lineData.color, lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: lineData.title, }); priceLinesRef.current.push(lineObj); } });
   };
-
-  useEffect(() => {
-    if (!isMounted.current || !chartRef.current || chartData.length === 0) return;
-    const isSMC = activeIndicators.some(i => i.type === 'SMC');
-    if (isSMC) applySMC(chartData);
-    else {
-        candleSeriesRef.current.setData(chartData);
-        if (candleSeriesRef.current.setMarkers) candleSeriesRef.current.setMarkers([]);
-        priceLinesRef.current.forEach(line => { try { candleSeriesRef.current.removePriceLine(line); } catch(e){} });
-        priceLinesRef.current = [];
-    }
-  }, [chartData, activeIndicators]);
-
+  useEffect(() => { if (!isMounted.current || !chartRef.current || chartData.length === 0) return; const isSMC = activeIndicators.some(i => i.type === 'SMC'); if (isSMC) applySMC(chartData); else { candleSeriesRef.current.setData(chartData); if (candleSeriesRef.current.setMarkers) candleSeriesRef.current.setMarkers([]); priceLinesRef.current.forEach(line => { try { candleSeriesRef.current.removePriceLine(line); } catch(e){} }); priceLinesRef.current = []; } }, [chartData, activeIndicators]);
   const addIndicator = () => {
     if (!isMounted.current || !chartData.length || !chartRef.current) return;
     const closePrices = chartData.map(d => d.close);
@@ -628,81 +567,21 @@ const CustomChart = ({ symbol }) => {
     let newSeries = [];
     let paneId = ['RSI', 'MACD', 'StochRSI', 'ADX', 'ATR'].includes(selectedInd) ? `pane_${id}` : undefined;
     let paramsLabel = '';
-
     try {
-      if (selectedInd === 'Combo_9_21' || selectedInd === 'Combo_12_21') {
-          const p1 = parseInt(param1); const p2 = parseInt(param2);
-          const ema1 = EMA.calculate({ period: p1, values: closePrices }); const ema2 = EMA.calculate({ period: p2, values: closePrices });
-          const s1 = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, title: `EMA ${p1}` });
-          const s2 = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 2, title: `EMA ${p2}` });
-          s1.setData(mapData(ema1, chartData)); s2.setData(mapData(ema2, chartData)); newSeries.push(s1, s2); paramsLabel = `${p1}, ${p2}`;
-      }
+      if (selectedInd === 'Combo_9_21' || selectedInd === 'Combo_12_21') { const p1 = parseInt(param1); const p2 = parseInt(param2); const ema1 = EMA.calculate({ period: p1, values: closePrices }); const ema2 = EMA.calculate({ period: p2, values: closePrices }); const s1 = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, title: `EMA ${p1}` }); const s2 = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 2, title: `EMA ${p2}` }); s1.setData(mapData(ema1, chartData)); s2.setData(mapData(ema2, chartData)); newSeries.push(s1, s2); paramsLabel = `${p1}, ${p2}`; }
       else if (selectedInd === 'SMC') { }
-      else if (selectedInd === 'SMA') {
-        const period = parseInt(param1); const res = SMA.calculate({ period, values: closePrices });
-        const series = chartRef.current.addSeries(LineSeries, { color: '#FF9800', lineWidth: 2, title: `SMA ${period}` });
-        series.setData(mapData(res, chartData)); newSeries.push(series); paramsLabel = `${period}`;
-      }
-      else if (selectedInd === 'EMA') {
-        const period = parseInt(param1); const res = EMA.calculate({ period, values: closePrices });
-        const series = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, title: `EMA ${period}` });
-        series.setData(mapData(res, chartData)); newSeries.push(series); paramsLabel = `${period}`;
-      }
-      else if (selectedInd === 'SuperTrend') {
-        const period = parseInt(param1); const mult = parseFloat(param3);
-        const stData = calculateSuperTrend(chartData, period, mult);
-        const series = chartRef.current.addSeries(LineSeries, { color: '#00E676', lineWidth: 2, title: `ST ${period}/${mult}` });
-        series.setData(stData); newSeries.push(series); paramsLabel = `${period}, ${mult}`;
-      }
-      else if (selectedInd === 'VWAP') {
-        const res = VWAP.calculate({ high: highs, low: lows, close: closePrices, volume: volumes });
-        const series = chartRef.current.addSeries(LineSeries, { color: '#FFD700', lineWidth: 2, title: `VWAP` });
-        series.setData(mapData(res, chartData)); newSeries.push(series);
-      }
-      else if (selectedInd === 'RSI') {
-        const res = RSI.calculate({ values: closePrices, period: parseInt(param1) });
-        const series = chartRef.current.addSeries(LineSeries, { color: '#A855F7', lineWidth: 2, priceScaleId: paneId, title: `RSI (${param1})` });
-        series.setData(mapData(res, chartData)); newSeries.push(series);
-        chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } }); paramsLabel = `${param1}`;
-      }
-      else if (selectedInd === 'MACD') {
-        const macdInput = { values: closePrices, fastPeriod: parseInt(param1), slowPeriod: parseInt(param2), signalPeriod: parseInt(param3), SimpleMAOscillator: false, SimpleMASignal: false };
-        const res = MACD.calculate(macdInput);
-        const mLine = []; const sLine = []; const hLine = [];
-        for(let i=0; i<res.length; i++){ const dIndex = chartData.length - 1 - i; const rIndex = res.length - 1 - i; if (dIndex >= 0){ const t = chartData[dIndex].time; const m = res[rIndex]; mLine.unshift({ time: t, value: m.MACD }); sLine.unshift({ time: t, value: m.signal }); hLine.unshift({ time: t, value: m.histogram, color: m.histogram >= 0 ? '#26a69a' : '#ef5350' }); } }
-        const hSeries = chartRef.current.addSeries(HistogramSeries, { priceScaleId: paneId });
-        const mSeries = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, priceScaleId: paneId });
-        const sSeries = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 2, priceScaleId: paneId });
-        hSeries.setData(hLine); mSeries.setData(mLine); sSeries.setData(sLine); newSeries = [hSeries, mSeries, sSeries];
-        chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } }); paramsLabel = `${param1},${param2},${param3}`;
-      }
-      else if (selectedInd === 'StochRSI') {
-          const stochInput = { values: closePrices, rsiPeriod: parseInt(param1), stochasticPeriod: parseInt(param2), kPeriod: 3, dPeriod: 3 };
-          const res = StochasticRSI.calculate(stochInput);
-          const kLine = []; const dLine = [];
-          for(let i=0; i<res.length; i++){ const dIndex = chartData.length - 1 - i; const sIndex = res.length - 1 - i; if (dIndex >= 0) { kLine.unshift({ time: chartData[dIndex].time, value: res[sIndex].k }); dLine.unshift({ time: chartData[dIndex].time, value: res[sIndex].d }); } }
-          const kSeries = chartRef.current.addSeries(LineSeries, { color: '#2962FF', title: '%K', priceScaleId: paneId });
-          const dSeries = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', title: '%D', priceScaleId: paneId });
-          kSeries.setData(kLine); dSeries.setData(dLine); newSeries = [kSeries, dSeries];
-          chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } }); paramsLabel = `${param1},${param2}`;
-      }
-      else if (selectedInd === 'ADX') {
-          const res = ADX.calculate({ high: highs, low: lows, close: closePrices, period: parseInt(param1) });
-          const series = chartRef.current.addSeries(LineSeries, { color: '#FF0055', lineWidth: 2, priceScaleId: paneId, title: `ADX (${param1})` });
-          series.setData(mapData(res.map(r=>r.adx), chartData)); newSeries.push(series); paramsLabel = `${param1}`;
-      }
-      else if (selectedInd === 'ATR') {
-          const res = ATR.calculate({ high: highs, low: lows, close: closePrices, period: parseInt(param1) });
-          const series = chartRef.current.addSeries(LineSeries, { color: '#AB47BC', lineWidth: 2, priceScaleId: paneId, title: `ATR (${param1})` });
-          series.setData(mapData(res, chartData)); newSeries.push(series); paramsLabel = `${param1}`;
-      }
-
-      setActiveIndicators([...activeIndicators, { id, type: selectedInd, series: newSeries, paneId, params: paramsLabel }]);
-      setIsMenuOpen(false);
-
+      else if (selectedInd === 'SMA') { const period = parseInt(param1); const res = SMA.calculate({ period, values: closePrices }); const series = chartRef.current.addSeries(LineSeries, { color: '#FF9800', lineWidth: 2, title: `SMA ${period}` }); series.setData(mapData(res, chartData)); newSeries.push(series); paramsLabel = `${period}`; }
+      else if (selectedInd === 'EMA') { const period = parseInt(param1); const res = EMA.calculate({ period, values: closePrices }); const series = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, title: `EMA ${period}` }); series.setData(mapData(res, chartData)); newSeries.push(series); paramsLabel = `${period}`; }
+      else if (selectedInd === 'SuperTrend') { const period = parseInt(param1); const mult = parseFloat(param3); const stData = calculateSuperTrend(chartData, period, mult); const series = chartRef.current.addSeries(LineSeries, { color: '#00E676', lineWidth: 2, title: `ST ${period}/${mult}` }); series.setData(stData); newSeries.push(series); paramsLabel = `${period}, ${mult}`; }
+      else if (selectedInd === 'VWAP') { const res = VWAP.calculate({ high: highs, low: lows, close: closePrices, volume: volumes }); const series = chartRef.current.addSeries(LineSeries, { color: '#FFD700', lineWidth: 2, title: `VWAP` }); series.setData(mapData(res, chartData)); newSeries.push(series); }
+      else if (selectedInd === 'RSI') { const res = RSI.calculate({ values: closePrices, period: parseInt(param1) }); const series = chartRef.current.addSeries(LineSeries, { color: '#A855F7', lineWidth: 2, priceScaleId: paneId, title: `RSI (${param1})` }); series.setData(mapData(res, chartData)); newSeries.push(series); chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } }); paramsLabel = `${param1}`; }
+      else if (selectedInd === 'MACD') { const macdInput = { values: closePrices, fastPeriod: parseInt(param1), slowPeriod: parseInt(param2), signalPeriod: parseInt(param3), SimpleMAOscillator: false, SimpleMASignal: false }; const res = MACD.calculate(macdInput); const mLine = []; const sLine = []; const hLine = []; for(let i=0; i<res.length; i++){ const dIndex = chartData.length - 1 - i; const rIndex = res.length - 1 - i; if (dIndex >= 0){ const t = chartData[dIndex].time; const m = res[rIndex]; mLine.unshift({ time: t, value: m.MACD }); sLine.unshift({ time: t, value: m.signal }); hLine.unshift({ time: t, value: m.histogram, color: m.histogram >= 0 ? '#26a69a' : '#ef5350' }); } } const hSeries = chartRef.current.addSeries(HistogramSeries, { priceScaleId: paneId }); const mSeries = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, priceScaleId: paneId }); const sSeries = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 2, priceScaleId: paneId }); hSeries.setData(hLine); mSeries.setData(mLine); sSeries.setData(sLine); newSeries = [hSeries, mSeries, sSeries]; chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } }); paramsLabel = `${param1},${param2},${param3}`; }
+      else if (selectedInd === 'StochRSI') { const stochInput = { values: closePrices, rsiPeriod: parseInt(param1), stochasticPeriod: parseInt(param2), kPeriod: 3, dPeriod: 3 }; const res = StochasticRSI.calculate(stochInput); const kLine = []; const dLine = []; for(let i=0; i<res.length; i++){ const dIndex = chartData.length - 1 - i; const sIndex = res.length - 1 - i; if (dIndex >= 0) { kLine.unshift({ time: chartData[dIndex].time, value: res[sIndex].k }); dLine.unshift({ time: chartData[dIndex].time, value: res[sIndex].d }); } } const kSeries = chartRef.current.addSeries(LineSeries, { color: '#2962FF', title: '%K', priceScaleId: paneId }); const dSeries = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', title: '%D', priceScaleId: paneId }); kSeries.setData(kLine); dSeries.setData(dLine); newSeries = [kSeries, dSeries]; chartRef.current.priceScale(paneId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } }); paramsLabel = `${param1},${param2}`; }
+      else if (selectedInd === 'ADX') { const res = ADX.calculate({ high: highs, low: lows, close: closePrices, period: parseInt(param1) }); const series = chartRef.current.addSeries(LineSeries, { color: '#FF0055', lineWidth: 2, priceScaleId: paneId, title: `ADX (${param1})` }); series.setData(mapData(res.map(r=>r.adx), chartData)); newSeries.push(series); paramsLabel = `${param1}`; }
+      else if (selectedInd === 'ATR') { const res = ATR.calculate({ high: highs, low: lows, close: closePrices, period: parseInt(param1) }); const series = chartRef.current.addSeries(LineSeries, { color: '#AB47BC', lineWidth: 2, priceScaleId: paneId, title: `ATR (${param1})` }); series.setData(mapData(res, chartData)); newSeries.push(series); paramsLabel = `${param1}`; }
+      setActiveIndicators([...activeIndicators, { id, type: selectedInd, series: newSeries, paneId, params: paramsLabel }]); setIsMenuOpen(false);
     } catch (e) { console.error("Indicator Calc Error", e); }
   };
-
   const handleDropdownChange = (e) => { const val = e.target.value; setSelectedInd(val); if (val === 'Combo_9_21') { setParam1(9); setParam2(21); } else if (val === 'Combo_12_21') { setParam1(12); setParam2(21); } };
   const removeIndicator = (id) => { const indToRemove = activeIndicators.find(i => i.id === id); if (!indToRemove) return; if (indToRemove.type !== 'SMC') { if (chartRef.current) indToRemove.series.forEach(s => chartRef.current.removeSeries(s)); } setActiveIndicators(activeIndicators.filter(i => i.id !== id)); };
 
@@ -802,6 +681,12 @@ const CustomChart = ({ symbol }) => {
       </Toolbar>
       
       {isChartLoading && ( <LoadingOverlay><FaSpinner className="fa-spin" /></LoadingOverlay> )}
+      {hasError && !isChartLoading && (
+          <NoDataOverlay>
+              <FaExclamationTriangle style={{fontSize: '2rem', marginBottom: '10px'}} />
+              <span>Chart Data Unavailable</span>
+          </NoDataOverlay>
+      )}
       {drawMode !== 'cursor' && <HelperText>{helpText}</HelperText>}
       <ChartContainer ref={chartContainerRef} crosshair={drawMode !== 'cursor'} />
     </ChartWrapper>

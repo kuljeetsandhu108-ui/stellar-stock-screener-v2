@@ -55,6 +55,7 @@ const CompanyInfo = styled.div`
   align-items: center;
   gap: 1.2rem;
   max-width: 100%;
+  min-width: 0; /* Prevents flex item from overflowing */
 `;
 
 const CompanyLogo = styled.img`
@@ -77,7 +78,7 @@ const CompanyLogo = styled.img`
 const TextContainer = styled.div`
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  min-width: 0; /* Critical for text truncation */
 `;
 
 const CompanyName = styled.h1`
@@ -217,9 +218,8 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
   const [flash, setFlash] = useState(null); // 'up', 'down', or null
   const [isConnected, setIsConnected] = useState(false);
   const prevPriceRef = useRef(initialQuote?.price || 0);
-  const wsRef = useRef(null);
-
-// --- REAL WEBSOCKET ENGINE ---
+  
+  // --- REAL WEBSOCKET ENGINE WITH HEARTBEAT ---
   useEffect(() => {
     if (initialQuote) {
         setLiveData({ price: initialQuote.price, change: initialQuote.change, pct: initialQuote.changesPercentage });
@@ -229,20 +229,29 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
     if (!profile.symbol) return;
 
     // 1. Construct WebSocket URL
-    // Automatically handles localhost vs production (ws:// vs wss://)
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const wsHost = isLocal ? '127.0.0.1:8000' : window.location.host;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host; // e.g. localhost:3000 or myapp.railway.app
-    // Note: In development, if frontend is 3000 and backend 8080, you might need hardcoding or proxy.
-    // Production (same domain) works perfectly.
-    const wsUrl = `${protocol}//${host}/ws/live/${profile.symbol}`;
+    
+    const wsUrl = `${protocol}//${wsHost}/ws/live/${profile.symbol}`;
 
     let ws = null;
+    let pingInterval = null;
 
     const connect = () => {
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-            // console.log("Connected to Live Stream");
+            setIsConnected(true);
+            
+            // --- HEARTBEAT ENGINE ---
+            // Send a silent "ping" every 10 seconds.
+            // This tells the backend: "User is still watching this header, keep fetching data."
+            pingInterval = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send("ping");
+                }
+            }, 10000); 
         };
 
         ws.onmessage = (event) => {
@@ -267,6 +276,8 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
         };
 
         ws.onclose = () => {
+            setIsConnected(false);
+            if (pingInterval) clearInterval(pingInterval);
             // Auto Reconnect if connection drops
             setTimeout(connect, 3000);
         };
@@ -275,6 +286,7 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
     connect();
 
     return () => {
+        if (pingInterval) clearInterval(pingInterval);
         if (ws) ws.close();
     };
   }, [profile.symbol, initialQuote]);
@@ -309,7 +321,7 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
           </CompanyName>
           {isConnected && (
               <ConnectionStatus>
-                  <LiveDot style={{width:'6px', height:'6px'}}/> Real-Time Connection
+                  <LiveDot style={{width:'6px', height:'6px'}}/> Live Stream Active
               </ConnectionStatus>
           )}
         </TextContainer>

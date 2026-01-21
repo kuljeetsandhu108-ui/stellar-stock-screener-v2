@@ -7,7 +7,7 @@ from ..services import eodhd_service, redis_service, technical_service
 router = APIRouter()
 
 # ==========================================
-# 1. ROBUST INDEX CONFIGURATION
+# 1. GLOBAL INDICES CONFIGURATION
 # ==========================================
 
 INDICES_CONFIG = [
@@ -35,7 +35,7 @@ INDICES_CONFIG = [
 ]
 
 # ==========================================
-# 2. HOMEPAGE TICKER (BULK + CRASH PROOF)
+# 2. HOMEPAGE TICKER (BULK + CACHED)
 # ==========================================
 
 @router.get("/summary")
@@ -44,16 +44,17 @@ async def get_indices_summary():
     Fetches ALL indices in ONE single API call.
     Includes robust 'NA' handling to prevent 500 Errors.
     """
-    cache_key = "indices_banner_v5_fix"
+    cache_key = "indices_banner_v6_fix"
     
-    cached = redis_service.get_cache(cache_key)
+    # 1. Check Cache (Async)
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
 
-    # 1. Fetch Bulk Data
+    # 2. Fetch Bulk Data
     symbols_list = [item["symbol"] for item in INDICES_CONFIG]
     raw_data = await asyncio.to_thread(eodhd_service.get_real_time_bulk, symbols_list)
     
-    # 2. Map Results
+    # 3. Map Results
     data_map = {}
     if raw_data and isinstance(raw_data, list):
         data_map = {item['code']: item for item in raw_data}
@@ -62,7 +63,7 @@ async def get_indices_summary():
 
     final_results = []
     
-    # --- SAFE FLOAT CONVERTER (The Crash Fix) ---
+    # --- SAFE FLOAT CONVERTER ---
     def safe_float(val):
         try:
             if val is None or val == 'NA' or val == 'None': return 0.0
@@ -73,19 +74,20 @@ async def get_indices_summary():
         ticker = config["symbol"]
         code_only = ticker.split('.')[0] 
         
+        # Try finding by full ticker or just code
         market_data = data_map.get(ticker) or data_map.get(code_only)
         
         if market_data:
             final_results.append({
                 "name": config["name"],
                 "symbol": config["symbol"],
-                "price": safe_float(market_data.get('close')),
+                "price": safe_float(market_data.get('close') or market_data.get('previousClose')),
                 "change": safe_float(market_data.get('change')),
                 "percent_change": safe_float(market_data.get('change_p')),
                 "currency": config["currency"]
             })
         else:
-            # Fallback for missing data
+            # Fallback for missing data so UI doesn't break
             final_results.append({
                 "name": config["name"],
                 "symbol": config["symbol"],
@@ -93,10 +95,10 @@ async def get_indices_summary():
                 "currency": config["currency"]
             })
 
-    # 3. Cache
+    # 4. Cache Result (Short TTL for live feel)
     has_data = any(x['price'] > 0 for x in final_results)
     if has_data:
-        redis_service.set_cache(cache_key, final_results, 5)
+        await redis_service.redis_client.set_cache(cache_key, final_results, 10)
     
     return final_results
 
@@ -112,17 +114,18 @@ async def get_index_live_price(index_symbol: str):
     return data
 
 # ==========================================
-# 4. INDEX DETAILS PAGE
+# 4. INDEX DETAILS PAGE (CHART + TECHS)
 # ==========================================
 
 @router.get("/{index_symbol:path}/details")
 async def get_index_details(index_symbol: str):
     symbol = eodhd_service.format_symbol_for_eodhd(index_symbol)
-    cache_key = f"index_details_v3_{symbol}"
+    cache_key = f"index_details_v4_{symbol}"
     
-    cached = redis_service.get_cache(cache_key)
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
 
+    # Parallel Fetch
     tasks = {
         "chart": asyncio.to_thread(eodhd_service.get_historical_data, symbol, "1D"),
         "quote": asyncio.to_thread(eodhd_service.get_live_price, symbol)
@@ -134,6 +137,7 @@ async def get_index_details(index_symbol: str):
     chart_data = raw.get('chart', [])
     quote = raw.get('quote', {})
 
+    # Calculate Technicals
     technicals, mas, pivots = {}, {}, {}
     if chart_data and len(chart_data) > 30:
         try:
@@ -152,9 +156,9 @@ async def get_index_details(index_symbol: str):
         "companyName": name, 
         "symbol": symbol, 
         "exchange": "INDEX",
-        "description": f"Market Index - {name}", 
+        "description": f"Global Market Index - {name}", 
         "sector": "Market Index",
-        "industry": "Global Markets", 
+        "industry": "Indices", 
         "image": "", 
         "currency": curr,
         "tradingview_symbol": symbol
@@ -170,5 +174,5 @@ async def get_index_details(index_symbol: str):
         "keyStats": {}
     }
     
-    redis_service.set_cache(cache_key, final_data, 60)
+    await redis_service.redis_client.set_cache(cache_key, final_data, 60)
     return final_data

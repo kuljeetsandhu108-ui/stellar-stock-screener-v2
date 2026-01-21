@@ -2,8 +2,9 @@ import asyncio
 import math
 import pandas as pd
 import json
+from urllib.parse import unquote
 from fastapi import APIRouter, HTTPException, Query, Body
-# ROBUST SERVICE IMPORTS (100% Yahoo-Free)
+# ROBUST SERVICE IMPORTS
 from ..services import (
     fmp_service, 
     eodhd_service, 
@@ -20,7 +21,7 @@ from typing import List, Dict, Any
 router = APIRouter()
 
 # ==========================================
-# 1. STRICT DATA MODELS (Input Validation)
+# 1. STRICT DATA MODELS
 # ==========================================
 
 class SwotRequest(BaseModel):
@@ -59,7 +60,7 @@ class ConclusionRequest(BaseModel):
 class TimeframeRequest(BaseModel):
     timeframe: str
 
-# TradingView Symbol Mapping (Fixes frontend chart mismatches)
+# TradingView Symbol Mapping
 TRADINGVIEW_OVERRIDE_MAP = {
     "TATAPOWER.NS": "NSE:TATAPOWER",
     "RELIANCE.NS": "NSE:RELIANCE",
@@ -70,180 +71,225 @@ TRADINGVIEW_OVERRIDE_MAP = {
     "TCS.NS": "NSE:TCS",
     "BTC-USD": "BINANCE:BTCUSD",
     "ETH-USD": "BINANCE:ETHUSD",
-    "XAU-USD.CC": "OANDA:XAUUSD"
+    "XAU-USD.CC": "OANDA:XAUUSD",
+    "USO.US": "TVC:USOIL"
 }
 
 # ==========================================
-# 2. AI & SEARCH ENDPOINTS (Low Latency)
+# 2. INTELLIGENT ASSET RECOGNITION
 # ==========================================
 
+def identify_asset_class(symbol: str):
+    """
+    Maps ANY ticker format (Yahoo, TradingView, Colloquial) to our Internal Data Sources.
+    Returns: (Source_System, Clean_Ticker)
+    """
+    s = unquote(symbol).upper().strip()
+    
+    # --- A. COMMODITIES (Yahoo/TV -> FMP) ---
+    if s in ["CL=F", "CL%3DF", "USOIL", "WTI", "CRUDE", "CRUDEOIL", "OIL", "CLUSD"]: return "FMP", "CLUSD"
+    if s in ["BZ=F", "BRENT", "UKOIL", "BRENTOIL"]: return "FMP", "UKOIL"
+    if s in ["GC=F", "GOLD", "XAU", "XAUUSD"]: return "FMP", "XAUUSD"
+    if s in ["SI=F", "SILVER", "XAG", "XAGUSD"]: return "FMP", "XAGUSD"
+    if s in ["NG=F", "GAS", "NATGAS", "NGUSD", "UNG", "UNG.US"]: return "FMP", "NGUSD"
+    if s in ["HG=F", "COPPER", "HGUSD"]: return "FMP", "HGUSD"
+    if s in ["PL=F", "PLATINUM", "PLUSD"]: return "FMP", "PLUSD"
+
+    # --- B. CRYPTO (Coinbase/Yahoo -> FMP) ---
+    if ".CC" in s or s in ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "MATIC", "DOT", "LTC"]:
+        clean = s.replace("-USD.CC", "USD").replace(".CC", "")
+        if not clean.endswith("USD"): clean += "USD"
+        return "FMP", clean
+
+    # --- C. STOCKS / INDICES (Default -> EODHD) ---
+    return "EODHD", s
+
 # ==========================================
-# 2. AI & SEARCH ENDPOINTS (Low Latency)
+# 3. AI & SEARCH ENDPOINTS
 # ==========================================
 
 @router.get("/autocomplete")
 async def get_stock_autocomplete(query: str = Query(..., min_length=1)):
-    """
-    High-Speed Autocomplete Engine.
-    PRIORITY: NSE/BSE Stocks > US Stocks > Others.
-    """
-    # 1. Check Cache (Instant response for common prefixes like "REL", "TATA")
-    cache_key = f"autocomplete_v1_{query.lower().strip()}"
-    cached = redis_service.get_cache(cache_key)
+    """High-Speed Autocomplete Engine."""
+    cache_key = f"autocomplete_v3_{query.lower().strip()}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
 
-    # 2. Fetch from FMP (Fetch 20 to ensure we catch the Indian ones buried deep)
-    # We fetch a bit more than needed so we can re-sort them.
     results = await asyncio.to_thread(fmp_service.search_ticker, query, limit=25)
-    
-    if not results: 
-        return []
+    if not results: return []
 
-    # 3. SMART SORTING ALGORITHM (The Logic You Requested)
-    # We separate results into buckets
-    nse_stocks = []
-    bse_stocks = []
-    us_stocks = []
-    others = []
-
+    nse_stocks, bse_stocks, us_stocks, others = [], [], [], []
     for stock in results:
         sym = stock.get('symbol', '').upper()
         exch = stock.get('exchangeShortName', '').upper()
         
-        # Identification Logic
         is_nse = sym.endswith('.NS') or exch == 'NSE'
         is_bse = sym.endswith('.BO') or exch == 'BSE'
-        is_us = not (is_nse or is_bse) and ('.' not in sym) # Rough heuristic for US
+        is_us = not (is_nse or is_bse) and ('.' not in sym) 
 
         if is_nse: nse_stocks.append(stock)
         elif is_bse: bse_stocks.append(stock)
         elif is_us: us_stocks.append(stock)
         else: others.append(stock)
 
-    # 4. Construct Final List (NSE First, then BSE, then US)
-    # We take top 5 from India, then fill rest with US/Others
-    final_list = nse_stocks + bse_stocks + us_stocks + others
-    
-    # Trim to top 10 for UI cleanliness
-    final_list = final_list[:10]
-
-    # 5. Cache for 24 Hours (Search results rarely change)
-    redis_service.set_cache(cache_key, final_list, 86400)
-    
+    final_list = (nse_stocks + bse_stocks + us_stocks + others)[:10]
+    await redis_service.redis_client.set_cache(cache_key, final_list, 86400)
     return final_list
 
 @router.get("/search")
 async def search_stock_ticker(query: str = Query(..., min_length=2)):
-    """
-    Smart Search: Redis (Instant) -> FMP (Cheap) -> Gemini (Smart).
-    """
-    cache_key = f"search_{query.lower().strip()}"
-    cached = redis_service.get_cache(cache_key)
+    cache_key = f"search_v4_{query.lower().strip()}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
+    
+    source, ticker = identify_asset_class(query)
+    if source == "FMP" and ticker in ["XAUUSD", "XAGUSD", "CLUSD", "NGUSD", "UKOIL"]:
+        return {"symbol": ticker} 
 
-    # 1. FMP is fastest/cheapest for standard tickers
     results = fmp_service.search_ticker(query)
     if results: 
         res = {"symbol": results[0]['symbol']}
-        redis_service.set_cache(cache_key, res, 86400) # Cache 24h
+        await redis_service.redis_client.set_cache(cache_key, res, 86400) 
         return res
 
-    # 2. Gemini AI for natural language (e.g., "Google of India")
     ticker = gemini_service.get_ticker_from_query(query)
     if ticker not in ["NOT_FOUND", "ERROR"]:
         res = {"symbol": ticker}
-        redis_service.set_cache(cache_key, res, 86400)
+        await redis_service.redis_client.set_cache(cache_key, res, 86400)
         return res
-    
-    raise HTTPException(status_code=404, detail=f"Could not find a ticker for '{query}'")
+    raise HTTPException(status_code=404, detail="Ticker not found")
 
-# --- AI ANALYSIS WRAPPERS (Heavy Caching) ---
+# --- AI ANALYSIS WRAPPERS ---
 
 @router.post("/{symbol}/swot")
 async def get_swot_analysis(symbol: str, request_data: SwotRequest = Body(...)):
-    cache_key = f"swot_{symbol}"
-    cached = redis_service.get_cache(cache_key)
+    cache_key = f"swot_v2_{symbol}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
-
-    # Fetch News
     news_articles = await asyncio.to_thread(news_service.get_company_news, request_data.companyName)
     news_headlines = [a.get('title', '') for a in news_articles[:10]]
-    
-    swot_analysis = await asyncio.to_thread(
-        gemini_service.generate_swot_analysis,
-        request_data.companyName, request_data.description, news_headlines
-    )
+    swot_analysis = await asyncio.to_thread(gemini_service.generate_swot_analysis, request_data.companyName, request_data.description, news_headlines)
     res = {"swot_analysis": swot_analysis}
-    redis_service.set_cache(cache_key, res, 3600) # 1 Hour Cache
+    await redis_service.redis_client.set_cache(cache_key, res, 3600)
     return res
 
 @router.post("/{symbol}/forecast-analysis")
 async def get_forecast_analysis(symbol: str, d: ForecastRequest = Body(...)):
-    cache_key = f"fc_{symbol}"
-    cached = redis_service.get_cache(cache_key)
+    cache_key = f"fc_v2_{symbol}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
     analysis = await asyncio.to_thread(gemini_service.generate_forecast_analysis, d.companyName, d.analystRatings, d.priceTarget, d.keyStats, d.newsHeadlines, d.currency)
-    res = {"analysis": analysis}; redis_service.set_cache(cache_key, res, 3600); return res
+    res = {"analysis": analysis}; await redis_service.redis_client.set_cache(cache_key, res, 3600); return res
 
 @router.post("/{symbol}/fundamental-analysis")
 async def get_fundamental_analysis(symbol: str, d: FundamentalRequest = Body(...)):
-    cache_key = f"fa_{symbol}"
-    cached = redis_service.get_cache(cache_key)
+    cache_key = f"fa_v2_{symbol}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
     analysis = await asyncio.to_thread(gemini_service.generate_investment_philosophy_assessment, d.companyName, d.keyMetrics)
-    res = {"assessment": analysis}; redis_service.set_cache(cache_key, res, 86400); return res # 24h Cache
+    res = {"assessment": analysis}; await redis_service.redis_client.set_cache(cache_key, res, 86400); return res
 
 @router.post("/{symbol}/canslim-analysis")
 async def get_canslim_analysis(symbol: str, d: CanslimRequest = Body(...)):
-    cache_key = f"can_{symbol}"
-    cached = redis_service.get_cache(cache_key)
+    cache_key = f"can_v2_{symbol}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
     analysis = await asyncio.to_thread(gemini_service.generate_canslim_assessment, d.companyName, d.quote, d.quarterlyEarnings, d.annualEarnings, d.institutionalHolders)
-    res = {"assessment": analysis}; redis_service.set_cache(cache_key, res, 3600); return res
+    res = {"assessment": analysis}; await redis_service.redis_client.set_cache(cache_key, res, 3600); return res
 
 @router.post("/{symbol}/conclusion-analysis")
 async def get_conclusion_analysis(symbol: str, d: ConclusionRequest = Body(...)):
-    cache_key = f"conc_{symbol}"
-    cached = redis_service.get_cache(cache_key)
+    cache_key = f"conc_v2_{symbol}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
     conclusion = await asyncio.to_thread(gemini_service.generate_fundamental_conclusion, d.companyName, d.piotroskiData, d.grahamData, d.darvasData, {k: v for k, v in d.keyStats.items() if v is not None}, d.newsHeadlines)
-    res = {"conclusion": conclusion}; redis_service.set_cache(cache_key, res, 3600); return res
+    res = {"conclusion": conclusion}; await redis_service.redis_client.set_cache(cache_key, res, 3600); return res
 
 # ==========================================
-# 3. TECHNICAL ANALYSIS (Calculated Live)
+# 4. TECHNICAL ANALYSIS & CHART ENGINE
 # ==========================================
 
 @router.post("/{symbol}/timeframe-analysis")
 async def get_timeframe_analysis(symbol: str, request_data: TimeframeRequest = Body(...)):
     """
-    AI Technical Analysis. Fetches EODHD Data -> Calculates Math -> Sends to Gemini.
+    AI Chart Analysis with Mathematical Resampling.
+    Fetches 5M data ONCE, then computes 15M/1H/4H locally for the AI.
     """
-    cache_key = f"tf_ai_{symbol}_{request_data.timeframe}"
-    cached = redis_service.get_cache(cache_key)
-    if cached: return cached
+    source, ticker = identify_asset_class(symbol)
+    
+    # 1. Determine "Master" Timeframe
+    # If user wants Intraday (15M, 1H, 4H), we fetch 5M Base Data
+    is_intraday_request = request_data.timeframe.upper() in ["5M", "15M", "30M", "1H", "4H"]
+    lookup_range = "5M" if is_intraday_request else request_data.timeframe
 
-    # 1. Fetch History from EODHD (Reliable)
-    chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=request_data.timeframe)
+    # 2. Check Cache for the MASTER Data (e.g., 5M)
+    # Note: Cache key matches get_stock_chart so they share the data pool
+    cache_key = f"chart_base_v16_{symbol}_{lookup_range}" 
+    chart_list = await redis_service.redis_client.get_cache(cache_key)
+    
+    # 3. If Cache Miss, Fetch from API
+    if not chart_list:
+        if source == "FMP":
+            chart_list = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, range_type=lookup_range)
+            if not chart_list: chart_list = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, range_type=lookup_range)
+        else:
+            chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, range_type=lookup_range)
+        
+        # Save Master Data
+        if chart_list:
+            await redis_service.redis_client.set_cache(cache_key, chart_list, 300)
+
     if not chart_list: return {"analysis": f"Market data unavailable for {request_data.timeframe}."}
+    
+    # 4. MATHEMATICAL RESAMPLING (The Optimization)
+    # If we have 5M data but the AI needs 1H, we compute it here.
+    if is_intraday_request and request_data.timeframe.upper() != "5M":
+         chart_list = technical_service.resample_chart_data(chart_list, request_data.timeframe)
 
-    # 2. Math Layer (Pandas TA)
+    # 5. Calculate Indicators on the RESAMPLED data
     df = pd.DataFrame(chart_list)
     technicals = technical_service.calculate_technical_indicators(df)
     pivots = technical_service.calculate_pivot_points(df)
     mas = technical_service.calculate_moving_averages(df)
     
-    # 3. AI Layer
+    # 6. AI Insight
     analysis = await asyncio.to_thread(gemini_service.generate_timeframe_analysis, symbol, request_data.timeframe, technicals, pivots, mas)
-    res = {"analysis": analysis}; redis_service.set_cache(cache_key, res, 30); return res
+    
+    return {"analysis": analysis}
+
 
 @router.post("/{symbol}/technicals-data")
 async def get_technicals_data(symbol: str, request_data: TimeframeRequest = Body(...)):
-    """Raw data for the Technicals Dashboard UI."""
-    chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=request_data.timeframe)
+    """
+    Returns Raw Technical Data using Math Resampling.
+    Used for the Gauge and Table UI.
+    """
+    source, ticker = identify_asset_class(symbol)
+    
+    is_intraday_request = request_data.timeframe.upper() in ["5M", "15M", "30M", "1H", "4H"]
+    lookup_range = "5M" if is_intraday_request else request_data.timeframe
+    
+    # Check Cache for Master Data
+    cache_key = f"chart_base_v16_{symbol}_{lookup_range}"
+    chart_list = await redis_service.redis_client.get_cache(cache_key)
+
+    if not chart_list:
+        if source == "FMP":
+            chart_list = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, range_type=lookup_range)
+            if not chart_list: chart_list = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, request_data.timeframe)
+        else:
+            chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, range_type=lookup_range)
+        
+        if chart_list:
+             await redis_service.redis_client.set_cache(cache_key, chart_list, 300)
+
     if not chart_list: return {"error": "No data available"}
+    
+    # Math Resampling
+    if is_intraday_request and request_data.timeframe.upper() != "5M":
+         chart_list = technical_service.resample_chart_data(chart_list, request_data.timeframe)
 
     df = pd.DataFrame(chart_list)
-    # Uses technical_service logic (No Yahoo)
     return {
         "technicalIndicators": technical_service.calculate_technical_indicators(df),
         "pivotPoints": technical_service.calculate_pivot_points(df),
@@ -251,185 +297,127 @@ async def get_technicals_data(symbol: str, request_data: TimeframeRequest = Body
     }
 
 # ==========================================
-# 4. MASTER DATA ENDPOINTS (EODHD CORE)
+# 5. MASTER DATA ENDPOINTS (ROBUST)
 # ==========================================
 
 @router.get("/{symbol}/peers")
 async def get_peers_comparison(symbol: str):
-    """
-    Robust Peer Comparison.
-    Flow: Check Cache -> Try FMP -> Fallback to Gemini AI -> Fetch Data from EODHD.
-    """
-    cache_key = f"peers_v5_{symbol}"
-    cached = redis_service.get_cache(cache_key)
+    cache_key = f"peers_v7_{symbol}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
+    
+    source, ticker = identify_asset_class(symbol)
+    # Skip peers for commodities/crypto
+    if source == "FMP": return []
 
-    # 1. Identify Sector/Industry for AI Fallback
-    base_profile = await asyncio.to_thread(eodhd_service.get_company_fundamentals, symbol)
+    base_profile = await asyncio.to_thread(eodhd_service.get_company_fundamentals, ticker)
     general = base_profile.get('General', {})
+    peers = await asyncio.to_thread(fmp_service.get_stock_peers, ticker)
     
-    # 2. Get Peer List (Try FMP First - It's best for this)
-    peers = await asyncio.to_thread(fmp_service.get_stock_peers, symbol)
-    
-    # 3. AI Fallback: If FMP fails, ask Gemini
     if not peers:
-        name = general.get('Name', symbol)
+        name = general.get('Name', ticker)
         sector = general.get('Sector', '')
         industry = general.get('Industry', '')
-        country = "India" if ".NS" in symbol or ".BO" in symbol else "US"
-        
-        peers = await asyncio.to_thread(
-            gemini_service.find_peer_tickers_by_industry, 
-            name, sector, industry, country
-        )
+        country = "India" if ".NS" in ticker or ".BO" in ticker else "US"
+        peers = await asyncio.to_thread(gemini_service.find_peer_tickers_by_industry, name, sector, industry, country)
 
     if not peers: return []
 
-    # 4. Normalize Suffixes (Critical for EODHD)
-    if "." in symbol:
-        suffix = "." + symbol.split(".")[-1]
-        corrected_peers = []
-        for p in peers:
-            p = p.strip().upper()
-            if "." not in p: p += suffix
-            corrected_peers.append(p)
-        peers = corrected_peers
+    if "." in ticker:
+        suffix = "." + ticker.split(".")[-1]
+        peers = [p.strip().upper() + suffix if "." not in p else p.strip().upper() for p in peers]
 
     target_peers = peers[:4] 
-    
-    # 5. Parallel Data Fetch using EODHD
-    async def fetch_peer_data(ticker):
+    async def fetch_peer_data(t):
         try:
-            fund = await asyncio.to_thread(eodhd_service.get_company_fundamentals, ticker)
+            fund = await asyncio.to_thread(eodhd_service.get_company_fundamentals, t)
             if not fund: return None
             metrics = eodhd_service.parse_metrics_from_fundamentals(fund)
-            metrics['symbol'] = ticker
+            metrics['symbol'] = t
             return metrics
         except: return None
-
     tasks = [fetch_peer_data(p) for p in target_peers]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
     final_data = [r for r in results if r and not isinstance(r, Exception)]
-    
-    # Add main symbol for context
     main_metrics = eodhd_service.parse_metrics_from_fundamentals(base_profile)
-    main_metrics['symbol'] = symbol
+    main_metrics['symbol'] = ticker
     final_data.insert(0, main_metrics)
-
-    redis_service.set_cache(cache_key, final_data, 86400)
+    await redis_service.redis_client.set_cache(cache_key, final_data, 86400)
     return final_data
 
 @router.get("/{symbol}/chart")
 async def get_stock_chart(symbol: str, range: str = "1D"):
-    """
-    High-End Chart Engine V3.
-    Features: 
-    1. Smart Resampling (5M -> 15M/1H/4H) for instant switching.
-    2. Persistent Caching (24H History).
-    3. Live Price Stitching (Real-time Wiggle).
-    4. IST Timezone Correction.
-    """
-    # 1. Determine Base Resolution
-    # If user wants 15M, 1H, or 4H, we actually fetch '5M' and resample it.
-    # This saves API calls and makes switching timeframes instant.
-    is_intraday_derived = range in ["5M", "15M", "1H", "4H"]
+    source, fmp_ticker = identify_asset_class(symbol)
+    
+    # Timeframe logic
+    is_intraday_derived = range in ["5M", "15M", "30M", "1H", "4H"]
     lookup_range = "5M" if is_intraday_derived else range
     
-    # 2. Check Cache for the BASE data
-    # We use a new cache key version (v3) to ensure fresh logic
-    cache_key = f"chart_base_v3_{symbol}_{lookup_range}"
-    
-    # Cache Rules: Intraday = 5 mins, Daily/History = 12 Hours
+    cache_key = f"chart_base_v16_{symbol}_{lookup_range}"
     ttl = 300 if is_intraday_derived else 43200
     
-    chart_data = redis_service.get_cache(cache_key)
-    
-    # 3. Fetch if missing
+    chart_data = await redis_service.redis_client.get_cache(cache_key)
     if not chart_data:
-        # This fetches 30 Days of 5M data OR 3 Years of Daily data
-        chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=lookup_range)
+        if source == "FMP":
+            chart_data = await asyncio.to_thread(fmp_service.get_commodity_history, fmp_ticker, range_type=lookup_range)
+            if not chart_data:
+                 chart_data = await asyncio.to_thread(fmp_service.get_crypto_history, fmp_ticker, range_type=lookup_range)
+            if not chart_data:
+                chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=lookup_range)
+        else:
+            chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, range_type=lookup_range)
         if chart_data:
-            redis_service.set_cache(cache_key, chart_data, ttl)
+            await redis_service.redis_client.set_cache(cache_key, chart_data, ttl)
     
     if not chart_data: return []
-
-    # 4. MATH RESAMPLING ENGINE
-    # If we have 5M data but user wants 1H, we calculate it here.
     final_data = chart_data
+    
+    # Resample for Display
     if is_intraday_derived and range != "5M":
-        # Pass to technical_service to aggregate candles (Open=First, Close=Last, High=Max, Low=Min)
         resampled = technical_service.resample_chart_data(chart_data, range)
-        if resampled:
-            final_data = resampled
+        if resampled: final_data = resampled
 
-    # 5. LIVE STITCHING (The "Real-Time" Feel)
-    # We grab the absolute latest price and update the last candle in memory.
+    # Live Price Stitching
     try:
-        live_quote = await asyncio.to_thread(eodhd_service.get_live_price, symbol)
-        
-        if live_quote and live_quote.get('price'):
-            current_price = live_quote['price']
-            
-            # IST Offset Logic (Critical for India)
-            # If it's Indian Intraday, we previously shifted history by +19800s.
-            # We must ensure the live candle aligns with that.
-            is_indian = ".NS" in symbol or ".BO" in symbol or "NIFTY" in symbol or "SENSEX" in symbol or "BANK" in symbol
-            
-            if final_data:
-                last = final_data[-1]
-                
-                # Logic: If the live price is for the *current* candle timeframe, update it.
-                # If it's a new timeframe, we ideally append, but for simplicity/stability
-                # we update the current close to reflect the latest price tick.
-                
-                last['close'] = current_price
-                # Update High/Low dynamically
-                if current_price > last['high']: last['high'] = current_price
-                if current_price < last['low']: last['low'] = current_price
-                
-                # Volume update (Optional, accumulative)
-                if live_quote.get('volume') and live_quote['volume'] > last['volume']:
-                     last['volume'] = live_quote['volume']
-
-    except Exception as e:
-        # If live fetch fails, just return historical data without crashing
-        pass
+        current_price = 0
+        if source == "FMP":
+            q = await asyncio.to_thread(fmp_service.get_quote, fmp_ticker)
+            current_price = q.get('price')
+        else:
+            q = await asyncio.to_thread(eodhd_service.get_live_price, symbol)
+            current_price = q.get('price')
+        if current_price and final_data:
+            last = final_data[-1]
+            last['close'] = current_price
+            if current_price > last['high']: last['high'] = current_price
+            if current_price < last['low']: last['low'] = current_price
+    except Exception: pass 
 
     return final_data
 
 @router.get("/{symbol}/all")
 async def get_all_stock_data(symbol: str):
-    """
-    THE MASTER DATA AGGREGATOR (OPTIMIZED FOR SCALE).
-    Smartly routes requests based on Asset Type to save API resources.
-    """
-    # Cache Key V14: Forces refresh
-    cache_key = f"all_data_v14_{symbol}"
-    cached = redis_service.get_cache(cache_key)
+    cache_key = f"all_data_v27_{symbol}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
 
-    # --- 1. SMART ASSET DETECTION ---
-    is_crypto = ".CC" in symbol or "BTC" in symbol or "ETH" in symbol or "XAU" in symbol
-    is_index = ".INDX" in symbol or "^" in symbol
-    is_traditional_stock = not (is_crypto or is_index)
+    source, fmp_ticker = identify_asset_class(symbol)
+    tasks = { "news": asyncio.to_thread(news_service.get_company_news, symbol) }
 
-    # --- 2. LOAD BALANCED TASKS ---
-    # Core tasks (Everyone needs these)
-    tasks = {
-        "eod_fund": asyncio.to_thread(eodhd_service.get_company_fundamentals, symbol),
-        "eod_live": asyncio.to_thread(eodhd_service.get_live_price, symbol),
-        "news": asyncio.to_thread(news_service.get_company_news, symbol), # FMP News is global
-        "chart_data": asyncio.to_thread(eodhd_service.get_historical_data, symbol, "1D"), 
-    }
-
-    # Conditional Tasks (Only for Stocks - Saves ~40% API calls for Crypto/Indices)
-    if is_traditional_stock:
+    if source == "FMP":
         tasks.update({
+            "fmp_quote": asyncio.to_thread(fmp_service.get_quote, fmp_ticker),
+            "chart_data": asyncio.to_thread(fmp_service.get_commodity_history, fmp_ticker, "1D") 
+        })
+    else:
+        tasks.update({
+            "eod_fund": asyncio.to_thread(eodhd_service.get_company_fundamentals, symbol),
+            "eod_live": asyncio.to_thread(eodhd_service.get_live_price, symbol),
             "fmp_prof": asyncio.to_thread(fmp_service.get_company_profile, symbol),
             "fmp_rating": asyncio.to_thread(fmp_service.get_analyst_ratings, symbol),
             "fmp_target": asyncio.to_thread(fmp_service.get_price_target_consensus, symbol),
             "shareholding": asyncio.to_thread(fmp_service.get_shareholding_data, symbol),
+            "chart_data": asyncio.to_thread(eodhd_service.get_historical_data, symbol, "1D")
         })
 
     try:
@@ -443,47 +431,77 @@ async def get_all_stock_data(symbol: str):
         return val
 
     final_data = {}
-    
-    # 3. Profile & Quote
-    eod_fund = safe('eod_fund', {})
-    eod_p = eodhd_service.parse_profile_from_fundamentals(eod_fund, symbol)
-    fmp_p = safe('fmp_prof', {}) or {}
-    
-    tv_symbol = symbol
-    if symbol in TRADINGVIEW_OVERRIDE_MAP: tv_symbol = TRADINGVIEW_OVERRIDE_MAP[symbol]
-    elif symbol.endswith(".NS"): tv_symbol = "NSE:" + symbol.replace(".NS", "")
-    elif symbol.endswith(".BO"): tv_symbol = "BSE:" + symbol.replace(".BO", "")
-    
-    final_data['profile'] = {
-        **eod_p,
-        "description": fmp_p.get("description") or eod_p.get("description") or "Market Asset",
-        "image": fmp_p.get("image") or eod_p.get("image"),
-        "tradingview_symbol": tv_symbol
-    }
-    
-    final_data['key_metrics'] = eodhd_service.parse_metrics_from_fundamentals(eod_fund)
-    final_data['quote'] = safe('eod_live', {})
 
-    # 4. Financials (EODHD)
-    final_data['annual_revenue_and_profit'] = eodhd_service.parse_financials(eod_fund, 'Financials::Income_Statement', 'yearly')
-    final_data['annual_balance_sheets'] = eodhd_service.parse_financials(eod_fund, 'Financials::Balance_Sheet', 'yearly')
-    final_data['annual_cash_flow_statements'] = eodhd_service.parse_financials(eod_fund, 'Financials::Cash_Flow', 'yearly')
-    final_data['quarterly_income_statements'] = eodhd_service.parse_financials(eod_fund, 'Financials::Income_Statement', 'quarterly')
-    final_data['quarterly_balance_sheets'] = eodhd_service.parse_financials(eod_fund, 'Financials::Balance_Sheet', 'quarterly')
-    final_data['quarterly_cash_flow_statements'] = eodhd_service.parse_financials(eod_fund, 'Financials::Cash_Flow', 'quarterly')
+    if source == "FMP":
+        q = safe('fmp_quote', {})
+        if not q: q = await asyncio.to_thread(eodhd_service.get_live_price, symbol)
 
-    # 5. Technicals (Internal Math)
-    chart_data = safe('chart_data', [])
+        final_data['profile'] = {
+            "companyName": q.get('name') or symbol, 
+            "symbol": symbol, "description": f"Real-Time Market Data for {symbol}.",
+            "image": "", "currency": "USD", "sector": "Commodity/Crypto",
+            "tradingview_symbol": TRADINGVIEW_OVERRIDE_MAP.get(symbol, symbol)
+        }
+        final_data['quote'] = q
+        
+        chart_data = safe('chart_data', [])
+        if not chart_data:
+             chart_data = await asyncio.to_thread(fmp_service.get_crypto_history, fmp_ticker, "1D")
+        if not chart_data:
+             chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, symbol, "1D")
+
+        # --- SAFE INITIALIZATION ---
+        final_data['key_metrics'] = {} 
+        final_data['annual_revenue_and_profit'] = []
+        final_data['annual_balance_sheets'] = []
+        final_data['annual_cash_flow_statements'] = []
+        final_data['quarterly_income_statements'] = []
+        final_data['quarterly_balance_sheets'] = []
+        final_data['quarterly_cash_flow_statements'] = []
+        final_data['shareholding'] = []
+        final_data['shareholding_breakdown'] = {}
+        eod_ratings, eod_targets, fmp_ratings, fmp_targets = [], {}, [], {}
+        
+    else:
+        # STOCK LOGIC
+        eod_fund = safe('eod_fund', {})
+        eod_p = eodhd_service.parse_profile_from_fundamentals(eod_fund, symbol)
+        fmp_p = safe('fmp_prof', {}) or {}
+        tv_symbol = symbol
+        if symbol in TRADINGVIEW_OVERRIDE_MAP: tv_symbol = TRADINGVIEW_OVERRIDE_MAP[symbol]
+        elif symbol.endswith(".NS"): tv_symbol = "NSE:" + symbol.replace(".NS", "")
+        
+        final_data['profile'] = {**eod_p, "description": fmp_p.get("description") or eod_p.get("description"), "image": fmp_p.get("image") or eod_p.get("image"), "tradingview_symbol": tv_symbol}
+        final_data['key_metrics'] = eodhd_service.parse_metrics_from_fundamentals(eod_fund)
+        final_data['quote'] = safe('eod_live', {})
+        final_data['annual_revenue_and_profit'] = eodhd_service.parse_financials(eod_fund, 'Financials::Income_Statement', 'yearly')
+        final_data['annual_balance_sheets'] = eodhd_service.parse_financials(eod_fund, 'Financials::Balance_Sheet', 'yearly')
+        final_data['annual_cash_flow_statements'] = eodhd_service.parse_financials(eod_fund, 'Financials::Cash_Flow', 'yearly')
+        final_data['quarterly_income_statements'] = eodhd_service.parse_financials(eod_fund, 'Financials::Income_Statement', 'quarterly')
+        final_data['quarterly_balance_sheets'] = eodhd_service.parse_financials(eod_fund, 'Financials::Balance_Sheet', 'quarterly')
+        final_data['quarterly_cash_flow_statements'] = eodhd_service.parse_financials(eod_fund, 'Financials::Cash_Flow', 'quarterly')
+        chart_data = safe('chart_data', [])
+        share_bd = eodhd_service.parse_shareholding_breakdown(eod_fund)
+        shares = eodhd_service.parse_holders(eod_fund)
+        if share_bd.get('promoter') == 0:
+            fmp_s = safe('shareholding', [])
+            if fmp_s:
+                t = sum(h.get('shares', 0) for h in fmp_s)
+                share_bd = {"promoter": 0, "fii": t*0.6, "dii": t*0.4, "public": 0}
+                shares = fmp_s
+        final_data['shareholding'] = shares
+        final_data['shareholding_breakdown'] = share_bd
+        eod_ratings, eod_targets = eodhd_service.parse_analyst_data(eod_fund) if hasattr(eodhd_service, 'parse_analyst_data') else ([], {})
+        fmp_ratings, fmp_targets = safe('fmp_rating', []), safe('fmp_target', {})
+
     tech_inds, mas, pivots, darvas = {}, {}, {}, {}
-    
-    if chart_data and len(chart_data) > 30:
+    if chart_data and len(chart_data) > 20:
         try:
             df = pd.DataFrame(chart_data)
             tech_inds = technical_service.calculate_technical_indicators(df)
             mas = technical_service.calculate_moving_averages(df)
             pivots = technical_service.calculate_pivot_points(df)
-            # Darvas only for Stocks
-            if is_traditional_stock and final_data['quote']:
+            if source != "FMP" and final_data['quote']:
                 darvas = technical_service.calculate_darvas_box(df, final_data['quote'], final_data['profile'].get('currency', 'USD'))
         except: pass
 
@@ -492,97 +510,66 @@ async def get_all_stock_data(symbol: str):
     final_data['pivot_points'] = pivots
     final_data['darvas_scan'] = darvas
 
-    # 6. Scans & Sentiment (Stocks Only)
     piotroski, graham = {}, {}
-    if is_traditional_stock:
+    if source != "FMP":
         piotroski = fundamental_service.calculate_piotroski_f_score(final_data['annual_revenue_and_profit'], final_data['annual_balance_sheets'], final_data['annual_cash_flow_statements'])
-        graham = fundamental_service.calculate_graham_scan(final_data['profile'], final_data['key_metrics'], final_data['annual_revenue_and_profit'], final_data['annual_cash_flow_statements'])
+        graham = fundamental_service.calculate_graham_scan(final_data['profile'], final_data.get('key_metrics', {}), final_data['annual_revenue_and_profit'], final_data['annual_cash_flow_statements'])
     
     final_data['piotroski_f_score'] = piotroski
     final_data['graham_scan'] = graham
     
-    # Sentiment (Using generated metrics)
+    # SAFE CALL
     final_data['overall_sentiment'] = sentiment_service.calculate_overall_sentiment(
-        piotroski.get('score'), final_data['key_metrics'], tech_inds, safe('fmp_rating', [])
+        piotroski.get('score'), 
+        final_data.get('key_metrics', {}), 
+        tech_inds, 
+        safe('fmp_rating', [])
     )
-
     final_data['news'] = safe('news', [])
-    
-    # --- 7. UNIVERSAL FORECAST ENGINE (Stocks + Crypto + Commodities) ---
-    eod_ratings, eod_targets = eodhd_service.parse_analyst_data(eod_fund) if hasattr(eodhd_service, 'parse_analyst_data') else ([], {})
-    fmp_ratings = safe('fmp_rating', [])
-    fmp_targets = safe('fmp_target', {})
-    
+
     def has_votes(r): return r and isinstance(r, list) and len(r)>0 and (r[0].get('ratingBuy',0)+r[0].get('ratingHold',0)+r[0].get('ratingSell',0) > 0)
     
-    # Priority 1: EODHD/FMP (Stocks)
-    if is_traditional_stock and has_votes(eod_ratings):
+    if source != "FMP" and has_votes(eod_ratings):
         final_data['analyst_ratings'] = eod_ratings; final_data['price_target_consensus'] = eod_targets
-    elif is_traditional_stock and has_votes(fmp_ratings):
+    elif source != "FMP" and has_votes(fmp_ratings):
         final_data['analyst_ratings'] = fmp_ratings; final_data['price_target_consensus'] = fmp_targets
     else:
-        # Priority 2: Technical Math (Crypto/Indices/No-Data Stocks)
         price = final_data['quote'].get('price') or 0
         if price == 0 and chart_data: price = chart_data[-1]['close']
-            
         rsi = tech_inds.get('rsi', 50)
-        
-        # Synthetic Rating
         syn = {"ratingStrongBuy": 0, "ratingBuy": 0, "ratingHold": 0, "ratingSell": 0, "ratingStrongSell": 0}
         if rsi < 30: syn["ratingStrongBuy"] = 12; syn["ratingBuy"] = 8
         elif rsi < 45: syn["ratingBuy"] = 10; syn["ratingHold"] = 10
         elif rsi < 55: syn["ratingHold"] = 20
         elif rsi < 70: syn["ratingSell"] = 10; syn["ratingHold"] = 10
         else: syn["ratingStrongSell"] = 12; syn["ratingSell"] = 8
-            
-        # Synthetic Target (Pivot Based)
         target = price if price > 0 else 100
         if price > 0:
             pc = pivots.get('classic', {})
-            # Bullish? Target R1. Bearish? Target S1.
             target = pc.get('r1') if rsi < 50 else pc.get('s1') or price
-            
         final_data['analyst_ratings'] = [syn]
         final_data['price_target_consensus'] = {"targetHigh": target*1.1, "targetLow": target*0.9, "targetConsensus": target}
 
-    # Ensure target consensus is never 0/null
     pt = final_data.get('price_target_consensus', {})
     if not pt.get('targetConsensus'):
         p = final_data['quote'].get('price') or 100
         final_data['price_target_consensus'] = {"targetHigh": p*1.1, "targetLow": p*0.9, "targetConsensus": p}
 
-    # 8. Shareholding (Stocks Only)
-    share_bd, shares = {}, []
-    if is_traditional_stock:
-        share_bd = eodhd_service.parse_shareholding_breakdown(eod_fund)
-        shares = eodhd_service.parse_holders(eod_fund)
-        if share_bd.get('promoter') == 0 and share_bd.get('fii') == 0:
-            fmp_s = safe('shareholding', [])
-            if fmp_s:
-                shares = fmp_s
-                t = sum(h.get('shares', 0) for h in fmp_s)
-                share_bd = {"promoter": 0, "fii": t*0.6, "dii": t*0.4, "public": 0}
-
-    final_data['shareholding'] = shares
-    final_data['shareholding_breakdown'] = share_bd
-
-    # 9. Key Stats
     km = final_data.get('key_metrics', {})
     kq = final_data.get('quote', {})
-    def n(v): 
-        try: return None if isinstance(v, float) and (math.isnan(v) or math.isinf(v)) else v
-        except: return None
+    def n(v): return None if isinstance(v, float) and (math.isnan(v) or math.isinf(v)) else v
 
     final_data['keyStats'] = {
-        "marketCap": n(km.get('marketCap')), "peRatio": n(km.get('peRatioTTM')),
+        "marketCap": n(km.get('marketCap')), "peRatio": n(km.get('peRatioTTM')), 
         "dividendYield": n(km.get('dividendYieldTTM')), "basicEPS": n(km.get('epsTTM')),
         "sharesFloat": n(km.get('sharesOutstanding')), "beta": n(km.get('beta')),
         "netIncome": n(km.get('epsTTM')), "revenue": n(km.get('revenueGrowth')),
-        "dayLow": n(kq.get('low')), "dayHigh": n(kq.get('high')), "yearHigh": n(kq.get('high')),
+        "dayLow": n(kq.get('dayLow') or kq.get('low')), 
+        "dayHigh": n(kq.get('dayHigh') or kq.get('high')), 
+        "yearHigh": n(kq.get('yearHigh') or kq.get('high')),
         "nextReportDate": None, "epsEstimate": None, "revenueEstimate": None
     }
 
-    # 10. Final Clean & Cache
     def clean_json(obj):
         if isinstance(obj, float): return None if math.isnan(obj) or math.isinf(obj) else obj
         if isinstance(obj, dict): return {k: clean_json(v) for k, v in obj.items()}
@@ -590,5 +577,78 @@ async def get_all_stock_data(symbol: str):
         return obj
 
     final = clean_json(final_data)
-    redis_service.set_cache(cache_key, final, 300)
+    await redis_service.redis_client.set_cache(cache_key, final, 300)
     return final
+
+
+# ==========================================
+# 5. THE "OMNI-ANALYST" ENGINE (ALL TIMEFRAMES AT ONCE)
+# ==========================================
+
+@router.post("/{symbol}/all-timeframe-analysis")
+async def get_all_timeframe_analysis(symbol: str):
+    """
+    Generates AI Analysis for 5M, 15M, 1H, 4H, and 1D in a SINGLE request.
+    Uses Mathematical Resampling to avoid extra API calls.
+    """
+    cache_key = f"omni_analysis_v1_{symbol}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
+    if cached: return cached
+
+    # 1. Identify Asset
+    source, ticker = identify_asset_class(symbol)
+    
+    # 2. Fetch MASTER Data (5 Minute)
+    # We use 5M because we can build 15M, 1H, 4H, 1D from it mathematically.
+    if source == "FMP":
+        chart_data = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, range_type="5M")
+        if not chart_data: chart_data = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, range_type="5M")
+    else:
+        chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, range_type="5M")
+
+    if not chart_data or len(chart_data) < 50:
+        return {"error": "Insufficient market data for analysis."}
+
+    # 3. Define Targets
+    timeframes = ["15M", "1H", "4H", "1D"]
+    tasks = []
+
+    # Helper function to process one timeframe
+    async def process_timeframe(tf):
+        try:
+            # A. Resample (Math)
+            # If tf is 5M, use original. Else resample.
+            data = chart_data if tf == "5M" else technical_service.resample_chart_data(chart_data, tf)
+            
+            # B. Calculate Technicals (Math)
+            df = pd.DataFrame(data)
+            techs = technical_service.calculate_technical_indicators(df)
+            pivots = technical_service.calculate_pivot_points(df)
+            mas = technical_service.calculate_moving_averages(df)
+            
+            # C. Generate AI Insight
+            analysis = await asyncio.to_thread(
+                gemini_service.generate_timeframe_analysis, 
+                symbol, tf, techs, pivots, mas
+            )
+            return tf.lower(), analysis # Return key like "1h"
+        except:
+            return tf.lower(), "Analysis unavailable."
+
+    # 4. Execute Parallel Processing
+    # We run 5 AI Models simultaneously. This takes ~3 seconds total instead of 15s.
+    results = await asyncio.gather(
+        process_timeframe("5M"),
+        process_timeframe("15M"),
+        process_timeframe("1H"),
+        process_timeframe("4H"),
+        process_timeframe("1D")
+    )
+
+    # 5. Construct Final Response
+    response_map = {k: v for k, v in results}
+    
+    # Cache the heavy result
+    await redis_service.redis_client.set_cache(cache_key, response_map, 300) # 5 min cache
+    
+    return response_map

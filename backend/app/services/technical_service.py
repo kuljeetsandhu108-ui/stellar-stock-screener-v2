@@ -10,6 +10,9 @@ def resample_chart_data(chart_data: list, target_interval: str):
     """
     Mathematically converts 5-Minute (Base) candles into higher timeframes.
     This enables INSTANT switching between 5M -> 15M -> 1H -> 4H without API calls.
+    
+    Input: List of 5-min candles [{'time':..., 'open':...}, ...]
+    Output: List of aggregated candles.
     """
     if not chart_data or len(chart_data) < 2: 
         return []
@@ -19,22 +22,26 @@ def resample_chart_data(chart_data: list, target_interval: str):
         df = pd.DataFrame(chart_data)
         
         # 2. Set Index to Datetime (Required for resampling)
+        # We assume 'time' is Unix timestamp in seconds
         df['datetime'] = pd.to_datetime(df['time'], unit='s')
         df.set_index('datetime', inplace=True)
         
         # 3. Map Frontend Timeframes to Pandas Offset Aliases
-        # The frontend sends "15M", "1H", etc.
+        # Frontend: 15m, 1H, 4H, 1D
+        # Pandas: 15min, 1h, 4h, 1D
         mapping = {
-            "15M": "15min",
-            "30M": "30min",
-            "1H": "1h",
-            "4H": "4h"
+            "15m": "15min", "15M": "15min",
+            "30m": "30min", "30M": "30min",
+            "1h": "1h", "1H": "1h",
+            "4h": "4h", "4H": "4h",
+            "1d": "1D", "1D": "1D",
+            "1w": "1W", "1W": "1W"
         }
         
         rule = mapping.get(target_interval)
         
-        # If no rule found (e.g. '1D' or '1W' which are fetched separately), return original
-        if not rule: 
+        # If no rule found or rule matches input (5M), return original
+        if not rule or target_interval.upper() == "5M": 
             return chart_data
 
         # 4. Resample Logic (OHLCV Aggregation)
@@ -67,7 +74,7 @@ def resample_chart_data(chart_data: list, target_interval: str):
         return final_data
 
     except Exception as e:
-        print(f"Resampling Error: {e}")
+        # print(f"Resampling Error: {e}")
         # On error, fallback to returning the original data to prevent crash
         return chart_data
 
@@ -80,7 +87,7 @@ def calculate_technical_indicators(df: pd.DataFrame):
     Calculates RSI, MACD, Stoch, ADX, ATR using Pandas TA.
     Expects DataFrame with lowercase columns: 'open', 'high', 'low', 'close', 'volume'
     """
-    if df is None or df.empty or len(df) < 50:
+    if df is None or df.empty or len(df) < 20:
         return {}
     
     try:
@@ -88,13 +95,21 @@ def calculate_technical_indicators(df: pd.DataFrame):
         wdf = df.copy()
         
         # Calculate Indicators
-        wdf.ta.rsi(length=14, append=True)
-        wdf.ta.macd(fast=12, slow=26, signal=9, append=True)
-        wdf.ta.stoch(k=14, d=3, smooth_k=3, append=True)
-        wdf.ta.adx(length=14, append=True)
-        wdf.ta.atr(length=14, append=True)
-        wdf.ta.willr(length=14, append=True)
-        wdf.ta.bbands(length=20, std=2, append=True)
+        # We catch individual errors to prevent one indicator crashing the whole set
+        try: wdf.ta.rsi(length=14, append=True)
+        except: pass
+        try: wdf.ta.macd(fast=12, slow=26, signal=9, append=True)
+        except: pass
+        try: wdf.ta.stoch(k=14, d=3, smooth_k=3, append=True)
+        except: pass
+        try: wdf.ta.adx(length=14, append=True)
+        except: pass
+        try: wdf.ta.atr(length=14, append=True)
+        except: pass
+        try: wdf.ta.willr(length=14, append=True)
+        except: pass
+        try: wdf.ta.bbands(length=20, std=2, append=True)
+        except: pass
 
         # Get Latest Data Point
         latest = wdf.iloc[-1]
@@ -102,10 +117,12 @@ def calculate_technical_indicators(df: pd.DataFrame):
         
         # Helper to safely extract float values (Handles NaN/None)
         def get_val(key):
-            val = latest.get(key)
-            if val is None or pd.isna(val):
-                return None
-            return float(val)
+            try:
+                val = latest.get(key)
+                if val is None or pd.isna(val) or np.isnan(val):
+                    return None
+                return float(val)
+            except: return None
 
         return {
             "rsi": get_val('RSI_14'),
@@ -128,7 +145,7 @@ def calculate_technical_indicators(df: pd.DataFrame):
             }
         }
     except Exception as e:
-        print(f"Technical Indicator Calc Error: {e}")
+        # print(f"Technical Indicator Calc Error: {e}")
         return {}
 
 # ==========================================
@@ -151,13 +168,12 @@ def calculate_moving_averages(df: pd.DataFrame):
             if len(wdf) >= p:
                 # Rolling mean is faster than pandas_ta for simple SMA
                 val = wdf['close'].rolling(window=p).mean().iloc[-1]
-                mas[str(p)] = float(val)
+                mas[str(p)] = float(val) if not pd.isna(val) else None
             else:
                 mas[str(p)] = None
                 
         return mas
     except Exception as e:
-        print(f"MA Calc Error: {e}")
         return {}
 
 # ==========================================
@@ -220,7 +236,6 @@ def calculate_pivot_points(df: pd.DataFrame):
             "camarilla": cam
         }
     except Exception as e:
-        print(f"Pivot Calc Error: {e}")
         return {}
 
 # ==========================================
@@ -285,7 +300,6 @@ def calculate_darvas_box(hist_df: pd.DataFrame, quote: dict, currency: str = "US
             }
 
     except Exception as e:
-        print(f"Darvas Error: {e}")
         return {"status": "Error", "message": "Calculation failed."}
 
 # ==========================================
@@ -303,8 +317,15 @@ def calculate_extended_technicals(df: pd.DataFrame):
         mas = calculate_moving_averages(df)
         pivots = calculate_pivot_points(df)
         
+        # Add basic trend confirmation
+        price = inds.get('price_action', {}).get('current_close')
+        ema_200 = mas.get('200')
+        trend = "Unknown"
+        if price and ema_200:
+            trend = "Bullish" if price > ema_200 else "Bearish"
+
         return {
-            "price": inds.get('price_action', {}).get('current_close'),
+            "price": price,
             "rsi": inds.get('rsi'),
             "macd": inds.get('macd'),
             "macd_signal": inds.get('macdsignal'),
@@ -312,7 +333,8 @@ def calculate_extended_technicals(df: pd.DataFrame):
             "adx": inds.get('adx'),
             "ema_20": mas.get('20'),
             "ema_50": mas.get('50'),
-            "ema_200": mas.get('200'),
+            "ema_200": ema_200,
+            "trend_context": trend,
             "pivot": pivots.get('classic', {}).get('pp'),
             "support": {"s1": pivots.get('classic', {}).get('s1'), "s2": pivots.get('classic', {}).get('s2')},
             "resistance": {"r1": pivots.get('classic', {}).get('r1'), "r2": pivots.get('classic', {}).get('r2')}

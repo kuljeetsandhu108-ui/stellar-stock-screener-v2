@@ -325,78 +325,91 @@ def analyze_chart_technicals_from_image(image_bytes: bytes):
 
 # --- 4. CHART AI (TIMEFRAME) ANALYSIS (SAFE MATH & STRICT FORMAT) ---
 
-def generate_timeframe_analysis(symbol: str, timeframe: str, technical_data: dict, pivots: dict, moving_averages: dict):
+def generate_timeframe_analysis(symbol: str, timeframe: str, technicals: dict, pivots: dict, mas: dict):
     """
-    Generates a trade setup based on live calculated data.
+    Generates a trade setup based on Mathematical Indicators.
     """
     try:
         configure_gemini_for_request()
         model = genai.GenerativeModel('gemini-3-flash-preview')
 
-        # Safe extraction of data with defaults
-        rsi = technical_data.get('rsi', 'N/A')
-        macd = technical_data.get('macd', 'N/A')
-        stoch = technical_data.get('stochasticsk', 'N/A')
-        adx = technical_data.get('adx', 'N/A')
-        close = technical_data.get('price_action', {}).get('current_close', 'N/A')
+        # --- SAFE DATA EXTRACTION ---
+        def safe_get(d, keys, default='N/A'):
+            """Deep get for nested dictionaries."""
+            val = d
+            for key in keys:
+                if isinstance(val, dict):
+                    val = val.get(key)
+                else:
+                    return default
+            return f"{val:.2f}" if isinstance(val, (int, float)) else str(val)
 
-        classic = pivots.get('classic', {})
-        pivot_str = f"PP:{classic.get('pp', 'N/A')}, S1:{classic.get('s1', 'N/A')}, R1:{classic.get('r1', 'N/A')}"
-        ma_str = f"SMA20:{moving_averages.get('20', 'N/A')}, SMA50:{moving_averages.get('50', 'N/A')}"
-
-        # --- SAFETY BLOCK: PREVENT CRASHES ON MISSING PRICE ---
-        try:
-            # We try to calculate examples to guide the AI
-            val = float(close)
-            ex_entry = f"{val} - {val*1.002:.2f}"
-            ex_stop = f"{val*0.99:.2f}"
-            ex_tgt1 = f"{val*1.01:.2f}"
-            ex_tgt2 = f"{val*1.02:.2f}"
-        except:
-            # Fallback values if price is 'N/A' or invalid
-            ex_entry = "100.00 - 101.00"
-            ex_stop = "99.00"
-            ex_tgt1 = "102.00"
-            ex_tgt2 = "103.00"
-
-        # --- OPTIMIZED PROMPT ---
-        prompt = f"""
-        Act as an Algorithmic Trader. Analyze the following live technical data for {symbol} on the {timeframe} timeframe.
+        # Extract values safely
+        price = safe_get(technicals, ['price_action', 'current_close'])
+        rsi = safe_get(technicals, ['rsi'])
+        macd = safe_get(technicals, ['macd'])
+        adx = safe_get(technicals, ['adx'])
         
-        **Live Data:**
-        - Price: {close}
-        - Momentum: RSI({rsi}), Stoch({stoch}), ADX({adx}), MACD({macd})
-        - Levels: {pivot_str}
-        - Trends: {ma_str}
+        # Pivots
+        pp = safe_get(pivots, ['classic', 'pp'])
+        s1 = safe_get(pivots, ['classic', 's1'])
+        r1 = safe_get(pivots, ['classic', 'r1'])
+        
+        # MAs
+        ema20 = safe_get(mas, ['20'])
+        ema50 = safe_get(mas, ['50'])
+
+        # --- HEURISTIC TREND ---
+        trend_hint = "Neutral"
+        try:
+            p_val = float(price)
+            ma_val = float(ema50)
+            if p_val > ma_val: trend_hint = "Bullish"
+            elif p_val < ma_val: trend_hint = "Bearish"
+        except: pass
+
+        # --- PROMPT ---
+        prompt = f"""
+        Act as an Algorithmic Trader. Analyze {symbol} on {timeframe} timeframe.
+        
+        **HARD DATA (Computed):**
+        - Price: {price}
+        - Trend Bias: {trend_hint}
+        - Indicators: RSI={rsi}, ADX={adx}, MACD={macd}
+        - Key Levels: Pivot={pp}, Support={s1}, Resistance={r1}
+        - Averages: EMA20={ema20}, EMA50={ema50}
 
         **Instructions:**
-        1. Identify the Trend and Momentum.
-        2. Define a Trade Setup based on Pivot Points and Moving Averages.
-        3. KEEP THE TRADE TICKET VALUES CONCISE (Numbers Only). Do not write sentences in price fields.
-
-        **STRICT OUTPUT FORMAT:**
+        Based ONLY on these numbers, provide a trading strategy.
+        
+        **STRICT RESPONSE FORMAT:**
         TREND: [Uptrend / Downtrend / Range]
-        PATTERNS: [Name of formation e.g. "Bull Flag" or "Consolidation"]
+        PATTERNS: [Identify structure based on levels]
         MOMENTUM: [Bullish / Bearish / Neutral]
-        LEVELS: [Key Support/Resistance levels]
-        INDICATORS: [Brief summary of indicator signals]
-        CONCLUSION: [Brief professional summary]
+        LEVELS: [Key S/R from data]
+        INDICATORS: [Interpret the RSI/MACD values]
+        CONCLUSION: [Brief summary]
 
         -- TRADE TICKET --
         ACTION: [BUY / SELL / WAIT]
-        ENTRY_ZONE: [Price range ONLY. e.g., "{ex_entry}"]
-        STOP_LOSS: [Price ONLY. e.g., "{ex_stop}"]
-        TARGET_1: [Price ONLY. e.g., "{ex_tgt1}"]
-        TARGET_2: [Price ONLY. e.g., "{ex_tgt2}"]
-        RISK_REWARD: [Ratio. e.g., "1:2"]
+        ENTRY_ZONE: [Price Range]
+        STOP_LOSS: [Price]
+        TARGET_1: [Price]
+        TARGET_2: [Price]
+        RISK_REWARD: [Ratio]
         CONFIDENCE: [High / Medium / Low]
-        RATIONALE: [One clear sentence explaining the trade logic.]
+        RATIONALE: [Explain why based on the math provided]
         """
 
         response = model.generate_content(prompt)
-        return response.text.strip()
+        text = response.text.strip()
+        
+        if "ACTION:" not in text:
+             return f"TREND: {trend_hint}\nACTION: WAIT\nRATIONALE: Market data unclear ({text[:50]}...)"
+            
+        return text
 
     except Exception as e:
-        print(f"Error in timeframe analysis: {e}")
-        # Return a soft error that the frontend can detect without crashing
-        return "TREND: Error\nACTION: WAIT\nRATIONALE: AI Analysis Failed."
+        print(f"AI Math Error: {e}")
+        # Return a fallback that looks like a valid response so frontend parses it
+        return f"TREND: {trend_hint if 'trend_hint' in locals() else 'Neutral'}\nACTION: WAIT\nRATIONALE: AI Analysis interrupted. Please retry."

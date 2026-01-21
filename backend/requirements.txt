@@ -7,7 +7,11 @@ pandas
 pandas_ta
 pydantic
 python-multipart
-redis
+redis>=5.0.0
 async-lru
 beautifulsoup4
 gunicorn
+msgpack
+fyers-apiv3
+websockets
+httpx
