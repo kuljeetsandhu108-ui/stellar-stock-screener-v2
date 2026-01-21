@@ -15,3 +15,4 @@ msgpack
 fyers-apiv3
 websockets
 httpx
+yfinance
