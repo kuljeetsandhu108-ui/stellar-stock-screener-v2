@@ -296,11 +296,16 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
   // Robust Currency Symbol
   const currencySymbol = getCurrencySymbol(profile.currency, profile.symbol);
   
-  // Formatting
-  const isPositive = liveData.change >= 0;
-  const formattedPrice = (liveData.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const formattedChange = (liveData.change || 0).toFixed(2);
-  const formattedPct = (liveData.pct || 0).toFixed(2);
+// Formatting - Convert to Number first to prevent "toFixed is not a function" crash
+  const safeChange = Number(liveData.change) || 0;
+  const safePct = Number(liveData.pct) || 0;
+  const safePrice = Number(liveData.price) || 0;
+
+  const isPositive = safeChange >= 0;
+  const formattedPrice = safePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formattedChange = safeChange.toFixed(2);
+  const formattedPct = safePct.toFixed(2);
+
 
   return (
     <HeaderContainer>
