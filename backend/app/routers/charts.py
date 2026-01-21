@@ -22,11 +22,11 @@ async def resolve_symbol_smart(ai_text: str, context_type: str):
     """
     symbol = ai_text.strip().upper()
     
-    # Clean up common artifacts from OCR
+    # Clean up common artifacts
+    # Remove USD, USDT to isolate the coin symbol (e.g. BTCUSD -> BTC)
     clean_sym = symbol.replace("/", "").replace("-", "").replace(" ", "").replace("USDT", "").replace("USD", "").replace("=F", "")
     
     # --- A. COMMODITIES (Prioritize FMP) ---
-    # Map common names to FMP Tickers
     fmp_commodities = {
         "GOLD": "XAUUSD", "XAU": "XAUUSD", "XAUUSD": "XAUUSD", "GC": "XAUUSD",
         "SILVER": "XAGUSD", "XAG": "XAGUSD", "SI": "XAGUSD",
@@ -40,15 +40,16 @@ async def resolve_symbol_smart(ai_text: str, context_type: str):
     if clean_sym in fmp_commodities: return fmp_commodities[clean_sym], "FMP"
     if symbol in fmp_commodities: return fmp_commodities[symbol], "FMP"
 
-    # --- B. CRYPTO (Prioritize FMP) ---
-    # Map to FMP format (BTCUSD)
-    crypto_shorts = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "BNB", "MATIC", "AVAX", "LTC", "DOT"]
+    # --- B. CRYPTO (CRITICAL FIX) ---
+    # We must return the Internal Format (BTC-USD.CC) so stocks.py recognizes it correctly
+    crypto_shorts = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "BNB", "MATIC", "AVAX", "LTC", "DOT", "SHIB"]
     
-    if clean_sym in crypto_shorts or symbol in crypto_shorts:
-        return f"{clean_sym}USD", "FMP"
+    if clean_sym in crypto_shorts:
+        return f"{clean_sym}-USD.CC", "FMP"
         
     if "BTC" in symbol or "ETH" in symbol or "SOL" in symbol:
-        return f"{clean_sym}USD", "FMP"
+        # Fallback if cleaning missed it
+        return f"{clean_sym}-USD.CC", "FMP"
 
     # --- C. INDICES (Prioritize EODHD) ---
     if context_type == 'index' or '^' in symbol or 'NIFTY' in symbol or 'SENSEX' in symbol or 'SPX' in symbol:
@@ -63,24 +64,19 @@ async def resolve_symbol_smart(ai_text: str, context_type: str):
         if "NIKKEI" in symbol: return "N225.INDX", "EODHD"
 
     # --- D. STOCKS (EODHD) ---
-    # If it ends in .NS or .BO, it's India
     if ".NS" in symbol: return symbol.replace(".NS", ".NSE"), "EODHD"
     if ".BO" in symbol: return symbol.replace(".BO", ".BSE"), "EODHD"
     if ".US" in symbol: return symbol, "EODHD"
 
-    # Suffix Discovery Fallback (Priority: India -> US)
+    # Suffix Discovery Fallback
     candidates = [f"{symbol}.NSE", f"{symbol}.US"]
-    
     for cand in candidates:
         try:
-            # Ultra-fast check
             check = await asyncio.to_thread(eodhd_service.get_live_price, cand)
             if check and 'price' in check and check['price'] > 0:
                 return cand, "EODHD"
-        except:
-            continue
+        except: continue
             
-    # Default Fallback (Assume India NSE)
     return f"{symbol}.NSE", "EODHD"
 
 # ==========================================
