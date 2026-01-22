@@ -15,12 +15,12 @@ REDIS_URL = os.getenv("REDIS_URL")
 # ==========================================
 class MemoryPubSub:
     """
-    Simulates Redis Pub/Sub using Python Asyncio.
+    Simulates Redis Pub/Sub AND Locking using Python Asyncio.
     Used when Redis is unavailable or for local testing.
     """
     def __init__(self):
-        # A set of queues, one for each connected user
         self.queues = set()
+        self.locks = {} # Local simulation of distributed locks
 
     async def subscribe(self, channel):
         # In local mode, we listen to everything implicitly
@@ -39,12 +39,32 @@ class MemoryPubSub:
 
     async def publish(self, message):
         """Push data to all active local listeners."""
-        # Loop over a copy to avoid modification errors during iteration
         for q in list(self.queues):
             try: 
                 q.put_nowait(message)
             except: 
                 pass
+
+    # --- LOCAL LOCKING SIMULATION ---
+    async def acquire_lock(self, key, ttl):
+        """Simulates Redis SET NX EX"""
+        now = time.time()
+        # If lock exists and hasn't expired, return False
+        if key in self.locks and now < self.locks[key]:
+            return False
+        
+        # Take lock
+        self.locks[key] = now + ttl
+        return True
+
+    async def extend_lock(self, key, ttl):
+        """Simulates Redis EXPIRE"""
+        now = time.time()
+        # Only extend if we actually have it (simplified for local)
+        if key in self.locks:
+            self.locks[key] = now + ttl
+            return True
+        return False
 
 # Global Memory State
 memory_bus = MemoryPubSub()
@@ -55,13 +75,14 @@ local_storage = {
 }
 
 # ==========================================
-# 2. ROBUST REDIS MANAGER
+# 2. ROBUST REDIS MANAGER (With Locking)
 # ==========================================
 class RedisManager:
     def __init__(self):
         self.redis = None
         self.use_redis = False
         self._checked = False
+        self._pool = None
 
     async def _get_connection(self):
         """
@@ -80,13 +101,12 @@ class RedisManager:
 
         try:
             # Strict 1-second timeout test to Fail Fast
-            client = redis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=1)
+            pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=1)
+            client = redis.Redis(connection_pool=pool)
             await client.ping()
-            await client.close()
             
-            # If successful, establish pool
-            pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True)
-            self.redis = redis.Redis(connection_pool=pool)
+            self._pool = pool
+            self.redis = client
             self.use_redis = True
             print("✅ Redis: Connected Successfully")
         except Exception:
@@ -95,6 +115,29 @@ class RedisManager:
         
         self._checked = True
         return self.redis if self.use_redis else None
+
+    # --- DISTRIBUTED LOCKING (CRITICAL FOR FYERS) ---
+    async def acquire_lock(self, key: str, ttl: int = 15):
+        """
+        Tries to become the 'Master' worker.
+        Returns True if lock acquired, False if someone else has it.
+        """
+        r = await self._get_connection()
+        if r:
+            # Redis 'SET ... NX' (Only set if Not Exists)
+            return await r.set(key, "LOCKED", nx=True, ex=ttl)
+        else:
+            return await memory_bus.acquire_lock(key, ttl)
+
+    async def extend_lock(self, key: str, ttl: int = 15):
+        """
+        Keep the lock alive (Heartbeat for Master).
+        """
+        r = await self._get_connection()
+        if r:
+            return await r.expire(key, ttl)
+        else:
+            return await memory_bus.extend_lock(key, ttl)
 
     # --- WATCHLIST LOGIC ---
     async def add_active_symbol(self, symbol: str):

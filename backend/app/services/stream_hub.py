@@ -5,7 +5,7 @@ import threading
 import logging
 from typing import List, Dict
 from fastapi import WebSocket
-# NEW IMPORT: Yahoo Finance for Commodities
+# YFINANCE IMPORT (Lane 4)
 import yfinance as yf 
 from ..services import eodhd_service, fmp_service
 from ..services.redis_service import redis_client
@@ -26,10 +26,10 @@ FYERS_MAP = {
     "INDIAVIX.INDX": "NSE:INDIAVIX-INDEX",
     "RELIANCE.NSE": "NSE:RELIANCE-EQ",
     "HDFCBANK.NSE": "NSE:HDFCBANK-EQ",
-    "TCS.NSE": "NSE:TCS-EQ",
+    "ICICIBANK.NSE": "NSE:ICICIBANK-EQ",
     "INFY.NSE": "NSE:INFY-EQ",
-    "SBIN.NSE": "NSE:SBIN-EQ",
-    "ICICIBANK.NSE": "NSE:ICICIBANK-EQ"
+    "TCS.NSE": "NSE:TCS-EQ",
+    "SBIN.NSE": "NSE:SBIN-EQ"
 }
 
 # LANE 2: FMP (High Frequency 1s) - Crypto
@@ -50,16 +50,17 @@ YAHOO_MAP = {
 }
 
 # ==========================================
-# 2. THE PRODUCER (Data Fetcher)
+# 2. THE PRODUCER (Data Fetcher with Leader Election)
 # ==========================================
 class StreamProducer:
     """
     Runs in the background. 
-    Fetches data from APIs (Fyers/FMP/EODHD/Yahoo) and Pushes to Redis/Memory.
-    It DOES NOT handle user connections directly.
+    Implements 'Leader Election' so only ONE worker fetches data.
     """
     def __init__(self):
         self.is_running = False
+        self.is_master = False # Am I the leader?
+        self.fyers_thread = None
         
     async def start(self):
         """Boot up the engines."""
@@ -67,30 +68,75 @@ class StreamProducer:
         self.is_running = True
         logger.info("🚀 STREAM PRODUCER STARTING...")
 
-        # 1. Fyers (Threaded because SDK is blocking)
-        threading.Thread(target=self._run_fyers_engine, daemon=True).start()
+        # 1. Start the Leader Election Loop (The Brain)
+        asyncio.create_task(self._manage_master_status())
 
-        # 2. Polling Engines (Async with thread offloading)
+        # 2. Start Data Loops (They will only fetch if self.is_master is True)
         asyncio.create_task(self._poll_fmp_assets())   
         asyncio.create_task(self._poll_eodhd_assets()) 
         asyncio.create_task(self._poll_yahoo_assets())
 
+    async def _manage_master_status(self):
+        """
+        Periodically tries to acquire the 'master_lock' in Redis.
+        If successful, this worker becomes the Data Fetcher.
+        """
+        LOCK_KEY = "stream_master_lock"
+        LOCK_TTL = 15 # Seconds
+        
+        while self.is_running:
+            try:
+                # Try to become master
+                is_leader = await redis_client.acquire_lock(LOCK_KEY, ttl=LOCK_TTL)
+                
+                if is_leader:
+                    # I won the election, or I already own it and extended it
+                    if not self.is_master:
+                        logger.info("👑 I am now the DATA MASTER. Starting Fyers...")
+                        self.is_master = True
+                        self._start_fyers_thread()
+                    else:
+                        # I am already master, just extend the lock
+                        await redis_client.extend_lock(LOCK_KEY, ttl=LOCK_TTL)
+                else:
+                    # I am not the leader
+                    if self.is_master:
+                        logger.warning("👑 Lost Master status. Stopping fetches.")
+                        self.is_master = False
+                        # Note: We let the threads spin down gracefully by checking flag
+            
+            except Exception as e:
+                logger.error(f"Leader Election Error: {e}")
+            
+            # Check again in 5 seconds (well within the 15s TTL)
+            await asyncio.sleep(5)
+
+    def _start_fyers_thread(self):
+        if self.fyers_thread and self.fyers_thread.is_alive():
+            return
+        self.fyers_thread = threading.Thread(target=self._run_fyers_engine, daemon=True)
+        self.fyers_thread.start()
+
     def _run_fyers_engine(self):
-        """LANE 1: Fyers WebSocket"""
+        """LANE 1: Fyers WebSocket (Runs in Thread)"""
         token = os.getenv("FYERS_ACCESS_TOKEN")
         client_id = os.getenv("FYERS_CLIENT_ID")
         
-        if not token or not client_id: 
-            return # Silent fail if not configured
+        if not token or not client_id: return
 
         try:
             from fyers_apiv3.FyersWebsocket import data_ws
+            
             def on_message(msg):
+                # Critical: Stop publishing if we lost master status
+                if not self.is_master: return
+
                 if isinstance(msg, dict) and 'symbol' in msg and 'ltp' in msg:
                     fyers_sym = msg['symbol']
                     internal_sym = next((k for k, v in FYERS_MAP.items() if v == fyers_sym), None)
                     
                     if not internal_sym:
+                        # Fallback for generic NSE stocks
                         if fyers_sym.startswith("NSE:") and "-EQ" in fyers_sym:
                             internal_sym = fyers_sym.replace("NSE:", "").replace("-EQ", "") + ".NSE"
 
@@ -101,11 +147,11 @@ class StreamProducer:
                             "percent_change": msg.get('chp', 0),
                             "timestamp": msg.get('exch_feed_time')
                         }
-                        # Fire & Forget
+                        # Push to Redis
                         asyncio.run(redis_client.publish_update(internal_sym, payload))
 
             def on_open():
-                # Subscribe
+                # Subscribe to VIP list
                 symbols = list(FYERS_MAP.values())
                 fyers.subscribe(symbols=symbols, data_type="SymbolUpdate")
 
@@ -114,31 +160,28 @@ class StreamProducer:
                 write_to_file=False, reconnect=True, on_connect=on_open, on_message=on_message
             )
             fyers.connect()
+
         except Exception: 
-            pass # Keep main thread alive
+            pass # Silent fail to keep thread alive
 
     async def _poll_yahoo_assets(self):
-        """
-        LANE 4: Fetches Commodities from Yahoo Finance.
-        Uses asyncio.to_thread to prevent blocking the main loop.
-        """
-        yahoo_symbols = list(YAHOO_MAP.keys()) # ['CL=F', 'GC=F', ...]
+        """LANE 4: Yahoo Finance (Master Only)"""
+        yahoo_symbols = list(YAHOO_MAP.keys())
         
         while self.is_running:
+            # Gating: Only fetch if Master
+            if not self.is_master:
+                await asyncio.sleep(2)
+                continue
+
             try:
-                # 1. Bulk Fetch (Efficient) in a separate thread
                 tickers_str = " ".join(yahoo_symbols)
-                
-                # Fetching...
+                # Offload blocking IO to thread
                 data = await asyncio.to_thread(lambda: yf.Tickers(tickers_str))
                 
-                # 2. Parse and Push
                 for y_sym in yahoo_symbols:
                     try:
-                        ticker_obj = data.tickers[y_sym]
-                        # fast_info is instantaneous
-                        info = ticker_obj.fast_info
-                        
+                        info = data.tickers[y_sym].fast_info
                         price = info.last_price
                         prev = info.previous_close
                         
@@ -156,18 +199,17 @@ class StreamProducer:
                             })
                     except: continue
 
-            except Exception as e:
-                # logger.error(f"Yahoo Poll Error: {e}")
-                pass
-            
-            # Sleep 3 seconds (Safe zone)
-            await asyncio.sleep(3)
+            except Exception: pass
+            await asyncio.sleep(3) # 3s Interval for Commodities
 
     async def _poll_fmp_assets(self):
-        """LANE 2: FMP Crypto (1s)"""
+        """LANE 2: FMP Crypto (Master Only)"""
         while self.is_running:
+            if not self.is_master:
+                await asyncio.sleep(1)
+                continue
+
             try:
-                # Offload network request to thread
                 data = await asyncio.to_thread(fmp_service.get_crypto_real_time_bulk, FMP_ASSETS)
                 if data:
                     for item in data:
@@ -181,25 +223,26 @@ class StreamProducer:
                                 "timestamp": item.get('timestamp')
                             })
             except: pass
-            
-            await asyncio.sleep(1) 
+            await asyncio.sleep(1) # 1s Interval for Crypto
 
     async def _poll_eodhd_assets(self):
-        """LANE 3: Stocks (1.5s) - On Demand Only"""
+        """LANE 3: Stocks (Master Only)"""
         while self.is_running:
+            if not self.is_master:
+                await asyncio.sleep(1.5)
+                continue
+
             try:
                 active_list = await redis_client.get_active_symbols()
-                # Exclude things handled by Yahoo, Fyers, or FMP
+                # Exclude VIP assets handled by other lanes
                 targets = [
                     s for s in active_list 
                     if s not in FMP_ASSETS and s not in FYERS_MAP and s not in YAHOO_MAP.values()
                 ]
 
                 if targets:
-                    # Chunking
                     for i in range(0, len(targets), 50):
                         chunk = targets[i:i+50]
-                        # Offload network request
                         data = await asyncio.to_thread(eodhd_service.get_real_time_bulk, chunk)
                         if data:
                             for item in data:
@@ -213,8 +256,7 @@ class StreamProducer:
                                         "timestamp": item.get('timestamp')
                                     })
             except: pass
-            
-            await asyncio.sleep(1.5) 
+            await asyncio.sleep(1.5) # 1.5s Interval for Stocks
 
 # ==========================================
 # 3. THE CONSUMER (Socket Manager)
@@ -222,7 +264,7 @@ class StreamProducer:
 class StreamConsumer:
     """
     Runs on EVERY Worker.
-    Listens to Redis/Memory -> Forwards to User.
+    Listens to Redis -> Forwards to User.
     """
     def __init__(self):
         self.active_sockets: Dict[str, List[WebSocket]] = {}
@@ -233,9 +275,7 @@ class StreamConsumer:
         if symbol not in self.active_sockets: self.active_sockets[symbol] = []
         self.active_sockets[symbol].append(websocket)
         await redis_client.add_active_symbol(symbol)
-        
-        if not self.is_listening:
-            asyncio.create_task(self._listen_to_bus())
+        if not self.is_listening: asyncio.create_task(self._listen_to_bus())
 
     def disconnect(self, websocket: WebSocket, symbol: str):
         if symbol in self.active_sockets:
@@ -244,13 +284,10 @@ class StreamConsumer:
             if not self.active_sockets[symbol]: del self.active_sockets[symbol]
 
     async def _listen_to_bus(self):
-        """
-        The Infinite Loop: Data Bus -> WebSocket
-        """
         self.is_listening = True
         subscriber = redis_client.get_subscriber()
         
-        # Subscribe if real Redis
+        # Real Redis needs explicit subscribe
         if hasattr(subscriber, "subscribe"): 
             await subscriber.subscribe("market_feed")
         
@@ -264,11 +301,12 @@ class StreamConsumer:
                         symbol = payload["symbol"]
                         data = payload["data"]
                         
-                        # 1. Direct Delivery
+                        # 1. Direct Stock/Crypto Update
                         if symbol in self.active_sockets:
                             await self._broadcast_to_list(symbol, data)
                         
-                        # 2. Banner Delivery (Indices/Crypto/Commodities)
+                        # 2. Homepage Banner Update
+                        # If this symbol is in any VIP list, broadcast to banner too
                         is_banner_asset = (
                             symbol in FMP_ASSETS or 
                             symbol in FYERS_MAP or 
@@ -276,8 +314,7 @@ class StreamConsumer:
                         )
                         
                         if is_banner_asset and "MARKET_OVERVIEW" in self.active_sockets:
-                            banner_data = {**data, "symbol": symbol}
-                            await self._broadcast_to_list("MARKET_OVERVIEW", banner_data)
+                            await self._broadcast_to_list("MARKET_OVERVIEW", {**data, "symbol": symbol})
                             
                     except: pass
         except Exception as e:
