@@ -10,7 +10,6 @@ cmds = ["npm --prefix frontend install", "pip install -r backend/requirements.tx
 cmds = ["npm --prefix frontend run build"]
 
 [start]
-# THE HYBRID LAUNCHER:
-# 1. Starts the Ticker Worker in the background (&)
-# 2. Starts the Gunicorn API Server in the foreground
-cmd = "python backend/worker.py & gunicorn backend.app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120"
+# STANDARD PRODUCTION LAUNCH
+# We run 4 workers. They will coordinate via Redis to pick 1 Data Fetcher.
+cmd = "gunicorn backend.app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120"
