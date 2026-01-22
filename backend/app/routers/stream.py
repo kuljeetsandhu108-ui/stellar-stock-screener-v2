@@ -54,7 +54,11 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
 @router.on_event("startup")
 async def startup_event():
     """
-    When the server boots up, start the Data Fetching Engine (Producer).
-    This runs in the background forever.
+    API SERVER STARTUP.
+    Note: We do NOT start the Producer here anymore.
+    The Producer runs in a separate dedicated process (backend/worker.py).
+    This ensures only ONE connection to Fyers exists.
     """
-    asyncio.create_task(producer.start())
+    # Just log that we are ready to accept connections
+    print("✅ API Server: Ready to broadcast stream data to users.")
+    # No producer.start() here!
