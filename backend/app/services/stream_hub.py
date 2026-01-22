@@ -19,6 +19,7 @@ logger = logging.getLogger("StreamHub")
 # ==========================================
 
 # LANE 1: FYERS (Tick-by-Tick) - Indices & Major India Stocks
+# Internal ID -> Fyers Symbol
 FYERS_MAP = {
     "NSEI.INDX": "NSE:NIFTY50-INDEX",
     "NSEBANK.INDX": "NSE:NIFTYBANK-INDEX",
@@ -86,7 +87,7 @@ class StreamProducer:
         
         while self.is_running:
             try:
-                # Try to become master
+                # Try to grab lock for 15 seconds
                 is_leader = await redis_client.acquire_lock(LOCK_KEY, ttl=LOCK_TTL)
                 
                 if is_leader:
@@ -103,7 +104,6 @@ class StreamProducer:
                     if self.is_master:
                         logger.warning("👑 Lost Master status. Stopping fetches.")
                         self.is_master = False
-                        # Note: We let the threads spin down gracefully by checking flag
             
             except Exception as e:
                 logger.error(f"Leader Election Error: {e}")
@@ -119,10 +119,22 @@ class StreamProducer:
 
     def _run_fyers_engine(self):
         """LANE 1: Fyers WebSocket (Runs in Thread)"""
-        token = os.getenv("FYERS_ACCESS_TOKEN")
-        client_id = os.getenv("FYERS_CLIENT_ID")
         
-        if not token or not client_id: return
+        # --- CRITICAL FIX: SANITIZE INPUTS ---
+        # Strip spaces, newlines, and quotes that might be pasted in Railway variables
+        token_raw = os.getenv("FYERS_ACCESS_TOKEN", "")
+        client_id_raw = os.getenv("FYERS_CLIENT_ID", "")
+        
+        token = token_raw.strip().replace('"', '').replace("'", "")
+        client_id = client_id_raw.strip().replace('"', '').replace("'", "")
+        
+        if not token or not client_id: 
+            logger.warning("⚠️ Fyers Config Missing.")
+            return
+
+        # DEBUG LOG (Safe)
+        safe_id = f"{client_id[:4]}***{client_id[-3:]}" if len(client_id) > 5 else "INVALID"
+        logger.info(f"🧐 Fyers Connecting -> AppID: '{safe_id}'")
 
         try:
             from fyers_apiv3.FyersWebsocket import data_ws
@@ -151,18 +163,28 @@ class StreamProducer:
                         asyncio.run(redis_client.publish_update(internal_sym, payload))
 
             def on_open():
+                logger.info("✅ Fyers WebSocket Connected Successfully!")
                 # Subscribe to VIP list
                 symbols = list(FYERS_MAP.values())
                 fyers.subscribe(symbols=symbols, data_type="SymbolUpdate")
 
+            def on_error(err):
+                logger.error(f"❌ Fyers Error: {err}")
+
             fyers = data_ws.FyersDataSocket(
-                access_token=f"{client_id}:{token}", log_path="", litemode=True, 
-                write_to_file=False, reconnect=True, on_connect=on_open, on_message=on_message
+                access_token=f"{client_id}:{token}", 
+                log_path="", 
+                litemode=True, 
+                write_to_file=False, 
+                reconnect=True, 
+                on_connect=on_open, 
+                on_message=on_message,
+                on_error=on_error
             )
             fyers.connect()
 
-        except Exception: 
-            pass # Silent fail to keep thread alive
+        except Exception as e: 
+            logger.error(f"Fyers Crash: {e}")
 
     async def _poll_yahoo_assets(self):
         """LANE 4: Yahoo Finance (Master Only)"""
@@ -171,7 +193,7 @@ class StreamProducer:
         while self.is_running:
             # Gating: Only fetch if Master
             if not self.is_master:
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 continue
 
             try:
@@ -287,7 +309,7 @@ class StreamConsumer:
         self.is_listening = True
         subscriber = redis_client.get_subscriber()
         
-        # Real Redis needs explicit subscribe
+        # Subscribe if real Redis
         if hasattr(subscriber, "subscribe"): 
             await subscriber.subscribe("market_feed")
         
@@ -306,7 +328,6 @@ class StreamConsumer:
                             await self._broadcast_to_list(symbol, data)
                         
                         # 2. Homepage Banner Update
-                        # If this symbol is in any VIP list, broadcast to banner too
                         is_banner_asset = (
                             symbol in FMP_ASSETS or 
                             symbol in FYERS_MAP or 
