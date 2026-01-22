@@ -118,72 +118,58 @@ class StreamProducer:
         self.fyers_thread.start()
 
     def _run_fyers_engine(self):
-        """LANE 1: Fyers WebSocket (Runs in Thread)"""
+        """LANE 1: Fyers WebSocket (Smart Config)"""
         
-        # --- CRITICAL FIX: SANITIZE INPUTS ---
-        # Strip spaces, newlines, and quotes that might be pasted in Railway variables
-        token_raw = os.getenv("FYERS_ACCESS_TOKEN", "")
-        client_id_raw = os.getenv("FYERS_CLIENT_ID", "")
+        # 1. Clean Inputs Aggressively
+        # Remove quotes, spaces, 'Bearer', and newlines
+        raw_token = os.getenv("FYERS_ACCESS_TOKEN", "").strip().replace('"', '').replace("'", "").replace("Bearer ", "")
+        client_id = os.getenv("FYERS_CLIENT_ID", "").strip().replace('"', '').replace("'", "")
         
-        # 1. Basic Cleaning
-        token = token_raw.strip().replace('"', '').replace("'", "")
-        client_id = client_id_raw.strip().replace('"', '').replace("'", "")
-        
-        if not token or not client_id: 
+        if not raw_token or not client_id: 
             logger.warning("⚠️ Fyers Config Missing.")
             return
 
-        # 2. Smart Fix: If user pasted "AppID:Token", strip the AppID part
-        # Fyers SDK expects us to combine them manually.
-        final_token = token
-        if ":" in token:
-            parts = token.split(":")
-            # If the first part looks like the App ID, take the second part
-            if len(parts) > 1 and len(parts[0]) > 5: 
+        # 2. Smart Fix for "AppID:Token" paste error
+        final_token = raw_token
+        if ":" in raw_token:
+            parts = raw_token.split(":")
+            # If split results in [AppID, Token], take Token
+            if len(parts) > 1 and len(parts[1]) > 50: 
                 final_token = parts[1]
                 logger.info("🔧 Auto-Fixed Token format (Removed duplicate AppID prefix)")
 
         # 3. Construct Auth String
         auth_string = f"{client_id}:{final_token}"
-
-        # Debug Log (Masked)
+        
+        # DEBUG LOGS (Vital for diagnosis)
         safe_id = f"{client_id[:4]}***{client_id[-3:]}" if len(client_id) > 5 else "INVALID"
-        logger.info(f"🧐 Fyers Connecting -> AppID: '{safe_id}'")
+        token_len = len(final_token)
+        logger.info(f"🧐 Fyers Auth Check -> AppID: '{safe_id}' | Token Length: {token_len} chars")
+
+        if token_len < 50:
+            logger.error("❌ Token is too short! It's likely invalid.")
 
         try:
             from fyers_apiv3.FyersWebsocket import data_ws
             
             def on_message(msg):
-                # Critical: Stop publishing if we lost master status
                 if not self.is_master: return
-
                 if isinstance(msg, dict) and 'symbol' in msg and 'ltp' in msg:
                     fyers_sym = msg['symbol']
                     internal_sym = next((k for k, v in FYERS_MAP.items() if v == fyers_sym), None)
-                    
-                    if not internal_sym:
-                        # Fallback for generic NSE stocks
-                        if fyers_sym.startswith("NSE:") and "-EQ" in fyers_sym:
-                            internal_sym = fyers_sym.replace("NSE:", "").replace("-EQ", "") + ".NSE"
-
+                    if not internal_sym and fyers_sym.startswith("NSE:") and "-EQ" in fyers_sym:
+                        internal_sym = fyers_sym.replace("NSE:", "").replace("-EQ", "") + ".NSE"
                     if internal_sym:
-                        payload = {
-                            "price": msg.get('ltp'),
-                            "change": msg.get('ch', 0),
-                            "percent_change": msg.get('chp', 0),
-                            "timestamp": msg.get('exch_feed_time')
-                        }
-                        # Push to Redis
+                        payload = {"price": msg.get('ltp'), "change": msg.get('ch', 0), "percent_change": msg.get('chp', 0), "timestamp": msg.get('exch_feed_time')}
                         asyncio.run(redis_client.publish_update(internal_sym, payload))
+            
+            def on_error(err):
+                logger.error(f"❌ Fyers Socket Error: {err}")
 
             def on_open():
-                logger.info("✅ Fyers WebSocket Connected Successfully!")
+                logger.info("✅ Fyers WebSocket Connected!")
                 # Subscribe to VIP list
-                symbols = list(FYERS_MAP.values())
-                fyers.subscribe(symbols=symbols, data_type="SymbolUpdate")
-
-            def on_error(err):
-                logger.error(f"❌ Fyers Error: {err}")
+                fyers.subscribe(symbols=list(FYERS_MAP.values()), data_type="SymbolUpdate")
 
             fyers = data_ws.FyersDataSocket(
                 access_token=auth_string, 
