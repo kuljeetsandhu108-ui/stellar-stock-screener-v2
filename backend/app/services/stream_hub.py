@@ -125,6 +125,7 @@ class StreamProducer:
         token_raw = os.getenv("FYERS_ACCESS_TOKEN", "")
         client_id_raw = os.getenv("FYERS_CLIENT_ID", "")
         
+        # 1. Basic Cleaning
         token = token_raw.strip().replace('"', '').replace("'", "")
         client_id = client_id_raw.strip().replace('"', '').replace("'", "")
         
@@ -132,7 +133,20 @@ class StreamProducer:
             logger.warning("⚠️ Fyers Config Missing.")
             return
 
-        # DEBUG LOG (Safe)
+        # 2. Smart Fix: If user pasted "AppID:Token", strip the AppID part
+        # Fyers SDK expects us to combine them manually.
+        final_token = token
+        if ":" in token:
+            parts = token.split(":")
+            # If the first part looks like the App ID, take the second part
+            if len(parts) > 1 and len(parts[0]) > 5: 
+                final_token = parts[1]
+                logger.info("🔧 Auto-Fixed Token format (Removed duplicate AppID prefix)")
+
+        # 3. Construct Auth String
+        auth_string = f"{client_id}:{final_token}"
+
+        # Debug Log (Masked)
         safe_id = f"{client_id[:4]}***{client_id[-3:]}" if len(client_id) > 5 else "INVALID"
         logger.info(f"🧐 Fyers Connecting -> AppID: '{safe_id}'")
 
@@ -172,7 +186,7 @@ class StreamProducer:
                 logger.error(f"❌ Fyers Error: {err}")
 
             fyers = data_ws.FyersDataSocket(
-                access_token=f"{client_id}:{token}", 
+                access_token=auth_string, 
                 log_path="", 
                 litemode=True, 
                 write_to_file=False, 
