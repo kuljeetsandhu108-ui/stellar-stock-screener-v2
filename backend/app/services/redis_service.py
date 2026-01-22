@@ -85,32 +85,35 @@ class RedisManager:
         self._pool = None
 
     async def _get_connection(self):
-        """
-        Determines whether to use Real Redis or Local Memory.
-        Checks only ONCE to prevent repeated timeouts/lag.
-        """
         if self._checked:
             return self.redis if self.use_redis else None
 
-        # Logic: If no URL or it's the internal Railway URL (unreachable locally)
-        if not REDIS_URL or "railway.internal" in REDIS_URL:
-            print("⚡ Redis: Using Local Memory Mode (Fast)")
+        # DEBUG LOGGING
+        print(f"🔍 DEBUG: Checking Redis Connection...")
+        print(f"   -> REDIS_URL exists? {'YES' if REDIS_URL else 'NO'}")
+        if REDIS_URL:
+            # Mask password for logs
+            masked = REDIS_URL.split('@')[-1] if '@' in REDIS_URL else 'HIDDEN'
+            print(f"   -> Target: {masked}")
+
+        if not REDIS_URL:
+            print("⚡ Redis: No URL found. Using Local Memory.")
             self.use_redis = False
             self._checked = True
             return None
 
         try:
-            # Strict 1-second timeout test to Fail Fast
-            pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=1)
-            client = redis.Redis(connection_pool=pool)
-            await client.ping()
+            # Try connecting
+            pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2)
+            r = redis.Redis(connection_pool=pool)
+            await r.ping()
             
-            self._pool = pool
-            self.redis = client
+            print("✅ Redis: CONNECTED SUCCESSFULLY!")
+            self.redis = r
             self.use_redis = True
-            print("✅ Redis: Connected Successfully")
-        except Exception:
-            print("⚡ Redis: Unreachable. Switching to Local Memory Mode.")
+        except Exception as e:
+            print(f"❌ Redis Connection FAILED: {e}")
+            print("   -> Switching to Local Memory Mode.")
             self.use_redis = False
         
         self._checked = True
