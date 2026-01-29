@@ -16,3 +16,4 @@ fyers-apiv3
 websockets
 httpx
 yfinance
+# force rebuild
