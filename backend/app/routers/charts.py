@@ -15,6 +15,7 @@ TIMEFRAMES_TO_ANALYZE = ["5M", "1H", "4H", "1D"]
 # 1. SMART SYMBOL RESOLVER
 # ==========================================
 
+
 async def resolve_symbol_smart(ai_text: str, context_type: str):
     """
     Routes the AI-identified ticker to the Best Data Provider.
@@ -178,4 +179,20 @@ async def analyze_chart_image(
         "identified_symbol": frontend_symbol,
         "analysis_data": analysis_text,
         "technical_data": technical_data
+    }
+@router.post("/analyze-pure")
+async def analyze_pure_chart(chart_image: UploadFile = File(...)):
+    """
+    Pure AI Vision Endpoint. No APIs. No Data Feeds. Just Brains.
+    """
+    if not chart_image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Invalid file type.")
+
+    image_bytes = await chart_image.read()
+    
+    # Direct call to the Vision Engine
+    analysis_text = await asyncio.to_thread(gemini_service.analyze_pure_vision, image_bytes)
+    
+    return {
+        "analysis": analysis_text
     }

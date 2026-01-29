@@ -1,4 +1,5 @@
 import React from 'react';
+import PureVisionPage from './pages/PureVisionPage';
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import { GlobalStyles } from './styles/GlobalStyles';
 import HomePage from './pages/HomePage';
@@ -25,6 +26,7 @@ function App() {
           {/* Route for the detailed index analysis page. 
               The ":encodedSymbol" will hold the URL-safe version of the index symbol. */}
           <Route path="/index/:encodedSymbol" element={<IndexDetailPage />} />
+          <Route path="/vision-result" element={<PureVisionPage />} />
 
         </Routes>
       </Router>

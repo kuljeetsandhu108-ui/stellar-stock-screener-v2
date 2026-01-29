@@ -413,3 +413,52 @@ def generate_timeframe_analysis(symbol: str, timeframe: str, technicals: dict, p
         print(f"AI Math Error: {e}")
         # Return a fallback that looks like a valid response so frontend parses it
         return f"TREND: {trend_hint if 'trend_hint' in locals() else 'Neutral'}\nACTION: WAIT\nRATIONALE: AI Analysis interrupted. Please retry."
+
+def analyze_pure_vision(image_bytes: bytes):
+    """
+    Performs 'Pure Vision' analysis without external data feeds.
+    Focuses on Geometry, Price Action Math, and Institutional Psychology.
+    """
+    try:
+        configure_gemini_for_request()
+        # Using 1.5 Pro or Flash for better vision reasoning
+        model = genai.GenerativeModel('gemini-3-flash-preview')
+        
+        prompt = """
+        Act as a Quantitative Technical Analyst with X-Ray Vision. 
+        Analyze this chart image strictly based on Price Action, Geometry, and Mathematics.
+        DO NOT generic stuff. Give me precision.
+
+        **MATHEMATICAL & GEOMETRIC ANALYSIS:**
+        1. **Trend Math:** Identify the slope and strength of the trend (e.g., "45-degree aggressive uptrend" or "Decaying momentum").
+        2. **Structure:** Identify Higher Highs/Lows or Lower Highs/Lows logic.
+        3. **Candlestick Math:** Analyze the ratio of wicks to bodies in the last 5 candles. Who is winning? Buyers or Sellers?
+        4. **Key Zones:** Identify exact price levels for Support/Resistance visible in the image.
+
+        **STRICT OUTPUT FORMAT:**
+        
+        **VERDICT:** [BULLISH / BEARISH / NEUTRAL]
+        
+        **MARKET STRUCTURE:**
+        [Explain the market phase: Accumulation, Markup, Distribution, or Decline]
+        
+        **GEOMETRIC SIGNALS:**
+        - [Pattern identified]
+        - [Trendline angle/slope observation]
+        - [Volatility contraction/expansion observation]
+
+        **INSTITUTIONAL FOOTPRINTS:**
+        [Where is the Smart Money entering/exiting based on candle size?]
+
+        -- TRADE SETUP (Visual Estimation) --
+        **DIRECTION:** [LONG / SHORT]
+        **ENTRY:** [Price Level]
+        **STOP LOSS:** [Price Level]
+        **TARGET:** [Price Level]
+        **WIN PROBABILITY:** [High/Medium]
+        """
+        
+        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
+        return response.text.strip()
+    except Exception as e:
+        return f"**VERDICT:** ERROR\n**ANALYSIS:** System blinded. Cause: {str(e)}"
