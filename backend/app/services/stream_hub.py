@@ -136,6 +136,15 @@ class StreamProducer:
             
             def on_error(err):
                 logger.error(f"❌ Fyers Error: {err}")
+                # AUTO-HEAL: If token expired (-99), generate a new one immediately
+                if isinstance(err, dict) and err.get('code') in [-99, -300]:
+                    logger.info("♻️ Generating Fresh Token...")
+                    from ..utils import auth_helper
+                    new_token = auth_helper.get_fresh_fyers_token()
+                    if new_token:
+                        os.environ["FYERS_ACCESS_TOKEN"] = new_token
+                        # Recursively restart with new token
+                        self._run_fyers_engine()
 
             def on_open():
                 logger.info("✅ Fyers WebSocket Connected! Subscribing...")
