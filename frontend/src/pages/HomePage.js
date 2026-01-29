@@ -508,7 +508,7 @@ const HomePage = () => {
       const response = await axios.get(`/api/stocks/search?query=${target}`);
       navigate(`/stock/${response.data.symbol}`);
     } catch (err) {
-      setError('Ticker not found. Please try again.');
+      setError('Ticker not found. Please try a valid symbol.');
     } finally {
       setIsSearching(false);
     }
@@ -647,7 +647,7 @@ const HomePage = () => {
             />
         </UploadGrid>
 
-        {/* --- QUANTUM VISION ENGINE (NEW) --- */}
+        {/* --- QUANTUM VISION ENGINE (PURE VISION) --- */}
         <SectionLabel>Pure Vision Labs</SectionLabel>
 
         <VisionContainer>
