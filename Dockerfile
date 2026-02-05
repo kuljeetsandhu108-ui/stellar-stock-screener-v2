@@ -9,7 +9,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- Stage 2: Build Python Backend ---
-# UPGRADE: Changed from 3.11 to 3.12 to support pandas_ta
+# UPGRADE: Changed from 3.11 to 3.12 to fix pandas_ta error
 FROM python:3.12-slim
 
 # Set environment variables
