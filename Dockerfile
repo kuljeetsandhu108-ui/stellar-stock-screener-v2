@@ -9,7 +9,8 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- Stage 2: Build Python Backend ---
-FROM python:3.11-slim
+# UPGRADE: Changed from 3.11 to 3.12 to support pandas_ta
+FROM python:3.12-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -37,6 +38,5 @@ COPY --from=builder /app/frontend/build ./frontend/build
 # Expose the port
 EXPOSE 8000
 
-# --- THE FIX: Use Shell Command to bind properly ---
-# We force it to bind to 0.0.0.0 and use the PORT env var (defaulting to 8000)
+# Start Command
 CMD ["sh", "-c", "gunicorn backend.app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120"]
