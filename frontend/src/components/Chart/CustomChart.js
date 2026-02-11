@@ -16,37 +16,181 @@ import {
 } from 'react-icons/fa';
 import { FyersClientEngine } from '../../utils/FyersClientEngine';
 
-// --- STYLED COMPONENTS ---
-const ChartWrapper = styled.div` position: relative; width: 100%; height: 650px; background-color: #0D1117; border: 1px solid var(--color-border); border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.3); display: flex; flex-direction: column; `;
-const Toolbar = styled.div` display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background-color: #161B22; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; gap: 10px; z-index: 20; `;
-const DrawingSidebar = styled.div` position: absolute; top: 60px; left: 10px; display: flex; flex-direction: column; gap: 8px; background: rgba(22, 27, 34, 0.95); backdrop-filter: blur(10px); padding: 8px; border-radius: 8px; border: 1px solid var(--color-border); z-index: 30; box-shadow: 4px 0 20px rgba(0,0,0,0.4); `;
-const ToolBtn = styled.button` width: 36px; height: 36px; border-radius: 6px; border: 1px solid ${({ active }) => active ? 'var(--color-primary)' : 'transparent'}; background: ${({ active }) => active ? 'rgba(88, 166, 255, 0.2)' : 'transparent'}; color: ${({ active }) => active ? 'var(--color-primary)' : 'var(--color-text-secondary)'}; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; font-size: 1rem; position: relative; &:hover { background: rgba(255,255,255,0.1); color: #fff; } `;
-const LayersPanel = styled.div` position: absolute; top: 60px; right: 10px; width: 260px; background: rgba(22, 27, 34, 0.95); backdrop-filter: blur(10px); border: 1px solid var(--color-border); border-radius: 8px; padding: 10px; z-index: 30; box-shadow: -4px 0 20px rgba(0,0,0,0.4); max-height: 400px; overflow-y: auto; &::-webkit-scrollbar { width: 4px; } &::-webkit-scrollbar-thumb { background: #30363D; border-radius: 2px; } `;
-const LayerHeader = styled.div` color: #8b949e; font-size: 0.75rem; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; display: flex; justify-content: space-between; align-items: center; `;
-const LayerItem = styled.div` display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 8px 10px; border-radius: 6px; margin-bottom: 6px; font-size: 0.85rem; border: 1px solid transparent; transition: all 0.2s; &:hover { border-color: var(--color-primary); background: rgba(255,255,255,0.05); } `;
-const LayerActions = styled.div` display: flex; gap: 8px; `;
-const IconButton = styled.button` background: transparent; border: none; color: var(--color-text-secondary); cursor: pointer; padding: 2px; display: flex; &:hover { color: #fff; } &.delete:hover { color: #F85149; } `;
-const EditModal = styled.div` position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #1C2128; border: 1px solid var(--color-primary); padding: 20px; border-radius: 12px; z-index: 100; box-shadow: 0 20px 50px rgba(0,0,0,0.9); width: 320px; `;
-const ModalTitle = styled.h4` margin: 0 0 15px 0; color: #fff; font-size: 1.1rem; `;
-const ModalInput = styled.div` margin-bottom: 12px; label { display: block; font-size: 0.75rem; color: #8b949e; margin-bottom: 4px; text-transform: uppercase; } input { width: 100%; background: #0D1117; border: 1px solid #30363D; color: #fff; padding: 8px; border-radius: 6px; font-family: 'Roboto Mono', monospace; } input:focus { border-color: var(--color-primary); outline: none; } `;
-const ModalActions = styled.div` display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; `;
-const LeftGroup = styled.div` display: flex; gap: 10px; align-items: center; flex-wrap: wrap; `;
-const RangeButton = styled.button` background: ${({ active }) => active ? 'var(--color-primary)' : 'transparent'}; color: ${({ active }) => active ? '#fff' : 'var(--color-text-secondary)'}; border: 1px solid ${({ active }) => active ? 'var(--color-primary)' : 'transparent'}; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.2s; &:hover { background: ${({ active }) => active ? 'var(--color-primary)' : 'rgba(255,255,255,0.05)'}; color: #fff; } `;
-const IndicatorButton = styled.button` display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); border: 1px solid var(--color-border); color: var(--color-text-primary); padding: 4px 12px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; position: relative; &:hover { background: rgba(255,255,255,0.1); } `;
-const Dropdown = styled.div` position: absolute; top: 40px; left: 0; background: #1C2128; border: 1px solid var(--color-border); border-radius: 8px; padding: 10px; z-index: 50; box-shadow: 0 4px 20px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 8px; width: 220px; `;
-const InputGroup = styled.div` display: flex; gap: 5px; align-items: center; `;
-const StyledInput = styled.input` background: #0D1117; border: 1px solid var(--color-border); color: white; padding: 4px; border-radius: 4px; width: 60px; font-size: 0.8rem; `;
-const AddButton = styled.button` background: var(--color-success); border: none; color: white; padding: 6px; border-radius: 4px; cursor: pointer; font-weight: 600; margin-top: 5px; font-size: 0.8rem; &:hover { opacity: 0.9; } `;
-const IndicatorTag = styled.div` background: rgba(56, 139, 253, 0.15); border: 1px solid var(--color-primary); color: var(--color-primary); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; display: flex; align-items: center; gap: 6px; white-space: nowrap; `;
-const CloseIcon = styled(FaTimes)` cursor: pointer; &:hover { color: #fff; } `;
-const StatusText = styled.span` font-size: 0.75rem; color: ${({ isLive }) => isLive ? '#3FB950' : 'var(--color-text-secondary)'}; margin-left: auto; font-weight: 600; display: flex; align-items: center; gap: 6px; `;
-const PulseDot = styled.div` width: 6px; height: 6px; border-radius: 50%; background-color: #3FB950; box-shadow: 0 0 5px #3FB950; animation: pulse 2s infinite; @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } } `;
-const HelperText = styled.div` position: absolute; top: 60px; left: 60px; background: rgba(0,0,0,0.7); color: #fff; padding: 5px 10px; border-radius: 4px; font-size: 0.8rem; pointer-events: none; z-index: 25; `;
-const LoadingOverlay = styled.div` position: absolute; top: 50px; left: 0; right: 0; bottom: 0; background: rgba(13, 17, 23, 0.4); backdrop-filter: blur(2px); z-index: 15; display: flex; align-items: center; justify-content: center; color: var(--color-primary); font-size: 2rem; `;
-const Spinner = styled(FaSpinner)` animation: spin 1s linear infinite; @keyframes spin { 100% { transform: rotate(360deg); } } `;
-const NoDataOverlay = styled.div` position: absolute; top: 50px; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--color-text-secondary); z-index: 10; font-size: 1.2rem; gap: 10px; `;
+// ==========================================
+// 1. HIGH-END STYLED COMPONENTS
+// ==========================================
 
-// --- MATH ---
+const ChartWrapper = styled.div`
+  position: relative;
+  width: 100%;
+  height: 650px;
+  background-color: #0D1117;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  display: flex;
+  flex-direction: column;
+`;
+
+const Toolbar = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: #161B22;
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+  gap: 10px;
+  z-index: 20;
+`;
+
+const DrawingSidebar = styled.div`
+  position: absolute;
+  top: 60px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(22, 27, 34, 0.95);
+  backdrop-filter: blur(10px);
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  z-index: 30;
+  box-shadow: 4px 0 20px rgba(0,0,0,0.4);
+`;
+
+const ToolBtn = styled.button`
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid ${({ active }) => active ? 'var(--color-primary)' : 'transparent'};
+  background: ${({ active }) => active ? 'rgba(88, 166, 255, 0.2)' : 'transparent'};
+  color: ${({ active }) => active ? 'var(--color-primary)' : 'var(--color-text-secondary)'};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 1rem;
+  position: relative;
+
+  &:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+  }
+`;
+
+const LayersPanel = styled.div`
+  position: absolute;
+  top: 60px;
+  right: 10px;
+  width: 260px;
+  background: rgba(22, 27, 34, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px;
+  z-index: 30;
+  box-shadow: -4px 0 20px rgba(0,0,0,0.4);
+  max-height: 400px;
+  overflow-y: auto;
+  
+  &::-webkit-scrollbar { width: 4px; }
+  &::-webkit-scrollbar-thumb { background: #30363D; border-radius: 2px; }
+`;
+
+const LayerHeader = styled.div`
+  color: #8b949e;
+  font-size: 0.75rem;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+`;
+
+const LayerItem = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255,255,255,0.03);
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+  
+  &:hover {
+    border-color: var(--color-primary);
+    background: rgba(255,255,255,0.05);
+  }
+`;
+
+const LayerActions = styled.div`
+  display: flex;
+  gap: 8px;
+`;
+
+const IconButton = styled.button`
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  &:hover { color: #fff; }
+  &.delete:hover { color: #F85149; }
+`;
+
+const EditModal = styled.div`
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #1C2128;
+  border: 1px solid var(--color-primary);
+  padding: 20px;
+  border-radius: 12px;
+  z-index: 100;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.9);
+  width: 320px;
+`;
+
+const ModalTitle = styled.h4`margin: 0 0 15px 0; color: #fff; font-size: 1.1rem;`;
+const ModalInput = styled.div`
+  margin-bottom: 12px;
+  label { display: block; font-size: 0.75rem; color: #8b949e; margin-bottom: 4px; text-transform: uppercase; }
+  input { width: 100%; background: #0D1117; border: 1px solid #30363D; color: #fff; padding: 8px; border-radius: 6px; font-family: 'Roboto Mono', monospace; }
+  input:focus { border-color: var(--color-primary); outline: none; }
+`;
+const ModalActions = styled.div`display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;`;
+
+const LeftGroup = styled.div`display: flex; gap: 10px; align-items: center; flex-wrap: wrap;`;
+const RangeButton = styled.button`background: ${({ active }) => active ? 'var(--color-primary)' : 'transparent'}; color: ${({ active }) => active ? '#fff' : 'var(--color-text-secondary)'}; border: 1px solid ${({ active }) => active ? 'var(--color-primary)' : 'transparent'}; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.2s; &:hover { background: ${({ active }) => active ? 'var(--color-primary)' : 'rgba(255,255,255,0.05)'}; color: #fff; }`;
+const IndicatorButton = styled.button`display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); border: 1px solid var(--color-border); color: var(--color-text-primary); padding: 4px 12px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; position: relative; &:hover { background: rgba(255,255,255,0.1); }`;
+const Dropdown = styled.div`position: absolute; top: 40px; left: 0; background: #1C2128; border: 1px solid var(--color-border); border-radius: 8px; padding: 10px; z-index: 50; box-shadow: 0 4px 20px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 8px; width: 220px;`;
+const InputGroup = styled.div`display: flex; gap: 5px; align-items: center;`;
+const StyledInput = styled.input`background: #0D1117; border: 1px solid var(--color-border); color: white; padding: 4px; border-radius: 4px; width: 60px; font-size: 0.8rem;`;
+const AddButton = styled.button`background: var(--color-success); border: none; color: white; padding: 6px; border-radius: 4px; cursor: pointer; font-weight: 600; margin-top: 5px; font-size: 0.8rem; &:hover { opacity: 0.9; }`;
+const ActiveIndicatorsList = styled.div`display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; align-items: center; &::-webkit-scrollbar { display: none; }`;
+const IndicatorTag = styled.div`background: rgba(56, 139, 253, 0.15); border: 1px solid var(--color-primary); color: var(--color-primary); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; display: flex; align-items: center; gap: 6px; white-space: nowrap;`;
+const CloseIcon = styled(FaTimes)`cursor: pointer; &:hover { color: #fff; }`;
+const ChartContainer = styled.div`flex-grow: 1; width: 100%; cursor: ${({ crosshair }) => crosshair ? 'crosshair' : 'default'};`;
+const StatusText = styled.span`font-size: 0.75rem; color: ${({ isLive }) => isLive ? '#3FB950' : 'var(--color-text-secondary)'}; margin-left: auto; font-weight: 600; display: flex; align-items: center; gap: 6px;`;
+const PulseDot = styled.div`width: 6px; height: 6px; border-radius: 50%; background-color: #3FB950; box-shadow: 0 0 5px #3FB950; animation: pulse 2s infinite; @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }`;
+const HelperText = styled.div`position: absolute; top: 60px; left: 60px; background: rgba(0,0,0,0.7); color: #fff; padding: 5px 10px; border-radius: 4px; font-size: 0.8rem; pointer-events: none; z-index: 25;`;
+const LoadingOverlay = styled.div`position: absolute; top: 50px; left: 0; right: 0; bottom: 0; background: rgba(13, 17, 23, 0.4); backdrop-filter: blur(2px); z-index: 15; display: flex; align-items: center; justify-content: center; color: var(--color-primary); font-size: 2rem;`;
+const Spinner = styled(FaSpinner)`animation: spin 1s linear infinite; @keyframes spin { 100% { transform: rotate(360deg); } }`;
+const NoDataOverlay = styled.div`position: absolute; top: 50px; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--color-text-secondary); z-index: 10; font-size: 1.2rem; gap: 10px;`;
+
+// ==========================================
+// 2. MATH ALGORITHMS (Client-Side)
+// ==========================================
+
 const calculateSuperTrend = (data, period = 10, multiplier = 3) => {
     if (!data || data.length < period) return [];
     const atr = ATR.calculate({ period, high: data.map(d=>d.high), low: data.map(d=>d.low), close: data.map(d=>d.close) });
@@ -91,14 +235,21 @@ const calculateSMC = (data) => {
     return { markers, coloredCandles, priceLines };
 };
 
+// ==========================================
+// 3. MAIN COMPONENT
+// ==========================================
+
 const CustomChart = ({ symbol }) => {
   const chartContainerRef = useRef();
+  
+  // Instance Refs
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
   const abortControllerRef = useRef(null);
   const fyersEngineRef = useRef(null);
 
+  // Drawing & State Refs
   const priceLinesRef = useRef([]); 
   const drawingLinesRef = useRef([]); 
   const drawingSeriesRef = useRef([]); 
@@ -106,6 +257,7 @@ const CustomChart = ({ symbol }) => {
   const lastCandleRef = useRef(null); 
   const isMounted = useRef(true);
 
+  // State
   const [timeframe, setTimeframe] = useState('1D'); 
   const [chartData, setChartData] = useState([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -128,8 +280,9 @@ const CustomChart = ({ symbol }) => {
   const [param2, setParam2] = useState(26);
   const [param3, setParam3] = useState(9);
 
+  // Constants
   const isIndian = symbol?.includes('.NS') || symbol?.includes('.BO') || symbol?.includes('NIFTY') || symbol?.includes('SENSEX') || symbol?.includes('BANK');
-  
+
   const istFormatter = (timestamp) => {
       const date = new Date(timestamp * 1000);
       if (isIndian) {
@@ -141,8 +294,13 @@ const CustomChart = ({ symbol }) => {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  useEffect(() => { drawModeRef.current = drawMode; if(drawMode === 'cursor') { setTempPoints([]); clearPreview(); } }, [drawMode]);
+  useEffect(() => { 
+      drawModeRef.current = drawMode; 
+      if(drawMode === 'cursor') { setTempPoints([]); clearPreview(); }
+  }, [drawMode]);
+  
   useEffect(() => { tempPointsRef.current = tempPoints; }, [tempPoints]);
+  useEffect(() => { userDrawingsRef.current = userDrawings; }, [userDrawings]);
 
   const mapData = (values, chartData) => {
     const output = [];
@@ -153,11 +311,13 @@ const CustomChart = ({ symbol }) => {
     return output;
   };
 
+  // --- INITIALIZE CHART ---
   useEffect(() => {
     isMounted.current = true;
     if (!chartContainerRef.current) return;
     chartContainerRef.current.innerHTML = '';
     
+    // Clear refs
     priceLinesRef.current = []; drawingLinesRef.current = []; drawingSeriesRef.current = []; previewObjectsRef.current = [];
 
     const chart = createChart(chartContainerRef.current, {
@@ -171,11 +331,18 @@ const CustomChart = ({ symbol }) => {
       rightPriceScale: { borderColor: '#30363D' },
     });
 
-    const candleSeries = chart.addSeries(CandlestickSeries, { upColor: '#3FB950', downColor: '#F85149', borderVisible: false, wickUpColor: '#3FB950', wickDownColor: '#F85149' });
-    const volumeSeries = chart.addSeries(HistogramSeries, { color: '#26a69a', priceFormat: { type: 'volume' }, priceScaleId: '' });
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: '#3FB950', downColor: '#F85149', borderVisible: false, wickUpColor: '#3FB950', wickDownColor: '#F85149',
+    });
+
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      color: '#26a69a', priceFormat: { type: 'volume' }, priceScaleId: '',
+    });
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 
+    // Click Listener
     chart.subscribeClick((param) => {
+      // ZOMBIE CHECK
       if (!isMounted.current || !chartRef.current || !candleSeries) return;
       if (!param.point || !param.time) return;
       const price = candleSeries.coordinateToPrice(param.point.y);
@@ -188,6 +355,7 @@ const CustomChart = ({ symbol }) => {
       if (['fib', 'trend', 'longshort'].includes(mode)) { handleMultiClickTool(price, time, mode === 'longshort' ? 3 : 2, (points) => { setUserDrawings(prev => [...prev, { id, type: mode, points }]); }); }
     });
 
+    // Crosshair Listener
     chart.subscribeCrosshairMove((param) => {
         if (!isMounted.current || !chartRef.current) return;
         const mode = drawModeRef.current;
@@ -217,11 +385,14 @@ const CustomChart = ({ symbol }) => {
       isMounted.current = false;
       resizeObserver.disconnect();
       if (fyersEngineRef.current) fyersEngineRef.current.disconnect();
-      if (chartRef.current) { try { chartRef.current.remove(); } catch(e) {} chartRef.current = null; candleSeriesRef.current = null; volumeSeriesRef.current = null; }
+      if (chartRef.current) { 
+          try { chartRef.current.remove(); } catch(e) {} 
+          chartRef.current = null; candleSeriesRef.current = null; volumeSeriesRef.current = null; 
+      }
     };
   }, [symbol, timeframe]);
 
-  // --- DRAWING LOGIC ---
+  // --- DRAWING HELPERS ---
   const handleMultiClickTool = (price, time, requiredClicks, callback) => { setTempPoints(prev => { const newPoints = [...prev, { price, time }]; if (newPoints.length === requiredClicks) { clearPreview(); callback(newPoints); setDrawMode('cursor'); return []; } return newPoints; }); };
   const clearPreview = () => { previewObjectsRef.current.forEach(obj => { if (obj.type === 'line' && candleSeriesRef.current) try{ candleSeriesRef.current.removePriceLine(obj.ref); } catch(e){} if (obj.type === 'series' && chartRef.current) try{ chartRef.current.removeSeries(obj.ref); } catch(e){} }); previewObjectsRef.current = []; };
   const drawPreviewShape = (type, p1, p2, chart, series) => { clearPreview(); if (type === 'trend') { const sorted = p1.time > p2.time ? [p2, p1] : [p1, p2]; const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }]; const lineSeries = chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }); lineSeries.setData(data); previewObjectsRef.current.push({ type: 'series', ref: lineSeries }); } else if (type === 'fib') { const low = Math.min(p1.price, p2.price); const high = Math.max(p1.price, p2.price); const diff = high - low; const levels = [0, 0.5, 1]; levels.forEach(lvl => { const line = series.createPriceLine({ price: low + (diff * lvl), color: '#FFD700', lineWidth: 1, lineStyle: 2, axisLabelVisible: false }); previewObjectsRef.current.push({ type: 'line', ref: line }); }); } else if (type === 'longshort') { const l1 = series.createPriceLine({ price: p1.price, color: '#888', title: 'ENTRY' }); const l2 = series.createPriceLine({ price: p2.price, color: '#3FB950', title: 'TARGET' }); previewObjectsRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 }); } };
@@ -230,13 +401,13 @@ const CustomChart = ({ symbol }) => {
   const deleteDrawing = (id) => setUserDrawings(prev => prev.filter(d => d.id !== id));
   const clearDrawings = () => { setUserDrawings([]); };
   const undoLastDrawing = () => { if (userDrawings.length > 0) setUserDrawings(prev => prev.slice(0, -1)); };
-  
+
   useEffect(() => { if (!isMounted.current || !candleSeriesRef.current) return; drawingLinesRef.current.forEach(item => { try { candleSeriesRef.current.removePriceLine(item.ref); } catch(e){} }); drawingLinesRef.current = []; drawingSeriesRef.current.forEach(item => { try { chartRef.current.removeSeries(item.ref); } catch(e){} }); drawingSeriesRef.current = []; userDrawings.forEach(d => { if (d.type === 'horizontal') { const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#38bdf8', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: d.title }); drawingLinesRef.current.push({ type: 'line', ref: line }); } else if (d.type === 'rect') { const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#FBBF24', lineWidth: 3, lineStyle: 2, axisLabelVisible: false, title: d.title }); drawingLinesRef.current.push({ type: 'line', ref: line }); } else if (d.type === 'fib') { const p1 = d.points[0]; const p2 = d.points[1]; const low = Math.min(p1.price, p2.price); const high = Math.max(p1.price, p2.price); const diff = high - low; const levels = [{l:0,c:'#fff',w:1},{l:0.382,c:'#FFD700',w:2},{l:0.5,c:'#3FB950',w:2},{l:0.618,c:'#FFD700',w:2},{l:1,c:'#fff',w:1}]; levels.forEach(lvl => { const line = candleSeriesRef.current.createPriceLine({ price: low + (diff * lvl.l), color: lvl.c, lineWidth: lvl.w, lineStyle: 2, axisLabelVisible: true, title: `Fib ${lvl.l}` }); drawingLinesRef.current.push({ type: 'line', ref: line }); }); } else if (d.type === 'trend') { const sorted = d.points[0].time > d.points[1].time ? [d.points[1], d.points[0]] : [d.points[0], d.points[1]]; const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }]; const series = chartRef.current.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }); series.setData(data); drawingSeriesRef.current.push({ type: 'series', ref: series }); } else if (d.type === 'longshort') { const entry = d.points[0].price; const stop = d.points[1].price; const target = d.points[2].price; const rr = Math.abs((target - entry) / (entry - stop)).toFixed(2); const l1 = candleSeriesRef.current.createPriceLine({ price: entry, color: '#888', title: 'ENTRY' }); const l2 = candleSeriesRef.current.createPriceLine({ price: stop, color: '#F85149', title: 'STOP' }); const l3 = candleSeriesRef.current.createPriceLine({ price: target, color: '#3FB950', title: `TARGET R:R ${rr}` }); drawingLinesRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 }, { type: 'line', ref: l3 }); } }); }, [userDrawings]);
 
   const updateLayout = () => { if (!isMounted.current || !chartRef.current || !volumeSeriesRef.current) return; const paneIndicators = activeIndicators.filter(i => ['RSI', 'MACD', 'StochRSI', 'ADX', 'ATR'].includes(i.type)); const paneCount = paneIndicators.length; const PANE_HEIGHT = 0.2; const mainChartHeight = 1.0 - (paneCount * PANE_HEIGHT); chartRef.current.priceScale('right').applyOptions({ scaleMargins: { top: 0.05, bottom: paneCount * PANE_HEIGHT } }); volumeSeriesRef.current.priceScale().applyOptions({ scaleMargins: { top: mainChartHeight - 0.15, bottom: paneCount * PANE_HEIGHT } }); paneIndicators.forEach((ind, index) => { const bottomPos = index * PANE_HEIGHT; const topPos = 1.0 - ((index + 1) * PANE_HEIGHT); if (ind.paneId) chartRef.current.priceScale(ind.paneId).applyOptions({ scaleMargins: { top: topPos, bottom: bottomPos } }); }); };
   useEffect(() => { updateLayout(); }, [activeIndicators]);
 
-  // --- DATA FETCH ---
+  // --- FETCH DATA ---
   const fetchData = useCallback(async (isSilent = false) => {
     if (!symbol) return;
     if (!isSilent && abortControllerRef.current) abortControllerRef.current.abort();
@@ -253,14 +424,11 @@ const CustomChart = ({ symbol }) => {
               setChartData(validData);
               lastCandleRef.current = validData[validData.length - 1];
               
-              if (candleSeriesRef.current) {
-                  const isSMC = activeIndicators.some(i => i.type === 'SMC');
-                  if (isSMC) applySMC(validData); 
-                  else candleSeriesRef.current.setData(validData);
-              }
-              if (volumeSeriesRef.current) {
-                  volumeSeriesRef.current.setData(validData.map(d => ({ time: d.time, value: d.volume || 0, color: d.close >= d.open ? 'rgba(63, 185, 80, 0.4)' : 'rgba(248, 81, 73, 0.4)' })));
-              }
+              const isSMC = activeIndicators.some(i => i.type === 'SMC');
+              if (isSMC) applySMC(validData); 
+              else candleSeriesRef.current.setData(validData);
+              
+              if (volumeSeriesRef.current) volumeSeriesRef.current.setData(validData.map(d => ({ time: d.time, value: d.volume || 0, color: d.close >= d.open ? 'rgba(63, 185, 80, 0.4)' : 'rgba(248, 81, 73, 0.4)' })));
               if (!isSilent) chartRef.current.timeScale().fitContent();
               setIsLive(true);
           } else { setHasError(true); setChartData([]); }
@@ -283,7 +451,6 @@ const CustomChart = ({ symbol }) => {
         try {
             const fyersSocket = new window.FyersSocket(userToken);
             fyersSocket.onmessage = (msg) => {
-                // Fyers SDK Internal Logic
                 const tick = msg.d?.[0] || msg[0];
                 if (tick && tick.v && tick.v.lp) {
                      const price = parseFloat(tick.v.lp);
@@ -297,7 +464,7 @@ const CustomChart = ({ symbol }) => {
             };
             fyersSocket.connect();
             fyersSocket.subscribe([fyersSymbol]);
-            fyersEngineRef.current = { disconnect: () => fyersSocket.close() }; // Wrapper for cleanup
+            fyersEngineRef.current = { disconnect: () => fyersSocket.close() }; 
         } catch(e) {}
         
     } else {
@@ -468,7 +635,7 @@ const CustomChart = ({ symbol }) => {
 
   return (
     <ChartWrapper>
-      {/* ... (Sidebar, Layers, Modals - Same as before) ... */}
+      {/* ... (UI Components) ... */}
       <DrawingSidebar><ToolBtn active={drawMode === 'cursor'} onClick={() => setDrawMode('cursor')} title="Cursor"><FaMousePointer /></ToolBtn><ToolBtn active={drawMode === 'horizontal'} onClick={() => setDrawMode('horizontal')} title="Horizontal Line"><FaMinus /></ToolBtn><ToolBtn active={drawMode === 'trend'} onClick={() => setDrawMode('trend')} title="Trend Line"><FaSlash /></ToolBtn><ToolBtn active={drawMode === 'fib'} onClick={() => setDrawMode('fib')} title="Fibonacci Retracement"><FaListOl /></ToolBtn><ToolBtn active={drawMode === 'rect'} onClick={() => setDrawMode('rect')} title="Zone (Box)"><FaVectorSquare /></ToolBtn><ToolBtn active={drawMode === 'longshort'} onClick={() => setDrawMode('longshort')} title="Long/Short Tool"><FaBalanceScale /></ToolBtn><ToolBtn onClick={undoLastDrawing} title="Undo Last"><FaUndo /></ToolBtn><ToolBtn onClick={clearDrawings} title="Clear All" style={{color: '#F85149'}}><FaEraser /></ToolBtn></DrawingSidebar>
       {userDrawings.length > 0 && (<LayersPanel><LayerHeader><span>Drawing Layers</span></LayerHeader>{userDrawings.map((d, i) => (<LayerItem key={d.id}><span>{d.type === 'horizontal' ? 'H-Line' : d.type === 'rect' ? 'Zone' : d.type === 'fib' ? 'Fibonacci' : d.type.toUpperCase()}</span><LayerActions><IconButton onClick={() => handleEdit(d)}><FaPencilAlt size={10} /></IconButton><IconButton className="delete" onClick={() => deleteDrawing(d.id)}><FaTrash size={10} /></IconButton></LayerActions></LayerItem>))}</LayersPanel>)}
       {editingDrawing && (<EditModal><ModalTitle>Edit Drawing</ModalTitle><ModalInput><label>Price / Level 1</label><input type="number" value={editValues.p1} onChange={e=>setEditValues({...editValues, p1: e.target.value})} /></ModalInput>{editValues.p2 !== undefined && <ModalInput><label>Price / Level 2</label><input type="number" value={editValues.p2} onChange={e=>setEditValues({...editValues, p2: e.target.value})} /></ModalInput>}{editValues.p3 !== undefined && <ModalInput><label>Price / Level 3</label><input type="number" value={editValues.p3} onChange={e=>setEditValues({...editValues, p3: e.target.value})} /></ModalInput>}<ModalActions><AddButton onClick={() => setEditingDrawing(null)} style={{background:'#30363D'}}>Cancel</AddButton><AddButton onClick={saveEdit}>Save Changes</AddButton></ModalActions></EditModal>)}
