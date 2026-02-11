@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 import os
+from .routers import stocks, indices, charts, stream, auth # <--- Add auth
 
 # Import Routers
 from .routers import stocks, indices, charts, stream 
@@ -36,7 +37,7 @@ app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])
 app.include_router(indices.router, prefix="/api/indices", tags=["indices"])
 app.include_router(charts.router, prefix="/api/charts", tags=["charts"])
 app.include_router(stream.router, prefix="/ws", tags=["stream"])
-
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 
 # ==========================================
 # 3. HEALTH CHECK (Critical for Railway)

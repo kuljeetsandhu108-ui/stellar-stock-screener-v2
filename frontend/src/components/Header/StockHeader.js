@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import styled, { keyframes, css } from 'styled-components';
+import ConnectBroker from './ConnectBroker'; // Import the button!
 
 // ==========================================
 // 1. HIGH-END ANIMATIONS (GPU Accelerated)
@@ -55,7 +56,7 @@ const CompanyInfo = styled.div`
   align-items: center;
   gap: 1.2rem;
   max-width: 100%;
-  min-width: 0; /* Prevents flex item from overflowing */
+  min-width: 0; 
 `;
 
 const CompanyLogo = styled.img`
@@ -78,7 +79,14 @@ const CompanyLogo = styled.img`
 const TextContainer = styled.div`
   display: flex;
   flex-direction: column;
-  min-width: 0; /* Critical for text truncation */
+  min-width: 0; 
+`;
+
+const TopRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 `;
 
 const CompanyName = styled.h1`
@@ -104,15 +112,12 @@ const CompanySymbol = styled.span`
   background: rgba(255,255,255,0.05);
   padding: 2px 8px;
   border-radius: 6px;
-  margin-top: 6px;
   display: inline-block;
   font-family: 'Roboto Mono', monospace;
   border: 1px solid rgba(255,255,255,0.05);
   
   @media (min-width: 768px) {
       font-size: 1rem;
-      margin-left: 1rem;
-      margin-top: 0;
   }
 `;
 
@@ -135,7 +140,6 @@ const CurrentPrice = styled.div`
   font-family: 'Roboto Mono', monospace;
   color: var(--color-text-primary);
   
-  /* Advanced Flash Logic */
   ${({ flash }) => flash === 'up' && css`animation: ${flashGreen} 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;`}
   ${({ flash }) => flash === 'down' && css`animation: ${flashRed} 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;`}
 
@@ -184,15 +188,12 @@ const ConnectionStatus = styled.div`
 // ==========================================
 
 const getCurrencySymbol = (currencyCode, symbol) => {
-    // 1. Priority: Explicit Symbol Check for India
     if (symbol) {
         const s = symbol.toUpperCase();
         if (s.includes('.NS') || s.includes('.BO') || s.includes('NIFTY') || s.includes('SENSEX') || s.includes('BANKNIFTY')) {
             return '₹';
         }
     }
-    
-    // 2. Fallback: Currency Code
     switch (currencyCode) {
         case 'INR': return '₹';
         case 'USD': return '$';
@@ -208,14 +209,13 @@ const getCurrencySymbol = (currencyCode, symbol) => {
 // ==========================================
 
 const StockHeader = ({ profile, quote: initialQuote }) => {
-  // State for Real-Time Data
   const [liveData, setLiveData] = useState({
     price: initialQuote?.price || 0,
     change: initialQuote?.change || 0,
     pct: initialQuote?.changesPercentage || 0
   });
   
-  const [flash, setFlash] = useState(null); // 'up', 'down', or null
+  const [flash, setFlash] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const prevPriceRef = useRef(initialQuote?.price || 0);
   
@@ -228,7 +228,6 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
 
     if (!profile.symbol) return;
 
-    // 1. Construct WebSocket URL
     const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     const wsHost = isLocal ? '127.0.0.1:8000' : window.location.host;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -239,48 +238,42 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
     let pingInterval = null;
 
     const connect = () => {
-        ws = new WebSocket(wsUrl);
+        try {
+            ws = new WebSocket(wsUrl);
 
-        ws.onopen = () => {
-            setIsConnected(true);
-            
-            // --- HEARTBEAT ENGINE ---
-            // Send a silent "ping" every 10 seconds.
-            // This tells the backend: "User is still watching this header, keep fetching data."
-            pingInterval = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send("ping");
-                }
-            }, 10000); 
-        };
+            ws.onopen = () => {
+                setIsConnected(true);
+                pingInterval = setInterval(() => {
+                    if (ws.readyState === WebSocket.OPEN) ws.send("ping");
+                }, 10000); 
+            };
 
-        ws.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                const newPrice = data.price;
-                
-                if (newPrice && newPrice !== prevPriceRef.current) {
-                    // Flash Logic
-                    if (newPrice > prevPriceRef.current) setFlash('up');
-                    else if (newPrice < prevPriceRef.current) setFlash('down');
-                    setTimeout(() => setFlash(null), 800);
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    const newPrice = data.price;
+                    
+                    if (newPrice && newPrice !== prevPriceRef.current) {
+                        if (newPrice > prevPriceRef.current) setFlash('up');
+                        else if (newPrice < prevPriceRef.current) setFlash('down');
+                        setTimeout(() => setFlash(null), 800);
 
-                    setLiveData({
-                        price: newPrice,
-                        change: data.change,
-                        pct: data.percent_change
-                    });
-                    prevPriceRef.current = newPrice;
-                }
-            } catch (e) {}
-        };
+                        setLiveData({
+                            price: newPrice,
+                            change: data.change,
+                            pct: data.percent_change
+                        });
+                        prevPriceRef.current = newPrice;
+                    }
+                } catch (e) {}
+            };
 
-        ws.onclose = () => {
-            setIsConnected(false);
-            if (pingInterval) clearInterval(pingInterval);
-            // Auto Reconnect if connection drops
-            setTimeout(connect, 3000);
-        };
+            ws.onclose = () => {
+                setIsConnected(false);
+                if (pingInterval) clearInterval(pingInterval);
+                setTimeout(connect, 3000);
+            };
+        } catch(e) {}
     };
 
     connect();
@@ -293,10 +286,9 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
 
   if (!profile) return null;
   
-  // Robust Currency Symbol
   const currencySymbol = getCurrencySymbol(profile.currency, profile.symbol);
   
-// Formatting - Convert to Number first to prevent "toFixed is not a function" crash
+  // Safe Formatting
   const safeChange = Number(liveData.change) || 0;
   const safePct = Number(liveData.pct) || 0;
   const safePrice = Number(liveData.price) || 0;
@@ -306,6 +298,8 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
   const formattedChange = safeChange.toFixed(2);
   const formattedPct = safePct.toFixed(2);
 
+  // Check if Indian stock (to show button)
+  const isIndian = profile.symbol?.includes('.NS') || profile.symbol?.includes('.BO') || profile.symbol?.includes('NIFTY');
 
   return (
     <HeaderContainer>
@@ -318,17 +312,22 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
             />
         ) : null}
         <TextContainer>
-          <CompanyName>
-            {profile.companyName}
-            <span style={{ display: 'inline-block' }}>
-               <CompanySymbol>{profile.symbol}</CompanySymbol>
-            </span>
-          </CompanyName>
-          {isConnected && (
-              <ConnectionStatus>
-                  <LiveDot style={{width:'6px', height:'6px'}}/> Live Stream Active
-              </ConnectionStatus>
-          )}
+          <TopRow>
+            <CompanyName>
+                {profile.companyName}
+            </CompanyName>
+            {/* --- NEW BUTTON HERE --- */}
+            {isIndian && <ConnectBroker />} 
+          </TopRow>
+          
+          <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+             <CompanySymbol>{profile.symbol}</CompanySymbol>
+             {isConnected && (
+                  <ConnectionStatus>
+                      <LiveDot style={{width:'6px', height:'6px'}}/> Live
+                  </ConnectionStatus>
+             )}
+          </div>
         </TextContainer>
       </CompanyInfo>
       
@@ -337,8 +336,8 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
           {currencySymbol}{formattedPrice}
         </CurrentPrice>
         <PriceChange isPositive={isPositive}>
-            <LiveDot />
-            {isPositive ? '+' : ''}{formattedChange} ({isPositive ? '+' : ''}{formattedPct}%)
+            {isPositive ? '▲' : '▼'}
+            {formattedChange} ({isPositive ? '+' : ''}{formattedPct}%)
         </PriceChange>
       </PriceInfo>
     </HeaderContainer>
