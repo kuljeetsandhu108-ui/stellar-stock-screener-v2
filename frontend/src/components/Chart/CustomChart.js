@@ -12,12 +12,12 @@ import axios from 'axios';
 import { RSI, MACD, StochasticRSI, SMA, EMA, ADX, ATR, VWAP } from 'technicalindicators';
 import { 
   FaLayerGroup, FaTimes, FaPlus, FaMousePointer, 
-  FaMinus, FaSlash, FaVectorSquare, FaListOl, FaBalanceScale, FaEraser, FaUndo, FaPencilAlt, FaTrash, FaSpinner, FaExclamationTriangle, FaPlug
+  FaMinus, FaSlash, FaVectorSquare, FaListOl, FaBalanceScale, FaEraser, FaUndo, FaPencilAlt, FaTrash, FaSpinner, FaExclamationTriangle, FaPlug, FaWifi
 } from 'react-icons/fa';
 import { FyersClientEngine } from '../../utils/FyersClientEngine';
 
 // ==========================================
-// 1. STYLED COMPONENTS
+// 1. HIGH-END STYLED COMPONENTS
 // ==========================================
 
 const ChartWrapper = styled.div`
@@ -274,8 +274,7 @@ const CustomChart = ({ symbol }) => {
   const [editValues, setEditValues] = useState({});
   const drawModeRef = useRef(drawMode); 
   const tempPointsRef = useRef(tempPoints);
-  
-  // --- CRITICAL FIX: Missing Ref Definition ---
+  // --- CRITICAL FIX: Add userDrawingsRef
   const userDrawingsRef = useRef(userDrawings);
 
   const [selectedInd, setSelectedInd] = useState('SMC');
@@ -285,6 +284,12 @@ const CustomChart = ({ symbol }) => {
 
   // Constants
   const isIndian = symbol?.includes('.NS') || symbol?.includes('.BO') || symbol?.includes('NIFTY') || symbol?.includes('SENSEX') || symbol?.includes('BANK');
+
+  // --- HELPER: Get Base API URL (Vercel Fix) ---
+  const getBaseApiUrl = () => {
+     // Use environment variable if set, otherwise default to localhost for dev
+     return process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+  };
 
   const istFormatter = (timestamp) => {
       const date = new Date(timestamp * 1000);
@@ -297,11 +302,7 @@ const CustomChart = ({ symbol }) => {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  useEffect(() => { 
-      drawModeRef.current = drawMode; 
-      if(drawMode === 'cursor') { setTempPoints([]); clearPreview(); }
-  }, [drawMode]);
-  
+  useEffect(() => { drawModeRef.current = drawMode; if(drawMode === 'cursor') { setTempPoints([]); clearPreview(); } }, [drawMode]);
   useEffect(() => { tempPointsRef.current = tempPoints; }, [tempPoints]);
   useEffect(() => { userDrawingsRef.current = userDrawings; }, [userDrawings]);
 
@@ -320,7 +321,6 @@ const CustomChart = ({ symbol }) => {
     if (!chartContainerRef.current) return;
     chartContainerRef.current.innerHTML = '';
     
-    // Clear refs
     priceLinesRef.current = []; drawingLinesRef.current = []; drawingSeriesRef.current = []; previewObjectsRef.current = [];
 
     const chart = createChart(chartContainerRef.current, {
@@ -417,34 +417,9 @@ const CustomChart = ({ symbol }) => {
   const clearDrawings = () => { setUserDrawings([]); };
   const undoLastDrawing = () => { if (userDrawings.length > 0) setUserDrawings(prev => prev.slice(0, -1)); };
 
-  useEffect(() => {
-      if (!isMounted.current || !candleSeriesRef.current || !chartRef.current) return;
-      drawingLinesRef.current.forEach(item => { try { candleSeriesRef.current.removePriceLine(item.ref); } catch(e){} });
-      drawingLinesRef.current = [];
-      drawingSeriesRef.current.forEach(item => { try { chartRef.current.removeSeries(item.ref); } catch(e){} });
-      drawingSeriesRef.current = [];
-      userDrawings.forEach(d => {
-          if (d.type === 'horizontal') { const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#38bdf8', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: d.title }); drawingLinesRef.current.push({ type: 'line', ref: line }); }
-          else if (d.type === 'rect') { const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#FBBF24', lineWidth: 3, lineStyle: 2, axisLabelVisible: false, title: d.title }); drawingLinesRef.current.push({ type: 'line', ref: line }); }
-          else if (d.type === 'fib') { const p1 = d.points[0]; const p2 = d.points[1]; const low = Math.min(p1.price, p2.price); const high = Math.max(p1.price, p2.price); const diff = high - low; const levels = [{l:0,c:'#fff',w:1},{l:0.382,c:'#FFD700',w:2},{l:0.5,c:'#3FB950',w:2},{l:0.618,c:'#FFD700',w:2},{l:1,c:'#fff',w:1}]; levels.forEach(lvl => { const line = candleSeriesRef.current.createPriceLine({ price: low + (diff * lvl.l), color: lvl.c, lineWidth: lvl.w, lineStyle: 2, axisLabelVisible: true, title: `Fib ${lvl.l}` }); drawingLinesRef.current.push({ type: 'line', ref: line }); }); }
-          else if (d.type === 'trend') { const sorted = d.points[0].time > d.points[1].time ? [d.points[1], d.points[0]] : [d.points[0], d.points[1]]; const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }]; const series = chartRef.current.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }); series.setData(data); drawingSeriesRef.current.push({ type: 'series', ref: series }); }
-          else if (d.type === 'longshort') { const entry = d.points[0].price; const stop = d.points[1].price; const target = d.points[2].price; const rr = Math.abs((target - entry) / (entry - stop)).toFixed(2); const l1 = candleSeriesRef.current.createPriceLine({ price: entry, color: '#888', title: 'ENTRY' }); const l2 = candleSeriesRef.current.createPriceLine({ price: stop, color: '#F85149', title: 'STOP' }); const l3 = candleSeriesRef.current.createPriceLine({ price: target, color: '#3FB950', title: `TARGET R:R ${rr}` }); drawingLinesRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 }, { type: 'line', ref: l3 }); }
-      });
-  }, [userDrawings]);
+  useEffect(() => { if (!isMounted.current || !candleSeriesRef.current) return; drawingLinesRef.current.forEach(item => { try { candleSeriesRef.current.removePriceLine(item.ref); } catch(e){} }); drawingLinesRef.current = []; drawingSeriesRef.current.forEach(item => { try { chartRef.current.removeSeries(item.ref); } catch(e){} }); drawingSeriesRef.current = []; userDrawings.forEach(d => { if (d.type === 'horizontal') { const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#38bdf8', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: d.title }); drawingLinesRef.current.push({ type: 'line', ref: line }); } else if (d.type === 'rect') { const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#FBBF24', lineWidth: 3, lineStyle: 2, axisLabelVisible: false, title: d.title }); drawingLinesRef.current.push({ type: 'line', ref: line }); } else if (d.type === 'fib') { const p1 = d.points[0]; const p2 = d.points[1]; const low = Math.min(p1.price, p2.price); const high = Math.max(p1.price, p2.price); const diff = high - low; const levels = [{l:0,c:'#fff',w:1},{l:0.382,c:'#FFD700',w:2},{l:0.5,c:'#3FB950',w:2},{l:0.618,c:'#FFD700',w:2},{l:1,c:'#fff',w:1}]; levels.forEach(lvl => { const line = candleSeriesRef.current.createPriceLine({ price: low + (diff * lvl.l), color: lvl.c, lineWidth: lvl.w, lineStyle: 2, axisLabelVisible: true, title: `Fib ${lvl.l}` }); drawingLinesRef.current.push({ type: 'line', ref: line }); }); } else if (d.type === 'trend') { const sorted = d.points[0].time > d.points[1].time ? [d.points[1], d.points[0]] : [d.points[0], d.points[1]]; const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }]; const series = chartRef.current.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }); series.setData(data); drawingSeriesRef.current.push({ type: 'series', ref: series }); } else if (d.type === 'longshort') { const entry = d.points[0].price; const stop = d.points[1].price; const target = d.points[2].price; const rr = Math.abs((target - entry) / (entry - stop)).toFixed(2); const l1 = candleSeriesRef.current.createPriceLine({ price: entry, color: '#888', title: 'ENTRY' }); const l2 = candleSeriesRef.current.createPriceLine({ price: stop, color: '#F85149', title: 'STOP' }); const l3 = candleSeriesRef.current.createPriceLine({ price: target, color: '#3FB950', title: `TARGET R:R ${rr}` }); drawingLinesRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 }, { type: 'line', ref: l3 }); } }); }, [userDrawings]);
 
-  const updateLayout = () => {
-      if (!isMounted.current || !chartRef.current || !volumeSeriesRef.current) return;
-      const paneIndicators = activeIndicators.filter(i => ['RSI', 'MACD', 'StochRSI', 'ADX', 'ATR'].includes(i.type));
-      const paneCount = paneIndicators.length;
-      const PANE_HEIGHT = 0.2; 
-      const mainChartHeight = 1.0 - (paneCount * PANE_HEIGHT);
-      chartRef.current.priceScale('right').applyOptions({ scaleMargins: { top: 0.05, bottom: paneCount * PANE_HEIGHT } });
-      volumeSeriesRef.current.priceScale().applyOptions({ scaleMargins: { top: mainChartHeight - 0.15, bottom: paneCount * PANE_HEIGHT } });
-      paneIndicators.forEach((ind, index) => {
-          const bottomPos = index * PANE_HEIGHT; const topPos = 1.0 - ((index + 1) * PANE_HEIGHT);
-          if (ind.paneId) chartRef.current.priceScale(ind.paneId).applyOptions({ scaleMargins: { top: topPos, bottom: bottomPos } });
-      });
-  };
+  const updateLayout = () => { if (!isMounted.current || !chartRef.current || !volumeSeriesRef.current) return; const paneIndicators = activeIndicators.filter(i => ['RSI', 'MACD', 'StochRSI', 'ADX', 'ATR'].includes(i.type)); const paneCount = paneIndicators.length; const PANE_HEIGHT = 0.2; const mainChartHeight = 1.0 - (paneCount * PANE_HEIGHT); chartRef.current.priceScale('right').applyOptions({ scaleMargins: { top: 0.05, bottom: paneCount * PANE_HEIGHT } }); volumeSeriesRef.current.priceScale().applyOptions({ scaleMargins: { top: mainChartHeight - 0.15, bottom: paneCount * PANE_HEIGHT } }); paneIndicators.forEach((ind, index) => { const bottomPos = index * PANE_HEIGHT; const topPos = 1.0 - ((index + 1) * PANE_HEIGHT); if (ind.paneId) chartRef.current.priceScale(ind.paneId).applyOptions({ scaleMargins: { top: topPos, bottom: bottomPos } }); }); };
   useEffect(() => { updateLayout(); }, [activeIndicators]);
 
   // --- FETCH DATA ---
@@ -455,20 +430,21 @@ const CustomChart = ({ symbol }) => {
 
     try {
       if (!isSilent) { setIsChartLoading(true); setHasError(false); }
-      const response = await axios.get(`/api/stocks/${symbol}/chart?range=${timeframe}`, { signal: !isSilent ? abortControllerRef.current.signal : undefined });
+      // Use Dynamic Base URL
+      const baseUrl = getBaseApiUrl();
+      const response = await axios.get(`${baseUrl}/api/stocks/${symbol}/chart?range=${timeframe}`, { signal: !isSilent ? abortControllerRef.current.signal : undefined });
       const data = response.data;
       const validData = (data || []).filter(d => d && d.time && typeof d.open === 'number');
 
-      if (isMounted.current && chartRef.current) {
+      if (isMounted.current && chartRef.current && candleSeriesRef.current) {
           if (validData.length > 0) {
               setChartData(validData);
               lastCandleRef.current = validData[validData.length - 1];
               
-              if (candleSeriesRef.current) {
-                  const isSMC = activeIndicators.some(i => i.type === 'SMC');
-                  if (isSMC) applySMC(validData); 
-                  else candleSeriesRef.current.setData(validData);
-              }
+              const isSMC = activeIndicators.some(i => i.type === 'SMC');
+              if (isSMC) applySMC(validData); 
+              else candleSeriesRef.current.setData(validData);
+              
               if (volumeSeriesRef.current) volumeSeriesRef.current.setData(validData.map(d => ({ time: d.time, value: d.volume || 0, color: d.close >= d.open ? 'rgba(63, 185, 80, 0.4)' : 'rgba(248, 81, 73, 0.4)' })));
               if (!isSilent) chartRef.current.timeScale().fitContent();
               setIsLive(true);
@@ -511,14 +487,18 @@ const CustomChart = ({ symbol }) => {
     } else {
         // B. SERVER BROADCAST
         setConnectionType("Server");
-        const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-        const wsHost = isLocal ? '127.0.0.1:8000' : window.location.host;
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${wsHost}/ws/live/${symbol}`;
+        
+        // --- DYNAMIC WSS URL ---
+        const getWsUrl = () => {
+             const apiUrl = getBaseApiUrl();
+             const wsProtocol = apiUrl.includes('https') ? 'wss://' : 'ws://';
+             const host = apiUrl.replace(/^https?:\/\//, '').replace(/^http?:\/\//, '');
+             return `${wsProtocol}${host}/ws/live/${symbol}`;
+        };
 
         const connect = () => {
             try {
-                ws = new WebSocket(wsUrl);
+                ws = new WebSocket(getWsUrl());
                 ws.onopen = () => { pingInterval = setInterval(() => { if (isMounted.current && ws.readyState === WebSocket.OPEN) { ws.send("ping"); } }, 10000); };
                 ws.onmessage = (event) => {
                     if (!chartRef.current || !candleSeriesRef.current || !isMounted.current) return;
@@ -676,7 +656,7 @@ const CustomChart = ({ symbol }) => {
 
   return (
     <ChartWrapper>
-      {/* ... (UI Components) ... */}
+      {/* ... (UI Components - Same as previous, ensured complete) ... */}
       <DrawingSidebar><ToolBtn active={drawMode === 'cursor'} onClick={() => setDrawMode('cursor')} title="Cursor"><FaMousePointer /></ToolBtn><ToolBtn active={drawMode === 'horizontal'} onClick={() => setDrawMode('horizontal')} title="Horizontal Line"><FaMinus /></ToolBtn><ToolBtn active={drawMode === 'trend'} onClick={() => setDrawMode('trend')} title="Trend Line"><FaSlash /></ToolBtn><ToolBtn active={drawMode === 'fib'} onClick={() => setDrawMode('fib')} title="Fibonacci Retracement"><FaListOl /></ToolBtn><ToolBtn active={drawMode === 'rect'} onClick={() => setDrawMode('rect')} title="Zone (Box)"><FaVectorSquare /></ToolBtn><ToolBtn active={drawMode === 'longshort'} onClick={() => setDrawMode('longshort')} title="Long/Short Tool"><FaBalanceScale /></ToolBtn><ToolBtn onClick={undoLastDrawing} title="Undo Last"><FaUndo /></ToolBtn><ToolBtn onClick={clearDrawings} title="Clear All" style={{color: '#F85149'}}><FaEraser /></ToolBtn></DrawingSidebar>
       {userDrawings.length > 0 && (<LayersPanel><LayerHeader><span>Drawing Layers</span></LayerHeader>{userDrawings.map((d, i) => (<LayerItem key={d.id}><span>{d.type === 'horizontal' ? 'H-Line' : d.type === 'rect' ? 'Zone' : d.type === 'fib' ? 'Fibonacci' : d.type.toUpperCase()}</span><LayerActions><IconButton onClick={() => handleEdit(d)}><FaPencilAlt size={10} /></IconButton><IconButton className="delete" onClick={() => deleteDrawing(d.id)}><FaTrash size={10} /></IconButton></LayerActions></LayerItem>))}</LayersPanel>)}
       {editingDrawing && (<EditModal><ModalTitle>Edit Drawing</ModalTitle><ModalInput><label>Price / Level 1</label><input type="number" value={editValues.p1} onChange={e=>setEditValues({...editValues, p1: e.target.value})} /></ModalInput>{editValues.p2 !== undefined && <ModalInput><label>Price / Level 2</label><input type="number" value={editValues.p2} onChange={e=>setEditValues({...editValues, p2: e.target.value})} /></ModalInput>}{editValues.p3 !== undefined && <ModalInput><label>Price / Level 3</label><input type="number" value={editValues.p3} onChange={e=>setEditValues({...editValues, p3: e.target.value})} /></ModalInput>}<ModalActions><AddButton onClick={() => setEditingDrawing(null)} style={{background:'#30363D'}}>Cancel</AddButton><AddButton onClick={saveEdit}>Save Changes</AddButton></ModalActions></EditModal>)}

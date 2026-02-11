@@ -124,6 +124,7 @@ const ConnectionDot = styled.div`
   border-radius: 50%;
   background-color: ${({ active }) => active ? '#3FB950' : 'transparent'};
   box-shadow: ${({ active }) => active ? '0 0 5px #3FB950' : 'none'};
+  transition: background-color 0.3s ease;
 `;
 
 // ==========================================
@@ -144,15 +145,20 @@ const IndicesBanner = () => {
   const [indices, setIndices] = useState([]);
   const [flashStates, setFlashStates] = useState({});
   const [isConnected, setIsConnected] = useState(false);
+  const wsRef = useRef(null);
   const navigate = useNavigate();
+  const isMounted = useRef(true);
 
   // --- 1. INITIAL LOAD (REST API) ---
-  // Fetches the initial snapshot so the banner appears instantly on page load
   useEffect(() => {
+    isMounted.current = true;
     const loadInitial = async () => {
         try {
-            const res = await axios.get('/api/indices/summary');
-            if (res.data && Array.isArray(res.data)) {
+            // Use Environment Variable for Flexibility (Vercel vs Local)
+            const baseUrl = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+            const res = await axios.get(`${baseUrl}/api/indices/summary`);
+            
+            if (res.data && Array.isArray(res.data) && isMounted.current) {
                 setIndices(res.data);
             }
         } catch(e) {
@@ -160,28 +166,35 @@ const IndicesBanner = () => {
         }
     };
     loadInitial();
+    
+    return () => { isMounted.current = false; };
   }, []);
 
   // --- 2. LIVE WEBSOCKET ENGINE ---
   useEffect(() => {
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = isLocal ? '127.0.0.1:8000' : window.location.host;
-    
-    // Connect to the specialized "MARKET_OVERVIEW" channel
-    const wsUrl = `${protocol}//${host}/ws/live/MARKET_OVERVIEW`;
-    
-    let ws = null;
+    // Dynamic URL Construction (Works on Vercel & Localhost)
+    const getWsUrl = () => {
+        const apiUrl = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+        const wsProtocol = apiUrl.includes('https') ? 'wss://' : 'ws://';
+        const host = apiUrl.replace(/^https?:\/\//, '');
+        // Connect to the specific channel for homepage ticker
+        return `${wsProtocol}${host}/ws/live/MARKET_OVERVIEW`;
+    };
+
+    const wsUrl = getWsUrl();
     let pingInterval = null;
 
     const connect = () => {
-        ws = new WebSocket(wsUrl);
+        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
 
         ws.onopen = () => {
+            if (!isMounted.current) return;
             setIsConnected(true);
             
-            // --- HEARTBEAT ---
-            // Keep the pipe open even if market is slow
+            // Heartbeat: Keep connection alive on Railway
             pingInterval = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) {
                     ws.send("ping");
@@ -190,6 +203,7 @@ const IndicesBanner = () => {
         };
 
         ws.onmessage = (event) => {
+            if (!isMounted.current) return;
             try {
                 const update = JSON.parse(event.data);
                 const symbol = update.symbol; 
@@ -198,23 +212,24 @@ const IndicesBanner = () => {
 
                 setIndices(prevIndices => {
                     return prevIndices.map(idx => {
-                        // Find the matching card in the list
+                        // Match incoming update to existing card
                         if (idx.symbol === symbol) {
                             
-                            // Check for Price Change to trigger Flash
+                            // Visual Flash Logic
                             if (update.price !== idx.price) {
                                 const dir = update.price > idx.price ? 'up' : 'down';
                                 
-                                // Update Flash State
                                 setFlashStates(prev => ({ ...prev, [symbol]: dir }));
                                 
-                                // Remove Flash class after animation completes (500ms)
+                                // Clear flash after animation
                                 setTimeout(() => {
-                                    setFlashStates(prev => {
-                                        const next = { ...prev };
-                                        delete next[symbol];
-                                        return next;
-                                    });
+                                    if (isMounted.current) {
+                                        setFlashStates(prev => {
+                                            const next = { ...prev };
+                                            delete next[symbol];
+                                            return next;
+                                        });
+                                    }
                                 }, 600);
                             }
                             
@@ -226,17 +241,19 @@ const IndicesBanner = () => {
                                 percent_change: update.percent_change
                             };
                         }
-                        return idx; // Return unchanged card
+                        return idx; // No change for this card
                     });
                 });
-            } catch(e) {}
+            } catch(e) {
+                // Silent fail for keep-alive packets
+            }
         };
         
         ws.onclose = () => {
-            setIsConnected(false);
+            if (isMounted.current) setIsConnected(false);
             if (pingInterval) clearInterval(pingInterval);
-            // Auto-Reconnect after 3 seconds
-            setTimeout(connect, 3000);
+            // Auto-Reconnect after 3 seconds if connection drops
+            if (isMounted.current) setTimeout(connect, 3000);
         };
     };
 
@@ -245,7 +262,7 @@ const IndicesBanner = () => {
     // Cleanup on Unmount
     return () => { 
         if (pingInterval) clearInterval(pingInterval);
-        if (ws) ws.close(); 
+        if(wsRef.current) wsRef.current.close(); 
     };
   }, []);
 
@@ -253,14 +270,19 @@ const IndicesBanner = () => {
     navigate(`/index/${encodeURIComponent(symbol)}`);
   };
 
-  // Render nothing until data loads
+  // Render nothing until data loads (prevents empty flashes)
   if (indices.length === 0) return null;
 
   return (
     <BannerContainer>
       <CardScroller>
         {indices.map(index => {
-          const isPositive = index.change >= 0;
+          // Safe Number Conversion (Fixes .toFixed crash)
+          const safePrice = Number(index.price) || 0;
+          const safeChange = Number(index.change) || 0;
+          const safePct = Number(index.percent_change) || 0;
+          
+          const isPositive = safeChange >= 0;
           const symbol = getCurrencySymbol(index.currency);
           const flash = flashStates[index.symbol];
           
@@ -273,12 +295,12 @@ const IndicesBanner = () => {
               </IndexHeader>
               
               <IndexPrice flash={flash}>
-                {symbol}{index.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {symbol}{safePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </IndexPrice>
               
               <IndexChange isPositive={isPositive}>
                 {isPositive ? '▲' : '▼'} 
-                {Math.abs(index.change).toFixed(2)} ({index.percent_change.toFixed(2)}%)
+                {Math.abs(safeChange).toFixed(2)} ({safePct.toFixed(2)}%)
               </IndexChange>
             </IndexCard>
           );

@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import styled, { keyframes, css } from 'styled-components';
-import ConnectBroker from './ConnectBroker'; // Import the button!
+import ConnectBroker from './ConnectBroker';
 
 // ==========================================
-// 1. HIGH-END ANIMATIONS (GPU Accelerated)
+// 1. HIGH-END ANIMATIONS
 // ==========================================
 
 const flashGreen = keyframes`
@@ -25,7 +25,7 @@ const pulse = keyframes`
 `;
 
 // ==========================================
-// 2. STYLED COMPONENTS (Glassmorphism)
+// 2. STYLED COMPONENTS
 // ==========================================
 
 const HeaderContainer = styled.div`
@@ -188,12 +188,15 @@ const ConnectionStatus = styled.div`
 // ==========================================
 
 const getCurrencySymbol = (currencyCode, symbol) => {
+    // Priority: Explicit Symbol Check for India
     if (symbol) {
         const s = symbol.toUpperCase();
         if (s.includes('.NS') || s.includes('.BO') || s.includes('NIFTY') || s.includes('SENSEX') || s.includes('BANKNIFTY')) {
             return '₹';
         }
     }
+    
+    // Fallback: Currency Code
     switch (currencyCode) {
         case 'INR': return '₹';
         case 'USD': return '$';
@@ -218,9 +221,11 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
   const [flash, setFlash] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const prevPriceRef = useRef(initialQuote?.price || 0);
+  const wsRef = useRef(null);
   
   // --- REAL WEBSOCKET ENGINE WITH HEARTBEAT ---
   useEffect(() => {
+    // Initial State Set
     if (initialQuote) {
         setLiveData({ price: initialQuote.price, change: initialQuote.change, pct: initialQuote.changesPercentage });
         prevPriceRef.current = initialQuote.price;
@@ -228,21 +233,29 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
 
     if (!profile.symbol) return;
 
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    const wsHost = isLocal ? '127.0.0.1:8000' : window.location.host;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    
-    const wsUrl = `${protocol}//${wsHost}/ws/live/${profile.symbol}`;
+    // --- CRITICAL FIX: DETERMINE CORRECT WS URL ---
+    // If on Vercel, this variable points to Railway. If local, points to localhost.
+    const getWsUrl = () => {
+        const apiUrl = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+        const wsProtocol = apiUrl.includes('https') ? 'wss://' : 'ws://';
+        const host = apiUrl.replace(/^https?:\/\//, '').replace(/^http?:\/\//, '');
+        return `${wsProtocol}${host}/ws/live/${profile.symbol}`;
+    };
 
-    let ws = null;
+    const wsUrl = getWsUrl();
     let pingInterval = null;
 
     const connect = () => {
+        // Prevent duplicate connections
+        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
         try {
-            ws = new WebSocket(wsUrl);
+            const ws = new WebSocket(wsUrl);
+            wsRef.current = ws;
 
             ws.onopen = () => {
                 setIsConnected(true);
+                // Send Ping to keep Redis stream active
                 pingInterval = setInterval(() => {
                     if (ws.readyState === WebSocket.OPEN) ws.send("ping");
                 }, 10000); 
@@ -251,11 +264,12 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    const newPrice = data.price;
+                    const newPrice = Number(data.price);
                     
                     if (newPrice && newPrice !== prevPriceRef.current) {
                         if (newPrice > prevPriceRef.current) setFlash('up');
                         else if (newPrice < prevPriceRef.current) setFlash('down');
+                        
                         setTimeout(() => setFlash(null), 800);
 
                         setLiveData({
@@ -270,8 +284,8 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
 
             ws.onclose = () => {
                 setIsConnected(false);
-                if (pingInterval) clearInterval(pingInterval);
-                setTimeout(connect, 3000);
+                clearInterval(pingInterval);
+                setTimeout(connect, 3000); // Reconnect
             };
         } catch(e) {}
     };
@@ -279,8 +293,8 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
     connect();
 
     return () => {
-        if (pingInterval) clearInterval(pingInterval);
-        if (ws) ws.close();
+        clearInterval(pingInterval);
+        if (wsRef.current) wsRef.current.close();
     };
   }, [profile.symbol, initialQuote]);
 
@@ -288,7 +302,8 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
   
   const currencySymbol = getCurrencySymbol(profile.currency, profile.symbol);
   
-  // Safe Formatting
+  // --- CRASH PROOF FORMATTING ---
+  // Ensure everything is a number before calling toFixed or toLocaleString
   const safeChange = Number(liveData.change) || 0;
   const safePct = Number(liveData.pct) || 0;
   const safePrice = Number(liveData.price) || 0;
@@ -316,7 +331,7 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
             <CompanyName>
                 {profile.companyName}
             </CompanyName>
-            {/* --- NEW BUTTON HERE --- */}
+            {/* Show "Connect Broker" only for Indian Stocks */}
             {isIndian && <ConnectBroker />} 
           </TopRow>
           
