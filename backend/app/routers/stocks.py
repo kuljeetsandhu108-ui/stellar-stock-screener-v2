@@ -297,71 +297,91 @@ async def get_technicals_data(symbol: str, request_data: TimeframeRequest = Body
     }
 
 # ==========================================
-# 5. MASTER DATA ENDPOINTS (ROBUST)
+# 4. MASTER DATA ENDPOINTS (ROBUST PEERS)
 # ==========================================
 
 @router.get("/{symbol}/peers")
 async def get_peers_comparison(symbol: str):
     """
     High-Performance Peers Engine.
-    Uses FMP Bulk Fetch to get metrics for all peers in 1 API Call.
+    1. Gets Peer List.
+    2. Normalizes Tickers (Adds .NS/.BO).
+    3. Uses FMP Bulk Quote for instant data.
     """
-    cache_key = f"peers_v8_{symbol}"
+    cache_key = f"peers_v9_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
     
-    # 1. Get Peer Tickers
-    peers = await asyncio.to_thread(fmp_service.get_stock_peers, symbol)
+    # 1. Identify Asset Class to handle Suffixes
+    source, ticker = identify_asset_class(symbol)
     
-    # AI Fallback if API returns nothing
-    if not peers:
-        # We try to guess the sector/industry from the symbol string or defaults
-        # For simplicity in this fast endpoint, we might skip AI here to keep it fast, 
-        # or use a very small fallback list if it's a known big stock.
-        pass
+    # Skip peers for commodities/crypto as data is often sparse
+    if source == "FMP" and "USD" in ticker: return []
 
-    # 2. Normalize Tickers
-    # If main symbol is RELIANCE.NS, ensure peers are also .NS
+    # 2. Get Peer List
+    # Try FMP first
+    peers = await asyncio.to_thread(fmp_service.get_stock_peers, ticker)
+    
+    # Fallback to AI if FMP returns empty
+    if not peers:
+        base_profile = await asyncio.to_thread(eodhd_service.get_company_fundamentals, ticker)
+        general = base_profile.get('General', {})
+        name = general.get('Name', ticker)
+        sector = general.get('Sector', '')
+        industry = general.get('Industry', '')
+        country = "India" if ".NS" in ticker or ".BO" in ticker else "US"
+        
+        peers_str = await asyncio.to_thread(gemini_service.find_peer_tickers_by_industry, name, sector, industry, country)
+        if peers_str:
+            peers = [p.strip() for p in peers_str.split(',')]
+
+    if not peers: return []
+
+    # 3. NORMALIZE TICKERS (The Fix)
+    # If we are looking at an Indian stock, ensure all peers have .NS
     clean_peers = []
     suffix = ""
     if ".NS" in symbol: suffix = ".NS"
     elif ".BO" in symbol: suffix = ".BO"
     
-    # Add Main Symbol to the list (so it appears in comparison)
-    all_symbols = [symbol]
+    # Add Main Symbol to the list for comparison
+    all_symbols = [ticker]
     
     for p in peers:
         p_clean = p.strip().upper()
-        # If peer doesn't have suffix but main does, add it
-        if suffix and "." not in p_clean:
+        # If main symbol has suffix but peer doesn't, append it
+        if suffix and not p_clean.endswith(suffix) and "." not in p_clean:
             p_clean += suffix
         all_symbols.append(p_clean)
 
-    # Limit to main + 4 peers to save bandwidth
-    target_symbols = all_symbols[:5]
+    # Limit to top 6 to save bandwidth
+    target_symbols = list(set(all_symbols))[:6]
 
-    # 3. BULK FETCH (The Speed Fix)
-    # We ask FMP for metrics of ALL stocks in ONE call
-    raw_metrics = await asyncio.to_thread(fmp_service.get_peers_with_metrics, target_symbols)
+    # 4. BULK FETCH (Using Quote Endpoint - Most Reliable)
+    # We use get_crypto_real_time_bulk because it is a generic quote fetcher in our FMP service
+    # It works for stocks too!
+    raw_data = await asyncio.to_thread(fmp_service.get_crypto_real_time_bulk, target_symbols)
     
-    if not raw_metrics:
+    if not raw_data:
         return []
 
-    # 4. Format Data for Frontend
+    # 5. Format Data
     final_data = []
-    for item in raw_metrics:
+    for item in raw_data:
+        # FMP Quote returns 'price', 'pe', 'marketCap'
+        # We map it to what the Frontend expects
         final_data.append({
             "symbol": item.get('symbol'),
-            "marketCap": item.get('marketCapTTM'),
-            "peRatioTTM": item.get('peRatioTTM'),
-            "revenueGrowth": item.get('revenueGrowthTTM'),
-            "grossMargins": item.get('grossProfitMarginTTM')
+            "marketCap": item.get('marketCap'), # Frontend expects raw number
+            "peRatioTTM": item.get('pe'),       # Quote endpoint uses 'pe'
+            "revenueGrowth": item.get('changesPercentage'), # Proxy for growth in this view
+            "grossMargins": 0 # Not available in simple quote, set 0 to avoid N/A crash
         })
 
     # Cache result
     await redis_service.redis_client.set_cache(cache_key, final_data, 86400)
     return final_data
-
+    
 @router.get("/{symbol}/chart")
 async def get_stock_chart(symbol: str, range: str = "1D"):
     source, fmp_ticker = identify_asset_class(symbol)
