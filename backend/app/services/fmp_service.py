@@ -118,11 +118,15 @@ def get_stock_peers(symbol: str):
 def get_peers_with_metrics(symbols: list):
     """
     BULK FETCH: Gets TTM Metrics for multiple stocks in ONE call.
-    Drastically reduces server load for the Peers Tab.
     """
     if not symbols: return []
-    symbols_str = ",".join(symbols)
-    endpoint = f"{BASE_URL}/key-metrics-ttm/{symbols_str}"
+    
+    # FMP format: RELIANCE.NS,TCS.NS
+    # Remove any internal suffixes if necessary, but FMP usually handles .NS fine
+    query = ",".join(symbols)
+    
+    # Endpoint: Key Metrics TTM
+    endpoint = f"{BASE_URL}/key-metrics-ttm/{query}"
     res = _fetch(endpoint)
     return res if res else []
 

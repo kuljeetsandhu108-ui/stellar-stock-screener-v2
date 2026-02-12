@@ -302,46 +302,63 @@ async def get_technicals_data(symbol: str, request_data: TimeframeRequest = Body
 
 @router.get("/{symbol}/peers")
 async def get_peers_comparison(symbol: str):
-    cache_key = f"peers_v7_{symbol}"
+    """
+    High-Performance Peers Engine.
+    Uses FMP Bulk Fetch to get metrics for all peers in 1 API Call.
+    """
+    cache_key = f"peers_v8_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
     
-    source, ticker = identify_asset_class(symbol)
-    # Skip peers for commodities/crypto
-    if source == "FMP": return []
-
-    base_profile = await asyncio.to_thread(eodhd_service.get_company_fundamentals, ticker)
-    general = base_profile.get('General', {})
-    peers = await asyncio.to_thread(fmp_service.get_stock_peers, ticker)
+    # 1. Get Peer Tickers
+    peers = await asyncio.to_thread(fmp_service.get_stock_peers, symbol)
     
+    # AI Fallback if API returns nothing
     if not peers:
-        name = general.get('Name', ticker)
-        sector = general.get('Sector', '')
-        industry = general.get('Industry', '')
-        country = "India" if ".NS" in ticker or ".BO" in ticker else "US"
-        peers = await asyncio.to_thread(gemini_service.find_peer_tickers_by_industry, name, sector, industry, country)
+        # We try to guess the sector/industry from the symbol string or defaults
+        # For simplicity in this fast endpoint, we might skip AI here to keep it fast, 
+        # or use a very small fallback list if it's a known big stock.
+        pass
 
-    if not peers: return []
+    # 2. Normalize Tickers
+    # If main symbol is RELIANCE.NS, ensure peers are also .NS
+    clean_peers = []
+    suffix = ""
+    if ".NS" in symbol: suffix = ".NS"
+    elif ".BO" in symbol: suffix = ".BO"
+    
+    # Add Main Symbol to the list (so it appears in comparison)
+    all_symbols = [symbol]
+    
+    for p in peers:
+        p_clean = p.strip().upper()
+        # If peer doesn't have suffix but main does, add it
+        if suffix and "." not in p_clean:
+            p_clean += suffix
+        all_symbols.append(p_clean)
 
-    if "." in ticker:
-        suffix = "." + ticker.split(".")[-1]
-        peers = [p.strip().upper() + suffix if "." not in p else p.strip().upper() for p in peers]
+    # Limit to main + 4 peers to save bandwidth
+    target_symbols = all_symbols[:5]
 
-    target_peers = peers[:4] 
-    async def fetch_peer_data(t):
-        try:
-            fund = await asyncio.to_thread(eodhd_service.get_company_fundamentals, t)
-            if not fund: return None
-            metrics = eodhd_service.parse_metrics_from_fundamentals(fund)
-            metrics['symbol'] = t
-            return metrics
-        except: return None
-    tasks = [fetch_peer_data(p) for p in target_peers]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    final_data = [r for r in results if r and not isinstance(r, Exception)]
-    main_metrics = eodhd_service.parse_metrics_from_fundamentals(base_profile)
-    main_metrics['symbol'] = ticker
-    final_data.insert(0, main_metrics)
+    # 3. BULK FETCH (The Speed Fix)
+    # We ask FMP for metrics of ALL stocks in ONE call
+    raw_metrics = await asyncio.to_thread(fmp_service.get_peers_with_metrics, target_symbols)
+    
+    if not raw_metrics:
+        return []
+
+    # 4. Format Data for Frontend
+    final_data = []
+    for item in raw_metrics:
+        final_data.append({
+            "symbol": item.get('symbol'),
+            "marketCap": item.get('marketCapTTM'),
+            "peRatioTTM": item.get('peRatioTTM'),
+            "revenueGrowth": item.get('revenueGrowthTTM'),
+            "grossMargins": item.get('grossProfitMarginTTM')
+        })
+
+    # Cache result
     await redis_service.redis_client.set_cache(cache_key, final_data, 86400)
     return final_data
 
