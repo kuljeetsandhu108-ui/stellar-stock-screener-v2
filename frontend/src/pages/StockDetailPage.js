@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
@@ -20,6 +20,10 @@ import Shareholding from '../components/Shareholding/Shareholding';
 import Technicals from '../components/Technicals/Technicals';
 import { FaArrowLeft } from 'react-icons/fa';
 
+// --- CONFIGURATION ---
+// This connects your Vercel Frontend to your Railway Backend
+const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+
 // --- ANIMATIONS ---
 const fadeIn = keyframes`
   from { opacity: 0; transform: translateY(10px); }
@@ -40,11 +44,11 @@ const PageContainer = styled.div`
 
 const TabGrid = styled.div`
   display: grid;
-  grid-template-columns: 2fr 1fr; /* 66% Chart, 33% Data */
+  grid-template-columns: 2fr 1fr; /* Chart takes 66%, Info takes 33% */
   gap: 2rem;
 
   @media (max-width: 1200px) {
-    grid-template-columns: 1fr; /* Stack on smaller screens */
+    grid-template-columns: 1fr; /* Stack on mobile */
   }
 `;
 
@@ -101,45 +105,47 @@ const StockDetailPage = () => {
   const { symbol } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-
-  // State from Chart Upload (if any)
+  
+  // Data passed from "Deep Scan" or "Chart Analysis" upload
   const chartAnalysisData = location.state?.chartAnalysis;
   const chartTechnicalData = location.state?.technicalData;
 
-  // Data States
+  // --- STATE ---
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
-  // AI States
+  
+  // AI Analysis States
   const [swot, setSwot] = useState('');
   const [loadingSwot, setLoadingSwot] = useState(true);
-  
   const [philosophy, setPhilosophy] = useState('');
   const [canslim, setCanslim] = useState('');
   const [conclusion, setConclusion] = useState('');
-  
   const [loadingFundAI, setLoadingFundAI] = useState(true);
 
-  // --- SMART ASSET DETECTION ---
-  const isCrypto = useMemo(() => symbol.includes('.CC') || symbol.includes('BTC') || symbol.includes('ETH') || (symbol.includes('USD') && !symbol.includes('.')), [symbol]);
-  const isIndex = useMemo(() => symbol.includes('.INDX') || symbol.includes('^'), [symbol]);
-  const isCommodity = useMemo(() => symbol.includes('GOLD') || symbol.includes('OIL') || symbol.includes('XAU') || symbol.includes('USO'), [symbol]);
+  // --- ASSET DETECTION ---
+  const isCrypto = symbol.includes('.CC') || symbol.includes('BTC') || symbol.includes('ETH') || (symbol.includes('USD') && !symbol.includes('.'));
+  const isIndex = symbol.includes('.INDX') || symbol.includes('^');
+  const isCommodity = symbol.includes('GOLD') || symbol.includes('OIL') || symbol.includes('XAU') || symbol.includes('USO') || symbol.includes('CLUSD');
   
-  // "Traditional Stock" means it has Balance Sheets, Earnings, etc.
+  // Logic: Stocks have financials. Crypto/Indices/Commodities do not.
   const isStock = !isCrypto && !isIndex && !isCommodity;
 
-  // --- 1. FETCH MASTER DATA ---
+  // --- 1. MASTER DATA FETCH ---
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       setError(null);
-      // Reset AI
+      // Reset AI states on symbol change
       setSwot(''); setPhilosophy(''); setCanslim(''); setConclusion('');
       
       try {
-        // One call to rule them all (Using our optimized backend router)
-        const res = await axios.get(`/api/stocks/${symbol}/all`);
+        // Use the Vercel-Compatible API_URL
+        const res = await axios.get(`${API_URL}/api/stocks/${symbol}/all`);
+        
+        if (!res.data || !res.data.profile) {
+            throw new Error("Incomplete Data");
+        }
         setData(res.data);
       } catch (err) {
         console.error("Fetch Error:", err);
@@ -151,11 +157,14 @@ const StockDetailPage = () => {
     fetchData();
   }, [symbol]);
 
-  // --- 2. AI HANDLERS (Lazy Loading) ---
+  // --- 2. AI HANDLERS (LAZY LOADING) ---
   
-  // SWOT: Runs for ALL asset types (Crypto, Stocks, Indices)
+  // SWOT Analysis (Runs for everything)
   const fetchSwot = useCallback(() => {
-      if (!data?.profile?.companyName) { setLoadingSwot(false); return; }
+      if (!data?.profile?.companyName) { 
+          setLoadingSwot(false); 
+          return; 
+      }
       setLoadingSwot(true);
       
       const payload = { 
@@ -163,29 +172,29 @@ const StockDetailPage = () => {
           description: data.profile.description || "Financial Asset"
       };
       
-      axios.post(`/api/stocks/${symbol}/swot`, payload)
+      axios.post(`${API_URL}/api/stocks/${symbol}/swot`, payload)
         .then(res => setSwot(res.data.swot_analysis))
         .catch(() => setSwot("Analysis currently unavailable."))
         .finally(() => setLoadingSwot(false));
   }, [data, symbol]);
 
-  // FUNDAMENTAL AI: Only runs for STOCKS (Saves Server Load)
+  // Fundamental Analysis (Runs ONLY for Stocks)
   useEffect(() => {
     if (!data) return;
 
-    // Trigger SWOT immediately
+    // Trigger SWOT
     fetchSwot();
 
     if (isStock) {
         setLoadingFundAI(true);
         
-        // Parallel requests for speed
-        const req1 = axios.post(`/api/stocks/${symbol}/fundamental-analysis`, { 
+        // Parallel Execution for Speed
+        const req1 = axios.post(`${API_URL}/api/stocks/${symbol}/fundamental-analysis`, { 
             companyName: data.profile.companyName, 
             keyMetrics: data.key_metrics 
         }).then(r => setPhilosophy(r.data.assessment)).catch(() => setPhilosophy("N/A"));
 
-        const req2 = axios.post(`/api/stocks/${symbol}/canslim-analysis`, {
+        const req2 = axios.post(`${API_URL}/api/stocks/${symbol}/canslim-analysis`, {
             companyName: data.profile.companyName, 
             quote: data.quote, 
             quarterlyEarnings: data.quarterly_income_statements,
@@ -193,7 +202,7 @@ const StockDetailPage = () => {
             institutionalHolders: data.shareholding ? data.shareholding.length : 0
         }).then(r => setCanslim(r.data.assessment)).catch(() => setCanslim("N/A"));
 
-        const req3 = axios.post(`/api/stocks/${symbol}/conclusion-analysis`, {
+        const req3 = axios.post(`${API_URL}/api/stocks/${symbol}/conclusion-analysis`, {
             companyName: data.profile.companyName, 
             piotroskiData: data.piotroski_f_score,
             grahamData: data.graham_scan, 
@@ -206,43 +215,51 @@ const StockDetailPage = () => {
 
         Promise.allSettled([req1, req2, req3]).finally(() => setLoadingFundAI(false));
     } else {
-        setLoadingFundAI(false); // No fundamental AI for Crypto/Indices
+        setLoadingFundAI(false); // Skip for non-stocks
     }
   }, [data, symbol, isStock, fetchSwot]);
 
-  // --- RENDER ---
+  // --- RENDER STATES ---
+  if (loading) return (
+      <LoadingBox>
+          <div className="spinner" />
+          <p>Accessing Global Data Feeds...</p>
+      </LoadingBox>
+  );
 
-  if (loading) return <LoadingBox><div className="spinner" /><p>Accessing Global Data Feeds...</p></LoadingBox>;
-  if (error) return <ErrorBox><h2>Connection Interrupted</h2><p>{error}</p><BackBtn onClick={() => navigate('/')}><FaArrowLeft /> Return Home</BackBtn></ErrorBox>;
-  if (!data) return null;
+  if (error || !data) return (
+      <ErrorBox>
+          <h2>Connection Interrupted</h2>
+          <p>{error}</p>
+          <BackBtn onClick={() => navigate('/')}><FaArrowLeft /> Return Home</BackBtn>
+      </ErrorBox>
+  );
 
+  // --- MAIN RENDER ---
   return (
     <PageContainer>
       <BackBtn onClick={() => navigate('/')}><FaArrowLeft /> Back to Command Center</BackBtn>
       
-      {/* Dynamic Header (Live Pulse) */}
+      {/* 1. Header (Live Price & Broker Connect Button) */}
       <StockHeader profile={data.profile} quote={data.quote} />
       
       <Tabs>
         
-        {/* TAB 1: CHART AI (Conditional) */}
+        {/* Tab: Chart AI (Only if uploaded) */}
         {chartAnalysisData && (
           <TabPanel label="Chart Insight">
             <ChartAnalysis analysisData={chartAnalysisData} technicalData={chartTechnicalData} />
           </TabPanel>
         )}
 
-        {/* TAB 2: OVERVIEW (Universal) */}
+        {/* Tab: Overview (The Main Dashboard) */}
         <TabPanel label="Overview">
           <TabGrid>
             <LeftCol>
-              {/* High-Performance Chart with Timezone Fix */}
               <CustomChart symbol={symbol} />
-              {/* Smart SWOT with Regenerate */}
               <SwotAnalysis analysisText={swot} isLoading={loadingSwot} onRegenerate={fetchSwot} />
             </LeftCol>
             <RightCol>
-              {/* Sentiment only for Stocks (Crypto uses Tech Forecast) */}
               {isStock && <OverallSentiment sentimentData={data.overall_sentiment} />}
               <PriceLevels pivotPoints={data.pivot_points} quote={data.quote} profile={data.profile} />
               <NewsList newsArticles={data.news} />
@@ -250,7 +267,7 @@ const StockDetailPage = () => {
           </TabGrid>
         </TabPanel>
         
-        {/* TAB 3: FUNDAMENTALS (Stocks Only) */}
+        {/* Tab: Fundamentals (Stocks Only) */}
         {isStock && (
             <TabPanel label="Fundamentals">
                 <Fundamentals
@@ -265,7 +282,7 @@ const StockDetailPage = () => {
             </TabPanel>
         )}
 
-        {/* TAB 4: FINANCIALS (Stocks Only) */}
+        {/* Tab: Financials (Stocks Only) */}
         {isStock && (
           <TabPanel label="Financials">
             <Financials 
@@ -277,7 +294,7 @@ const StockDetailPage = () => {
           </TabPanel>
         )}
         
-        {/* TAB 5: FORECASTS (Universal - Auto Fallback) */}
+        {/* Tab: Forecasts (Universal) */}
         <TabPanel label="Forecasts">
             <Forecasts 
                 symbol={symbol} quote={data.quote} analystRatings={data.analyst_ratings}
@@ -286,14 +303,14 @@ const StockDetailPage = () => {
             />
         </TabPanel>
 
-        {/* TAB 6: PEERS (Stocks Only) */}
+        {/* Tab: Peers (Stocks Only) */}
         {isStock && (
             <TabPanel label="Peers">
                 <PeersComparison symbol={symbol} />
             </TabPanel>
         )}
         
-        {/* TAB 7: SHAREHOLDING (Stocks Only) */}
+        {/* Tab: Shareholding (Stocks Only) */}
         {isStock && (
             <TabPanel label="Shareholding">
                 <Shareholding 
@@ -304,7 +321,7 @@ const StockDetailPage = () => {
             </TabPanel>
         )}
         
-        {/* TAB 8: TECHNICALS (Universal) */}
+        {/* Tab: Technicals (Universal) */}
         <TabPanel label="Technicals">
             <Technicals 
               analystRatings={data.analyst_ratings} technicalIndicators={data.technical_indicators}

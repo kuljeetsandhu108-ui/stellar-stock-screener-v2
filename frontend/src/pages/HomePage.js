@@ -11,6 +11,10 @@ import {
 import IndicesBanner from '../components/Indices/IndicesBanner';
 import ChartUploader from '../components/HomePage/ChartUploader';
 
+// --- CONFIG ---
+// This connects Vercel Frontend to Railway Backend
+const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+
 // ==========================================
 // 1. CINEMATIC ANIMATIONS
 // ==========================================
@@ -476,7 +480,8 @@ const HomePage = () => {
     setIsAutoCompleting(true);
     const delayDebounceFn = setTimeout(async () => {
       try {
-        const response = await axios.get(`/api/stocks/autocomplete?query=${query}`);
+        // FIX: Use API_URL
+        const response = await axios.get(`${API_URL}/api/stocks/autocomplete?query=${query}`);
         if (Array.isArray(response.data) && response.data.length > 0) {
             setSuggestions(response.data);
             setShowSuggestions(true);
@@ -489,7 +494,7 @@ const HomePage = () => {
       } finally {
         setIsAutoCompleting(false);
       }
-    }, 250); // Fast debounce
+    }, 250); 
 
     return () => clearTimeout(delayDebounceFn);
   }, [query]);
@@ -504,8 +509,8 @@ const HomePage = () => {
     setShowSuggestions(false);
     
     try {
-      // 1. Try exact match first
-      const response = await axios.get(`/api/stocks/search?query=${target}`);
+      // FIX: Use API_URL
+      const response = await axios.get(`${API_URL}/api/stocks/search?query=${target}`);
       navigate(`/stock/${response.data.symbol}`);
     } catch (err) {
       setError('Ticker not found. Please try a valid symbol.');
@@ -526,10 +531,9 @@ const HomePage = () => {
       formData.append('chart_image', file);
 
       try {
-          // Direct call to Pure Vision Endpoint
-          const res = await axios.post('/api/charts/analyze-pure', formData);
+          // FIX: Use API_URL
+          const res = await axios.post(`${API_URL}/api/charts/analyze-pure`, formData);
           
-          // Navigate to result page with payload
           navigate('/vision-result', { 
               state: { 
                   analysis: res.data.analysis, 
@@ -543,7 +547,6 @@ const HomePage = () => {
       }
   };
 
-  // --- EVENT LISTENERS ---
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (searchRef.current && !searchRef.current.contains(event.target)) {
@@ -554,30 +557,15 @@ const HomePage = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [searchRef]);
 
-  // ==========================================
-  // 4. RENDER
-  // ==========================================
-
   return (
     <HomePageContainer>
-      
-      {/* Background FX */}
-      <BackgroundLayer>
-        <BlobOne />
-        <BlobTwo />
-      </BackgroundLayer>
-      
-      {/* Live Ticker Tape */}
+      <BackgroundLayer><BlobOne /><BlobTwo /></BackgroundLayer>
       <IndicesBanner />
       
       <MainContent>
         <Title>Stellar Stock Screener</Title>
-        <Subtitle>
-            The Ultimate Financial Intelligence Platform.<br /> 
-            Leveraging Neural Networks & Quantitative Models for Real-Time Analysis.
-        </Subtitle>
+        <Subtitle>The Ultimate Financial Intelligence Platform.<br />Leveraging Neural Networks & Quantitative Models for Real-Time Analysis.</Subtitle>
         
-        {/* Search Engine */}
         <SearchSection ref={searchRef}>
           <SearchWrapper>
             <SearchInput
@@ -590,13 +578,11 @@ const HomePage = () => {
               disabled={isSearching}
               spellCheck={false}
             />
-            
             <SearchButton onClick={() => performSearch()} disabled={isSearching || isAutoCompleting}>
               {isSearching ? <FaSpinner className="fa-spin" size={20} /> : <FaSearch size={20} />}
             </SearchButton>
           </SearchWrapper>
 
-          {/* Autocomplete Dropdown */}
           {showSuggestions && (
             <SuggestionsList>
               {suggestions.map((item) => (
@@ -614,78 +600,27 @@ const HomePage = () => {
           )}
         </SearchSection>
 
-        {/* Status Text */}
-        <LoadingText>
-            {isSearching && <><FaSpinner className="fa-spin"/> Establishing Data Uplink...</>}
-            {error && <span style={{color:'#F85149'}}>{error}</span>}
-        </LoadingText>
+        <LoadingText>{isSearching && <><FaSpinner className="fa-spin"/> Establishing Data Uplink...</>}{error && <span style={{color:'#F85149'}}>{error}</span>}</LoadingText>
         
-        {/* --- AI ANALYST SUITE --- */}
         <SectionLabel>AI Analyst Suite</SectionLabel>
-        
         <UploadGrid>
-            <ChartUploader 
-                type="stock"
-                title="Stocks"
-                description="Equities & ETFs (NSE, BSE, NASDAQ)."
-                color="#58A6FF" 
-                icon={<FaChartBar />}
-            />
-            <ChartUploader 
-                type="index"
-                title="Indices"
-                description="Macro Analysis (Nifty 50, SPX)."
-                color="#EBCB8B"
-                icon={<FaGlobeAmericas />}
-            />
-            <ChartUploader 
-                type="crypto"
-                title="Crypto / Commodities"
-                description="Bitcoin, Gold, Oil & Global Assets."
-                color="#D500F9"
-                icon={<FaBitcoin />}
-            />
+            <ChartUploader type="stock" title="Stocks" description="Equities & ETFs (NSE, BSE, NASDAQ)." color="#58A6FF" icon={<FaChartBar />} />
+            <ChartUploader type="index" title="Indices" description="Macro Analysis (Nifty 50, SPX)." color="#EBCB8B" icon={<FaGlobeAmericas />} />
+            <ChartUploader type="crypto" title="Crypto / Commodities" description="Bitcoin, Gold, Oil & Global Assets." color="#D500F9" icon={<FaBitcoin />} />
         </UploadGrid>
 
-        {/* --- QUANTUM VISION ENGINE (PURE VISION) --- */}
         <SectionLabel>Pure Vision Labs</SectionLabel>
-
         <VisionContainer>
             <VisionCard>
-                <VisionGlow />
-                <ScanBeam />
-                
-                <VisionTitle>
-                    <FaBrain /> Quantum Vision Engine
-                    <FaMicrochip style={{fontSize:'1.5rem', opacity:0.5}}/>
-                </VisionTitle>
-                
-                <VisionDesc>
-                    Upload any financial chart image. Our proprietary Vision Model will perform a 
-                    <strong> Geometric & Mathematical Breakdown </strong> of price action, 
-                    identifying hidden liquidity zones and institutional footprints 
-                    <strong> without needing any external data feed</strong>.
-                </VisionDesc>
-
+                <VisionGlow /><ScanBeam />
+                <VisionTitle><FaBrain /> Quantum Vision Engine<FaMicrochip style={{fontSize:'1.5rem', opacity:0.5}}/></VisionTitle>
+                <VisionDesc>Upload any financial chart image. Our proprietary Vision Model will perform a <strong>Geometric & Mathematical Breakdown</strong> of price action, identifying hidden liquidity zones and institutional footprints <strong>without needing any external data feed</strong>.</VisionDesc>
                 <DeepScanButton htmlFor="vision-upload">
-                    {isVisionLoading ? (
-                        <><FaSpinner className="fa-spin"/> PROCESSING PIXELS...</>
-                    ) : (
-                        <><FaFileUpload /> PERFORM DEEP SCAN</>
-                    )}
+                    {isVisionLoading ? (<><FaSpinner className="fa-spin"/> PROCESSING PIXELS...</>) : (<><FaFileUpload /> PERFORM DEEP SCAN</>)}
                 </DeepScanButton>
-                
-                <input 
-                    id="vision-upload" 
-                    type="file" 
-                    style={{display: 'none'}} 
-                    accept="image/*"
-                    onChange={handleVisionUpload}
-                    disabled={isVisionLoading}
-                />
+                <input id="vision-upload" type="file" style={{display: 'none'}} accept="image/*" onChange={handleVisionUpload} disabled={isVisionLoading}/>
             </VisionCard>
         </VisionContainer>
-
       </MainContent>
     </HomePageContainer>
   );
