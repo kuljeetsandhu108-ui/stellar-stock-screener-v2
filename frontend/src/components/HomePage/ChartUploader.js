@@ -4,6 +4,10 @@ import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { FaCloudUploadAlt, FaChartLine, FaGlobe } from 'react-icons/fa';
 
+// --- CONFIG ---
+// This ensures we hit Railway, not Vercel
+const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+
 // --- ANIMATIONS ---
 const pulse = (color) => keyframes`
   0% { transform: scale(1); box-shadow: 0 0 0 0 ${color}66; }
@@ -32,7 +36,6 @@ const UploaderCard = styled.div`
   min-height: 250px;
   padding: 2rem;
   
-  /* Dynamic Glassmorphism Background based on type */
   background: linear-gradient(145deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.95));
   backdrop-filter: blur(12px);
   border: 1px solid ${({ color }) => color}33;
@@ -48,7 +51,6 @@ const UploaderCard = styled.div`
   position: relative;
   overflow: hidden;
 
-  /* Hover Effect */
   &:hover {
     border-color: ${({ color }) => color};
     transform: translateY(-5px);
@@ -105,7 +107,7 @@ const UploadButton = styled.div`
 
   ${UploaderCard}:hover & {
     background: ${({ color }) => color};
-    color: #000; /* Contrast text */
+    color: #000;
     box-shadow: 0 0 20px ${({ color }) => color}66;
   }
 `;
@@ -131,7 +133,7 @@ const ErrorText = styled.div`
 // --- COMPONENT ---
 
 const ChartUploader = ({ 
-    type = 'stock', // 'stock' or 'index'
+    type = 'stock', 
     title = "Analyze Stock Chart",
     description = "Upload a screenshot of any stock candle chart.",
     color = "#58A6FF",
@@ -151,47 +153,32 @@ const ChartUploader = ({
 
     const formData = new FormData();
     formData.append('chart_image', file);
-    // We send the 'type' to the backend so AI knows context (Optional but good practice)
     formData.append('analysis_type', type); 
 
     try {
-      const response = await axios.post('/api/charts/analyze', formData, {
+      // --- CRITICAL FIX: Use API_URL ---
+      const response = await axios.post(`${API_URL}/api/charts/analyze`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       
-      let { identified_symbol, analysis_data } = response.data;
+      let { identified_symbol, analysis_data, technical_data } = response.data;
 
       if (!identified_symbol || identified_symbol === 'NOT_FOUND') {
-        setError('System  could not identify the symbol. Please ensure the ticker name is visible in the top-left.');
+        setError('System could not identify the symbol. Please ensure the ticker name is visible.');
         setIsUploading(false);
         return;
       }
 
-      // --- VERIFICATION STEP ---
-      // We ask our internal search to verify the AI's guess
-      try {
-        const searchRes = await axios.get(`/api/stocks/search?query=${identified_symbol}`);
-        if (searchRes.data.symbol) {
-            console.log(`System guess: ${identified_symbol} -> Corrected: ${searchRes.data.symbol}`);
-            identified_symbol = searchRes.data.symbol;
-        }
-      } catch (e) {
-          console.warn("Symbol verification skipped.");
-      }
-
-      // --- ROUTING LOGIC ---
-      // If it's an Index (starts with ^ or is known index), go to Index Page
-      // Otherwise go to Stock Page
-      
+      // Routing Logic
       const isIndexSymbol = identified_symbol.includes('^') || 
                             ['NIFTY', 'BANKNIFTY', 'SENSEX', 'SPX', 'NDX'].some(i => identified_symbol.includes(i));
       
       const encodedSymbol = encodeURIComponent(identified_symbol);
 
       if (isIndexSymbol) {
-        navigate(`/index/${encodedSymbol}`, { state: { chartAnalysis: analysis_data } });
+        navigate(`/index/${encodedSymbol}`, { state: { chartAnalysis: analysis_data, technicalData: technical_data } });
       } else {
-        navigate(`/stock/${encodedSymbol}`, { state: { chartAnalysis: analysis_data } });
+        navigate(`/stock/${encodedSymbol}`, { state: { chartAnalysis: analysis_data, technicalData: technical_data } });
       }
 
     } catch (err) {
@@ -200,25 +187,6 @@ const ChartUploader = ({
       setIsUploading(false);
     }
   }, [navigate, type]);
-
-  // Paste Handler
-  useEffect(() => {
-    const handlePaste = (e) => {
-      // Only handle paste if mouse is hovering THIS specific component
-      // (Simplified: Global paste works for now, usually fine)
-      const items = e.clipboardData.items;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf('image') !== -1) {
-          handleUpload(items[i].getAsFile());
-          break;
-        }
-      }
-    };
-    // Note: Global paste listener might trigger both if not careful. 
-    // Ideally we add a focus state, but for simplicity in this architecture:
-    // We will attach listener only when 'isDragActive' or add a click-to-focus mechanism.
-    // For now, let's rely on Drag/Drop and Click mainly.
-  }, [handleUpload]);
 
   const onFileChange = (e) => {
     if (e.target.files && e.target.files[0]) handleUpload(e.target.files[0]);
@@ -244,7 +212,7 @@ const ChartUploader = ({
         {isUploading ? (
           <>
             <IconWrapper color={color} className="icon-wrapper" style={{animation: 'spin 2s linear infinite'}}>
-                <FaGlobe /> {/* Spinner icon replacement */}
+                <FaGlobe /> 
             </IconWrapper>
             <LoaderText color={color}>Processing Market Data...</LoaderText>
           </>
