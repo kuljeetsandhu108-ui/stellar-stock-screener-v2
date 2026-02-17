@@ -1,10 +1,13 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
 import GaugeChart from 'react-gauge-chart';
 import Card from '../common/Card';
 import axios from 'axios';
 import { useParams } from 'react-router-dom';
-import { FaArrowUp, FaArrowDown, FaExchangeAlt, FaLayerGroup, FaSync, FaClock } from 'react-icons/fa';
+import { FaArrowUp, FaArrowDown, FaExchangeAlt, FaLayerGroup, FaSync } from 'react-icons/fa';
+
+// --- CONFIGURATION ---
+const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
 
 // --- STYLED COMPONENTS ---
 
@@ -312,7 +315,8 @@ const Technicals = ({
       setIsLoading(true);
 
       try {
-          const response = await axios.post(`/api/stocks/${symbol}/technicals-data`, {
+          // FIX: Use API_URL constant
+          const response = await axios.post(`${API_URL}/api/stocks/${symbol}/technicals-data`, {
               timeframe: newTf
           });
           
@@ -442,7 +446,7 @@ const Technicals = ({
                     <p>
                         <strong>{signals.buy}</strong> indicators are flashing BUY, while <strong>{signals.sell}</strong> are signaling SELL.
                         {data.movingAverages?.['200'] && (
-                             <>Price is currently {quote?.price > data.movingAverages['200'] ? <span style={{color:'#3FB950'}}>ABOVE</span> : <span style={{color:'#F85149'}}>BELOW</span>} the 200-Period Moving Average.</>
+                             <> Price is currently {quote?.price > data.movingAverages['200'] ? <span style={{color:'#3FB950'}}>ABOVE</span> : <span style={{color:'#F85149'}}>BELOW</span>} the 200-Period Moving Average.</>
                         )}
                     </p>
                 </div>

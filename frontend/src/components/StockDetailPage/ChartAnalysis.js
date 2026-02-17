@@ -5,11 +5,14 @@ import axios from 'axios';
 import Card from '../common/Card';
 import { 
   FaArrowUp, FaArrowDown, FaExchangeAlt, FaGem, FaExclamationTriangle, 
-  FaChartLine, FaCrosshairs, FaStopCircle, FaMoneyBillWave, FaLayerGroup, FaRobot, FaTachometerAlt
+  FaChartLine, FaCrosshairs, FaStopCircle, FaMoneyBillWave, FaLayerGroup, FaRobot, FaTachometerAlt, FaSync
 } from 'react-icons/fa';
 
+// --- CONFIGURATION ---
+const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+
 // ==========================================
-// 1. HIGH-END ANIMATIONS & STYLES
+// 1. HIGH-END STYLES & ANIMATIONS
 // ==========================================
 
 const fadeIn = keyframes`
@@ -87,7 +90,6 @@ const TimeframeButton = styled.button`
     transform: none;
   }
 
-  /* Active glow effect */
   ${({ active }) => active && css`
     box-shadow: 0 0 15px rgba(35, 134, 54, 0.4);
   `}
@@ -99,7 +101,6 @@ const AnalysisGrid = styled.div`
   animation: ${fadeIn} 0.5s ease-out;
 `;
 
-// --- VERDICT CARD ---
 const VerdictCard = styled(Card)`
   text-align: center;
   border-left: 5px solid ${({ color }) => color};
@@ -108,7 +109,6 @@ const VerdictCard = styled(Card)`
   position: relative;
   overflow: hidden;
   
-  /* Background glow based on trend */
   &::before {
     content: '';
     position: absolute;
@@ -149,7 +149,6 @@ const ConclusionText = styled.p`
   padding-top: 1.5rem;
 `;
 
-// --- TRADE TICKET ---
 const TradeTicket = styled.div`
   background: linear-gradient(135deg, #161B22 0%, #0D1117 100%);
   border: 1px solid ${({ action }) => (action === 'BUY' ? '#238636' : action === 'SELL' ? '#DA3633' : '#8B949E')};
@@ -185,7 +184,7 @@ const MetricGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 1px;
-  background: rgba(255,255,255,0.05); /* Grid lines */
+  background: rgba(255,255,255,0.05);
   
   @media (max-width: 768px) {
     grid-template-columns: 1fr 1fr;
@@ -245,7 +244,6 @@ const RationaleBox = styled.div`
   }
 `;
 
-// --- SCANNER LOADING STATE ---
 const ScannerBox = styled.div`
   position: relative;
   width: 100%;
@@ -310,6 +308,26 @@ const InfoItem = styled.li`
   }
 `;
 
+const RetryButton = styled.button`
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid #58A6FF;
+  background: transparent;
+  color: #58A6FF;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  margin-right: auto;
+  transition: all 0.2s;
+  
+  &:hover {
+    background: rgba(88,166,255,0.1);
+  }
+`;
+
 // ==========================================
 // 2. MAIN COMPONENT
 // ==========================================
@@ -317,8 +335,7 @@ const InfoItem = styled.li`
 const ChartAnalysis = ({ analysisData }) => {
   const { symbol } = useParams();
   
-  // Cache stores all analysis: { "image": "...", "1h": "...", "4h": "..." }
-  // Initialize with the Image analysis passed from props (if any)
+  // Cache stores all analyses
   const [cache, setCache] = useState({ 'Image': analysisData });
   const [activeTab, setActiveTab] = useState('Image');
   const [isLoading, setIsLoading] = useState(false);
@@ -327,16 +344,12 @@ const ChartAnalysis = ({ analysisData }) => {
   // --- OMNI-FETCH ENGINE ---
   useEffect(() => {
       const fetchAllTimeframes = async () => {
-          // If we already loaded the "Omni" packet, stop.
           if (isOmniLoaded) return;
-
           setIsLoading(true);
           try {
-              // This endpoint calculates 5M, 15M, 1H, 4H, 1D concurrently on server
-              const res = await axios.post(`/api/stocks/${symbol}/all-timeframe-analysis`);
-              
+              // FIX: Use API_URL for Vercel/Railway connection
+              const res = await axios.post(`${API_URL}/api/stocks/${symbol}/all-timeframe-analysis`);
               if (res.data && !res.data.error) {
-                  // Merge new data with existing Image data
                   setCache(prev => ({ ...prev, ...res.data }));
                   setIsOmniLoaded(true);
               }
@@ -347,29 +360,42 @@ const ChartAnalysis = ({ analysisData }) => {
           }
       };
       
-      // Delay slightly to let UI render first
       const timer = setTimeout(fetchAllTimeframes, 500);
       return () => clearTimeout(timer);
   }, [symbol, isOmniLoaded]);
 
-  // --- INSTANT SWITCHING ---
-  const handleTabChange = (tf) => {
-      setActiveTab(tf);
+  // --- SINGLE FETCH BACKUP ---
+  const fetchSingleTimeframe = async (tf) => {
+      setIsLoading(true);
+      try {
+          // FIX: Use API_URL
+          const res = await axios.post(`${API_URL}/api/stocks/${symbol}/timeframe-analysis`, { timeframe: tf });
+          if (res.data && res.data.analysis) {
+              setCache(prev => ({ ...prev, [tf.toLowerCase()]: res.data.analysis }));
+          }
+      } catch (e) {
+          console.error("Single Fetch Error", e);
+      } finally {
+          setIsLoading(false);
+      }
   };
 
-  // Get current text for active tab (Handle case sensitivity)
+  const handleTabChange = (tf) => {
+      setActiveTab(tf);
+      // If data missing, try fetching it individually
+      if (tf !== 'Image' && !cache[tf.toLowerCase()] && !cache[tf]) {
+          fetchSingleTimeframe(tf);
+      }
+  };
+
   const currentText = cache[activeTab] || cache[activeTab.toLowerCase()] || cache[activeTab.toUpperCase()];
 
   // --- PARSER ENGINE ---
   const parsed = useMemo(() => {
     if (!currentText || typeof currentText !== 'string') return null;
-    
     const rawKeys = ['TREND', 'PATTERNS', 'LEVELS', 'VOLUME', 'MOMENTUM', 'INDICATORS', 'CONCLUSION', 'ACTION', 'ENTRY_ZONE', 'STOP_LOSS', 'TARGET_1', 'TARGET_2', 'RISK_REWARD', 'CONFIDENCE', 'RATIONALE'];
     const sections = {};
-    
-    // Clean artifacts
     let text = "\n" + currentText.replace(/\*\*/g, '').replace(/-- TRADE TICKET --/g, '');
-
     rawKeys.forEach(key => {
       const regex = new RegExp(`(?:^|\\n)\\s*${key}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*[A-Z_]{3,}\\s*:|$)`, 'i');
       const match = text.match(regex);
@@ -395,13 +421,8 @@ const ChartAnalysis = ({ analysisData }) => {
   
   return (
     <AnalysisContainer>
-      
-      {/* 1. Navigation Bar */}
       <TimeframeBar>
-        <TimeframeButton 
-            active={activeTab === 'Image'} 
-            onClick={() => handleTabChange('Image')}
-        >
+        <TimeframeButton active={activeTab === 'Image'} onClick={() => handleTabChange('Image')}>
             <FaGem /> Original Image
         </TimeframeButton>
         {['5m', '15m', '1h', '4h', '1d'].map(tf => (
@@ -409,16 +430,13 @@ const ChartAnalysis = ({ analysisData }) => {
                 key={tf} 
                 active={activeTab === tf} 
                 onClick={() => handleTabChange(tf)}
-                disabled={!isOmniLoaded && !cache[tf]} // Disable if math not ready
+                disabled={isLoading && !cache[tf.toLowerCase()] && !cache[tf]}
             >
                {tf.toUpperCase()}
             </TimeframeButton>
         ))}
       </TimeframeBar>
 
-      {/* 2. Content Area */}
-      
-      {/* STATE A: Loading Math Models */}
       {isLoading && !currentText ? (
           <ScannerBox>
               <ScanLine />
@@ -427,10 +445,8 @@ const ChartAnalysis = ({ analysisData }) => {
               <p style={{color:'#8B949E'}}>Calculating Math Models for All Timeframes...</p>
           </ScannerBox>
       ) : parsed ? (
-          /* STATE B: Data Loaded */
           <AnalysisGrid>
-              
-              {/* Verdict Section */}
+              {/* Verdict */}
               <VerdictCard color={trendColor}>
                   <div style={{color: trendColor, fontSize:'0.9rem', textTransform:'uppercase', letterSpacing:'1px', marginBottom:'0.5rem'}}>
                       MARKET STRUCTURE ({activeTab.toUpperCase()})
@@ -438,12 +454,10 @@ const ChartAnalysis = ({ analysisData }) => {
                   <TrendDisplay color={trendColor}>
                       <TrendIcon /> {trendText}
                   </TrendDisplay>
-                  <ConclusionText>
-                      "{parsed.CONCLUSION || parsed.RATIONALE}"
-                  </ConclusionText>
+                  <ConclusionText>"{parsed.CONCLUSION || parsed.RATIONALE}"</ConclusionText>
               </VerdictCard>
 
-              {/* Trade Ticket (Only if Actionable) */}
+              {/* Trade Ticket */}
               {parsed.ENTRY_ZONE && (
                   <TradeTicket action={action}>
                       <TicketHeader>
@@ -456,26 +470,12 @@ const ChartAnalysis = ({ analysisData }) => {
                               <div style={{fontSize:'1.5rem', fontWeight:'bold', color:'#C9D1D9'}}>{parsed.CONFIDENCE || 'Medium'}</div>
                           </div>
                       </TicketHeader>
-
                       <MetricGrid>
-                          <MetricBox>
-                              <MetricLabel><FaCrosshairs /> Entry Zone</MetricLabel>
-                              <MetricVal color="#58A6FF">{parsed.ENTRY_ZONE}</MetricVal>
-                          </MetricBox>
-                          <MetricBox>
-                              <MetricLabel><FaStopCircle /> Invalidation</MetricLabel>
-                              <MetricVal color="#F85149">{parsed.STOP_LOSS}</MetricVal>
-                          </MetricBox>
-                          <MetricBox>
-                              <MetricLabel><FaMoneyBillWave /> Target 1</MetricLabel>
-                              <MetricVal color="#3FB950">{parsed.TARGET_1}</MetricVal>
-                          </MetricBox>
-                          <MetricBox>
-                              <MetricLabel><FaChartLine /> R:R Ratio</MetricLabel>
-                              <MetricVal color="#EBCB8B">{parsed.RISK_REWARD}</MetricVal>
-                          </MetricBox>
+                          <MetricBox><MetricLabel><FaCrosshairs /> Entry Zone</MetricLabel><MetricVal color="#58A6FF">{parsed.ENTRY_ZONE}</MetricVal></MetricBox>
+                          <MetricBox><MetricLabel><FaStopCircle /> Invalidation</MetricLabel><MetricVal color="#F85149">{parsed.STOP_LOSS}</MetricVal></MetricBox>
+                          <MetricBox><MetricLabel><FaMoneyBillWave /> Target 1</MetricLabel><MetricVal color="#3FB950">{parsed.TARGET_1}</MetricVal></MetricBox>
+                          <MetricBox><MetricLabel><FaChartLine /> R:R Ratio</MetricLabel><MetricVal color="#EBCB8B">{parsed.RISK_REWARD}</MetricVal></MetricBox>
                       </MetricGrid>
-
                       <RationaleBox>
                           <strong><FaRobot style={{marginRight:'8px'}}/> Mathematical Rationale</strong>
                           <p>{parsed.RATIONALE}</p>
@@ -483,7 +483,7 @@ const ChartAnalysis = ({ analysisData }) => {
                   </TradeTicket>
               )}
 
-              {/* Technical Details Grid */}
+              {/* Deep Dive Grid */}
               <DetailGrid>
                   <Card title="Key Levels">
                       <InfoList>
@@ -498,14 +498,12 @@ const ChartAnalysis = ({ analysisData }) => {
                       </InfoList>
                   </Card>
               </DetailGrid>
-
           </AnalysisGrid>
       ) : (
-          /* STATE C: Error / Empty */
           <div style={{textAlign:'center', padding:'3rem', color:'#8B949E', border:'1px dashed #30363D', borderRadius:'16px'}}>
               <FaExclamationTriangle size={30} style={{marginBottom:'1rem'}} />
-              <p>Analysis data unavailable for this timeframe.</p>
-              <p style={{fontSize:'0.8rem'}}>Try regenerating from the chart image.</p>
+              <p>Analysis unavailable for this timeframe.</p>
+              <RetryButton onClick={() => fetchSingleTimeframe(activeTab)}><FaSync /> Retry Analysis</RetryButton>
           </div>
       )}
     </AnalysisContainer>

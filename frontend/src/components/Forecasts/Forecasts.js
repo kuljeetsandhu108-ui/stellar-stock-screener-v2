@@ -6,7 +6,15 @@ import PriceTarget from './PriceTarget';
 import AnalystRating from './AnalystRating';
 import { FaRedo, FaRobot } from 'react-icons/fa';
 
-// --- Styled Components ---
+// ==========================================
+// 1. CONFIGURATION
+// ==========================================
+// This ensures the frontend talks to Railway in production
+const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+
+// ==========================================
+// 2. STYLED COMPONENTS & ANIMATIONS
+// ==========================================
 
 const fadeIn = keyframes`
   from { opacity: 0; }
@@ -107,16 +115,18 @@ const Loader = styled.div`
   font-weight: 500;
 `;
 
-// --- Main Component ---
+// ==========================================
+// 3. MAIN COMPONENT
+// ==========================================
 
 const Forecasts = ({ symbol, quote, analystRatings, priceTarget, keyStats, news, currency, delay }) => {
   const [aiAnalysis, setAiAnalysis] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
 
-  // --- REUSABLE FETCH FUNCTION ---
+  // --- AI FETCH ENGINE ---
   const fetchAiAnalysis = useCallback(async () => {
-    // Guard clause: Ensure data exists before asking AI
+    // Guard clause: Ensure essential data exists before asking AI
     if (!symbol || !analystRatings || !priceTarget || !keyStats || !news || !quote) {
       setIsLoading(false);
       return;
@@ -132,10 +142,11 @@ const Forecasts = ({ symbol, quote, analystRatings, priceTarget, keyStats, news,
         priceTarget: priceTarget,
         keyStats: keyStats,
         newsHeadlines: news.map(n => n.title).slice(0, 10),
-        currency: currency || 'USD' // Ensure currency is passed
+        currency: currency || 'USD'
       };
 
-      const response = await axios.post(`/api/stocks/${symbol}/forecast-analysis`, payload);
+      // --- CRITICAL FIX: Use API_URL variable ---
+      const response = await axios.post(`${API_URL}/api/stocks/${symbol}/forecast-analysis`, payload);
       
       if (response.data.analysis && !response.data.analysis.includes("Could not generate")) {
           setAiAnalysis(response.data.analysis);
@@ -163,7 +174,7 @@ const Forecasts = ({ symbol, quote, analystRatings, priceTarget, keyStats, news,
   }, [fetchAiAnalysis, delay]);
 
 
-  // --- RENDER CHECK ---
+  // --- RENDER CHECKS ---
   if (!priceTarget || !analystRatings || Object.keys(priceTarget).length === 0) {
     return (
       <Card>
