@@ -2,21 +2,31 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
-import { FaArrowLeft, FaGlobeAmericas, FaChartLine } from 'react-icons/fa';
+import { FaArrowLeft, FaGlobeAmericas, FaChartLine, FaExclamationTriangle } from 'react-icons/fa';
 
-// --- COMPONENT IMPORTS ---
+// --- COMPONENTS ---
 import StockHeader from '../components/Header/StockHeader';
 import CustomChart from '../components/Chart/CustomChart';
 import IndexChartAnalysis from '../components/IndexDetailPage/IndexChartAnalysis';
 import Technicals from '../components/Technicals/Technicals';
 import Card from '../components/common/Card';
 
-// --- STYLED COMPONENTS ---
+// --- CONFIGURATION ---
+// Critical for Vercel deployment to find the Railway backend
+const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
 
+// --- ANIMATIONS ---
 const fadeIn = keyframes`
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 `;
+
+const spin = keyframes`
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+`;
+
+// --- STYLED COMPONENTS ---
 
 const PageContainer = styled.div`
   padding: 2rem 3rem;
@@ -46,18 +56,18 @@ const BackButton = styled.button`
   &:hover {
     background-color: var(--color-secondary);
     color: var(--color-text-primary);
-    border-color: #EBCB8B; /* Gold accent for Indices */
+    border-color: #EBCB8B; /* Gold Accent for Indices */
   }
 `;
 
 const DashboardGrid = styled.div`
   display: grid;
-  /* If AI data exists: 50/50 split. If not: Full width (1fr) */
+  /* If AI data exists (upload), split 50/50. Otherwise full width. */
   grid-template-columns: ${({ hasUpload }) => hasUpload ? '1fr 1fr' : '1fr'};
   gap: 2rem;
   
   @media (max-width: 1200px) {
-    grid-template-columns: 1fr; /* Always stack on smaller screens */
+    grid-template-columns: 1fr; /* Stack on smaller screens */
   }
 `;
 
@@ -95,6 +105,15 @@ const LoadingContainer = styled.div`
   gap: 1rem;
 `;
 
+const Spinner = styled.div`
+  border: 3px solid rgba(235, 203, 139, 0.3);
+  border-top: 3px solid #EBCB8B;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: ${spin} 1s linear infinite;
+`;
+
 const ErrorContainer = styled(LoadingContainer)`
   color: #F85149;
 `;
@@ -107,10 +126,8 @@ const IndexDetailPage = () => {
   const location = useLocation();
   const symbol = decodeURIComponent(encodedSymbol);
   
-  // 1. Check for Uploaded Analysis Data
+  // Data State
   const aiAnalysisData = location.state?.chartAnalysis;
-
-  // 2. Local State for Live Data
   const [indexData, setIndexData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -121,8 +138,13 @@ const IndexDetailPage = () => {
       setLoading(true);
       setError(null);
       try {
-        // This endpoint now calculates MAs and Pivots (from previous update)
-        const response = await axios.get(`/api/indices/${encodedSymbol}/details`);
+        // Use the configured API URL
+        const response = await axios.get(`${API_URL}/api/indices/${encodedSymbol}/details`);
+        
+        if (!response.data || !response.data.profile) {
+            throw new Error("Incomplete data received");
+        }
+        
         setIndexData(response.data);
       } catch (err) {
         console.error("Index fetch error:", err);
@@ -139,8 +161,8 @@ const IndexDetailPage = () => {
   if (loading) {
     return (
         <LoadingContainer>
-            <div className="spinner" style={{borderColor: '#EBCB8B', borderTopColor: 'transparent'}} />
-            Loading Macro Data for {symbol}...
+            <Spinner />
+            <span>Loading Macro Data for {symbol}...</span>
         </LoadingContainer>
     );
   }
@@ -148,13 +170,14 @@ const IndexDetailPage = () => {
   if (error || !indexData) {
       return (
         <ErrorContainer>
-            {error || "Index Data Unavailable."}
+            <FaExclamationTriangle size={50} />
+            <p>{error || "Index Data Unavailable."}</p>
             <BackButton onClick={() => navigate('/')}>Return Home</BackButton>
         </ErrorContainer>
       );
   }
 
-  // Destructure the rich data from backend
+  // Destructure Data from Backend
   const { profile, quote, technical_indicators, moving_averages, pivot_points, analyst_ratings } = indexData;
 
   return (
@@ -163,12 +186,12 @@ const IndexDetailPage = () => {
         <FaArrowLeft /> Back to Command Center
       </BackButton>
 
-      {/* 1. Header (Gold Themed via logic in StockHeader or generic style) */}
+      {/* 1. Header (Price, Name, Logo) */}
       <StockHeader profile={profile} quote={quote} />
 
       <DashboardGrid hasUpload={!!aiAnalysisData}>
         
-        {/* --- LEFT PANEL: AI ANALYSIS (Only visible if User uploaded a chart) --- */}
+        {/* --- LEFT PANEL: AI ANALYSIS (Only if uploaded) --- */}
         {aiAnalysisData && (
           <LeftPanel>
             <SectionHeader><FaGlobeAmericas /> Macro Analysis</SectionHeader>
@@ -192,8 +215,8 @@ const IndexDetailPage = () => {
           {/* A. Live Interactive Chart */}
           <CustomChart symbol={symbol} />
 
-          {/* B. Technical Dashboard (Now fully populated) */}
-          {/* We pass 'quote' so it can calculate Price > SMA signals */}
+          {/* B. Technical Dashboard */}
+          {/* CRITICAL: Passing snake_case backend data to camelCase props */}
           <Technicals 
              technicalIndicators={technical_indicators}
              movingAverages={moving_averages} 
