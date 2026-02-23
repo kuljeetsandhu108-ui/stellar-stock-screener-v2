@@ -55,8 +55,9 @@ async def resolve_symbol_smart(ai_text: str, context_type: str):
     # --- C. INDICES (Prioritize EODHD) ---
     if context_type == 'index' or '^' in symbol or 'NIFTY' in symbol or 'SENSEX' in symbol or 'SPX' in symbol:
         if "BANK" in symbol: return "NSEBANK.INDX", "EODHD"
-        if "NIFTY" in symbol: return "NSEI.INDX", "EODHD"
-        if "SENSEX" in symbol: return "BSESN.INDX", "EODHD"
+        if "NIFTY" in symbol or "NSEI" in symbol: return "NSEI.INDX", "EODHD"
+        if ".INDX" in symbol: return symbol, "EODHD"
+        if "SENSEX" in symbol or "BSESN" in symbol: return "BSESN.INDX", "EODHD"
         if "SPX" in symbol or "S&P" in symbol: return "GSPC.INDX", "EODHD"
         if "NDX" in symbol or "NASDAQ" in symbol: return "NDX.INDX", "EODHD"
         if "DOW" in symbol or "DJI" in symbol: return "DJI.INDX", "EODHD"

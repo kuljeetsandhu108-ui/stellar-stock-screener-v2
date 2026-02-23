@@ -263,9 +263,9 @@ def identify_ticker_from_image(image_bytes: bytes):
         RULES:
         1. If it's a specific company, return the Yahoo symbol (e.g., "RELIANCE.NS", "AAPL").
         2. If it's an INDEX, map it correctly:
-           - Nifty 50 -> "^NSEI"
-           - Bank Nifty -> "^NSEBANK"
-           - Sensex -> "^BSESN"
+           - Nifty 50 -> "NSEI.INDX"
+           - Bank Nifty -> "NSEBANK.INDX"
+           - Sensex -> "BSESN.INDX"
            - S&P 500 -> "^GSPC"
            - Nasdaq -> "^IXIC"
            - Bitcoin -> "BTC-USD"

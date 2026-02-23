@@ -171,7 +171,7 @@ const ChartUploader = ({
 
       // Routing Logic
       const isIndexSymbol = identified_symbol.includes('^') || 
-                            ['NIFTY', 'BANKNIFTY', 'SENSEX', 'SPX', 'NDX'].some(i => identified_symbol.includes(i));
+                            ['NIFTY', 'BANKNIFTY', 'SENSEX', 'SPX', 'NDX', 'NSEI', 'BSESN', '.INDX'].some(i => identified_symbol.includes(i));
       
       const encodedSymbol = encodeURIComponent(identified_symbol);
 
