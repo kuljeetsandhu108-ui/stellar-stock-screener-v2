@@ -9,7 +9,7 @@ import {
 } from 'react-icons/fa';
 
 // --- CONFIGURATION ---
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_URL = '';
 
 // ==========================================
 // 1. HIGH-END STYLES & ANIMATIONS

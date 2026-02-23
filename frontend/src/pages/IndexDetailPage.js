@@ -13,7 +13,7 @@ import Card from '../components/common/Card';
 
 // --- CONFIGURATION ---
 // Critical for Vercel deployment to find the Railway backend
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_URL = '';
 
 // --- ANIMATIONS ---
 const fadeIn = keyframes`

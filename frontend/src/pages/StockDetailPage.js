@@ -22,7 +22,7 @@ import { FaArrowLeft } from 'react-icons/fa';
 
 // --- CONFIGURATION ---
 // This connects your Vercel Frontend to your Railway Backend
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_URL = '';
 
 // --- ANIMATIONS ---
 const fadeIn = keyframes`

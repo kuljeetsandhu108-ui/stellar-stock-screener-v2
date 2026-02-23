@@ -7,7 +7,7 @@ import { useParams } from 'react-router-dom';
 import { FaArrowUp, FaArrowDown, FaExchangeAlt, FaLayerGroup, FaSync } from 'react-icons/fa';
 
 // --- CONFIGURATION ---
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_URL = '';
 
 // --- STYLED COMPONENTS ---
 

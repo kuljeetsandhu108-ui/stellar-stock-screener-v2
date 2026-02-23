@@ -10,7 +10,7 @@ import { FaRedo, FaRobot } from 'react-icons/fa';
 // 1. CONFIGURATION
 // ==========================================
 // This ensures the frontend talks to Railway in production
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_URL = '';
 
 // ==========================================
 // 2. STYLED COMPONENTS & ANIMATIONS

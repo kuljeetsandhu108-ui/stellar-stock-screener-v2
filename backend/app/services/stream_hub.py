@@ -17,13 +17,7 @@ logger = logging.getLogger("StreamHub")
 # 1. ASSET CONFIGURATION
 # ==========================================
 
-FYERS_MAP = {
-    "NSEI.INDX": "NSE:NIFTY50-INDEX", "NSEBANK.INDX": "NSE:NIFTYBANK-INDEX",
-    "BSESN.INDX": "BSE:SENSEX-INDEX", "INDIAVIX.INDX": "NSE:INDIAVIX-INDEX",
-    "RELIANCE.NSE": "NSE:RELIANCE-EQ", "HDFCBANK.NSE": "NSE:HDFCBANK-EQ",
-    "TCS.NSE": "NSE:TCS-EQ", "INFY.NSE": "NSE:INFY-EQ",
-    "SBIN.NSE": "NSE:SBIN-EQ", "ICICIBANK.NSE": "NSE:ICICIBANK-EQ"
-}
+FYERS_MAP = {}
 
 FMP_ASSETS = [
     "BTC-USD.CC", "ETH-USD.CC", "SOL-USD.CC", "XRP-USD.CC", "DOGE-USD.CC",
@@ -65,7 +59,7 @@ class StreamProducer:
                     if not self.is_master:
                         logger.info("👑 I am now the DATA MASTER. Starting Fyers...")
                         self.is_master = True
-                        self._start_fyers_thread()
+                        # self._start_fyers_thread() # DISABLED FOR STABILITY
                     else:
                         await redis_client.extend_lock(LOCK_KEY, ttl=LOCK_TTL)
                 else:

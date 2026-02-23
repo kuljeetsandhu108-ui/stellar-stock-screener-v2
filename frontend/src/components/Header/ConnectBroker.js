@@ -31,7 +31,7 @@ const ConnectBroker = () => {
     try {
       // 1. Get the login URL from backend
       // We use window.location.origin to dynamically pick localhost or 127.0.0.1
-      const backendUrl = window.location.origin.replace('3000', '8000'); 
+      const backendUrl = ''; 
       const res = await axios.get(`${backendUrl}/api/auth/fyers/login-url`);
       
       if (res.data.url) {

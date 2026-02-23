@@ -288,7 +288,7 @@ const CustomChart = ({ symbol }) => {
   // --- HELPER: Get Base API URL (Vercel Fix) ---
   const getBaseApiUrl = () => {
      // Use environment variable if set, otherwise default to localhost for dev
-     return process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+     return '';
   };
 
   const istFormatter = (timestamp) => {
@@ -462,7 +462,7 @@ const CustomChart = ({ symbol }) => {
     let ws = null;
     
     // A. DIRECT BROKER CONNECTION
-    if (userToken && isIndian && window.FyersSocket) {
+    if (false) { // FYERS TEMPORARILY DISABLED
         setConnectionType("Broker");
         const fyersSymbol = `NSE:${symbol.replace('.NS', '-EQ').replace('.BO', '-EQ')}`;
         try {
@@ -490,7 +490,7 @@ const CustomChart = ({ symbol }) => {
         
         // --- DYNAMIC WSS URL ---
         const getWsUrl = () => {
-             const apiUrl = getBaseApiUrl();
+             const apiUrl = window.location.origin;
              const wsProtocol = apiUrl.includes('https') ? 'wss://' : 'ws://';
              const host = apiUrl.replace(/^https?:\/\//, '').replace(/^http?:\/\//, '');
              return `${wsProtocol}${host}/ws/live/${symbol}`;

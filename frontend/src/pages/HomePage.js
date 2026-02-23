@@ -13,7 +13,7 @@ import ChartUploader from '../components/HomePage/ChartUploader';
 
 // --- CONFIG ---
 // This connects Vercel Frontend to Railway Backend
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_URL = '';
 
 // ==========================================
 // 1. CINEMATIC ANIMATIONS

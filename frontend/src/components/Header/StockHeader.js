@@ -359,7 +359,7 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
                 {profile.companyName}
             </CompanyName>
             {/* --- CONNECT BROKER BUTTON --- */}
-            {isIndian && <ConnectBroker />} 
+            {/* {isIndian && <ConnectBroker />} */} 
           </TopRow>
           
           <div style={{display:'flex', alignItems:'center', gap:'10px'}}>

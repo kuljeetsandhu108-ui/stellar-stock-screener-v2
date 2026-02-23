@@ -6,7 +6,7 @@ import { FaCloudUploadAlt, FaChartLine, FaGlobe } from 'react-icons/fa';
 
 // --- CONFIG ---
 // This ensures we hit Railway, not Vercel
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_URL = '';
 
 // --- ANIMATIONS ---
 const pulse = (color) => keyframes`

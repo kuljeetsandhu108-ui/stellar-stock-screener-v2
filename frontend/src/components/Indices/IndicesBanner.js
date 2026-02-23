@@ -155,7 +155,7 @@ const IndicesBanner = () => {
     const loadInitial = async () => {
         try {
             // Use Environment Variable for Flexibility (Vercel vs Local)
-            const baseUrl = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+            const baseUrl = '';
             const res = await axios.get(`${baseUrl}/api/indices/summary`);
             
             if (res.data && Array.isArray(res.data) && isMounted.current) {
@@ -174,7 +174,7 @@ const IndicesBanner = () => {
   useEffect(() => {
     // Dynamic URL Construction (Works on Vercel & Localhost)
     const getWsUrl = () => {
-        const apiUrl = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+        const apiUrl = window.location.origin;
         const wsProtocol = apiUrl.includes('https') ? 'wss://' : 'ws://';
         const host = apiUrl.replace(/^https?:\/\//, '');
         // Connect to the specific channel for homepage ticker
