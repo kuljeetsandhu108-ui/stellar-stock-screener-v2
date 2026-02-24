@@ -1,199 +1,98 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
-# Import all services
-from ..services import gemini_service, eodhd_service, technical_service, fmp_service
+from ..services import gemini_service, eodhd_service, technical_service, fmp_service, quant_engine, redis_service
 import asyncio
 import pandas as pd
-import json
-from urllib.parse import unquote
 
 router = APIRouter()
 
-# Timeframes to fetch for "Deep Dive" analysis
-TIMEFRAMES_TO_ANALYZE = ["5M", "1H", "4H", "1D"]
-
-# ==========================================
-# 1. SMART SYMBOL RESOLVER
-# ==========================================
-
-
-async def resolve_symbol_smart(ai_text: str, context_type: str):
-    """
-    Routes the AI-identified ticker to the Best Data Provider.
-    Returns: (resolved_ticker, source_api)
-    """
+async def resolve_symbol_smart(ai_text: str):
     symbol = ai_text.strip().upper()
+    clean_sym = symbol.replace("/", "").replace("-", "").replace(" ", "").replace("USDT", "").replace("USD", "")
     
-    # Clean up common artifacts
-    # Remove USD, USDT to isolate the coin symbol (e.g. BTCUSD -> BTC)
-    clean_sym = symbol.replace("/", "").replace("-", "").replace(" ", "").replace("USDT", "").replace("USD", "").replace("=F", "")
+    # 1. Commodities
+    commodities = {"GOLD": "XAUUSD", "CRUDE": "CLUSD", "OIL": "CLUSD", "SILVER": "XAGUSD"}
+    if clean_sym in commodities: return commodities[clean_sym], "FMP"
     
-    # --- A. COMMODITIES (Prioritize FMP) ---
-    fmp_commodities = {
-        "GOLD": "XAUUSD", "XAU": "XAUUSD", "XAUUSD": "XAUUSD", "GC": "XAUUSD",
-        "SILVER": "XAGUSD", "XAG": "XAGUSD", "SI": "XAGUSD",
-        "CRUDE": "CLUSD", "CRUDEOIL": "CLUSD", "OIL": "CLUSD", "WTI": "CLUSD", "USOIL": "CLUSD", "CL": "CLUSD",
-        "BRENT": "UKOIL", "BRENTOIL": "UKOIL", "UKOIL": "UKOIL",
-        "NATURALGAS": "NGUSD", "GAS": "NGUSD", "NATGAS": "NGUSD", "NG": "NGUSD", "UNG": "NGUSD",
-        "COPPER": "HGUSD", "HG": "HGUSD",
-        "PLATINUM": "PLUSD", "PALLADIUM": "PAUSD"
-    }
+    # 2. Crypto
+    crypto = ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "MATIC"]
+    if clean_sym in crypto or "BTC" in symbol: return f"{clean_sym}-USD.CC", "FMP"
     
-    if clean_sym in fmp_commodities: return fmp_commodities[clean_sym], "FMP"
-    if symbol in fmp_commodities: return fmp_commodities[symbol], "FMP"
-
-    # --- B. CRYPTO (CRITICAL FIX) ---
-    # We must return the Internal Format (BTC-USD.CC) so stocks.py recognizes it correctly
-    crypto_shorts = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "BNB", "MATIC", "AVAX", "LTC", "DOT", "SHIB"]
+    # 3. Indices
+    if "NIFTY" in symbol or "NSEI" in symbol: return "NSEI.INDX", "EODHD"
+    if "BANK" in symbol: return "NSEBANK.INDX", "EODHD"
+    if "SENSEX" in symbol or "BSESN" in symbol: return "BSESN.INDX", "EODHD"
     
-    if clean_sym in crypto_shorts:
-        return f"{clean_sym}-USD.CC", "FMP"
+    # 4. Stocks
+    if ".NS" not in symbol and ".BO" not in symbol and ".INDX" not in symbol and ".CC" not in symbol and len(symbol) < 6:
+        # Check if it's an Indian stock implied
+        return f"{symbol}.NSE", "EODHD"
         
-    if "BTC" in symbol or "ETH" in symbol or "SOL" in symbol:
-        # Fallback if cleaning missed it
-        return f"{clean_sym}-USD.CC", "FMP"
-
-    # --- C. INDICES (Prioritize EODHD) ---
-    if context_type == 'index' or '^' in symbol or 'NIFTY' in symbol or 'SENSEX' in symbol or 'SPX' in symbol:
-        if "BANK" in symbol: return "NSEBANK.INDX", "EODHD"
-        if "NIFTY" in symbol or "NSEI" in symbol: return "NSEI.INDX", "EODHD"
-        if ".INDX" in symbol: return symbol, "EODHD"
-        if "SENSEX" in symbol or "BSESN" in symbol: return "BSESN.INDX", "EODHD"
-        if "SPX" in symbol or "S&P" in symbol: return "GSPC.INDX", "EODHD"
-        if "NDX" in symbol or "NASDAQ" in symbol: return "NDX.INDX", "EODHD"
-        if "DOW" in symbol or "DJI" in symbol: return "DJI.INDX", "EODHD"
-        if "VIX" in symbol: return "INDIAVIX.INDX", "EODHD"
-        if "DAX" in symbol: return "GDAXI.INDX", "EODHD"
-        if "NIKKEI" in symbol: return "N225.INDX", "EODHD"
-
-    # --- D. STOCKS (EODHD) ---
     if ".NS" in symbol: return symbol.replace(".NS", ".NSE"), "EODHD"
-    if ".BO" in symbol: return symbol.replace(".BO", ".BSE"), "EODHD"
-    if ".US" in symbol: return symbol, "EODHD"
-
-    # Suffix Discovery Fallback
-    candidates = [f"{symbol}.NSE", f"{symbol}.US"]
-    for cand in candidates:
-        try:
-            check = await asyncio.to_thread(eodhd_service.get_live_price, cand)
-            if check and 'price' in check and check['price'] > 0:
-                return cand, "EODHD"
-        except: continue
-            
-    return f"{symbol}.NSE", "EODHD"
-
-# ==========================================
-# 2. ENDPOINT: ANALYZE CHART
-# ==========================================
+    return symbol, "EODHD"
 
 @router.post("/analyze")
-async def analyze_chart_image(
-    chart_image: UploadFile = File(...),
-    analysis_type: str = Form("stock")
-):
-    """
-    Master AI Chart Analyst.
-    1. AI Vision (Identify Ticker).
-    2. Hybrid Resolution (Route to FMP or EODHD).
-    3. Parallel Data Fetch (Vision + Math).
-    4. Technical Calculation (Pandas).
-    5. Synthesis & Response.
-    """
+async def analyze_chart_image(chart_image: UploadFile = File(...), analysis_type: str = Form("stock")):
     if not chart_image.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image.")
+        raise HTTPException(status_code=400, detail="Invalid file.")
 
     image_bytes = await chart_image.read()
 
-    # --- Step 1: AI Vision (Identify Ticker) ---
-    # We ask Gemini to just tell us WHAT is in the image first.
+    # 1. VISION AI (Fast ID)
     raw_symbol = await asyncio.to_thread(gemini_service.identify_ticker_from_image, image_bytes)
+    if not raw_symbol or "NOT_FOUND" in raw_symbol:
+        return {"identified_symbol": "NOT_FOUND", "analysis_data": "Could not identify ticker."}
 
-    if not raw_symbol or raw_symbol == "NOT_FOUND":
-        return {
-            "identified_symbol": "NOT_FOUND", 
-            "analysis_data": "Could not identify symbol from image. Please ensure the ticker name is visible.", 
-            "technical_data": None
-        }
+    final_symbol, data_source = await resolve_symbol_smart(raw_symbol)
+    print(f"Analyzing: {final_symbol} via {data_source}")
+
+    # 2. SMART DATA FETCH (CACHE FIRST)
+    # We fetch 5M data because we can mathematically build 1H/4H/1D from it.
+    cache_key = f"chart_base_v16_{final_symbol}_5M"
     
-    # --- Step 2: Resolve & Normalize (Hybrid Engine) ---
-    final_symbol, data_source = await resolve_symbol_smart(raw_symbol, analysis_type)
-    print(f"Chart Upload: AI detected '{raw_symbol}' -> Resolved to '{final_symbol}' via {data_source}")
-
-    # --- Step 3: Parallel Execution ---
+    # A. Check Redis
+    chart_data = await redis_service.redis_client.get_cache(cache_key)
     
-    # Task A: AI Visual Strategy (Generates the text report)
-    vision_task = asyncio.to_thread(gemini_service.analyze_chart_technicals_from_image, image_bytes)
+    # B. If Miss, Hit API
+    if not chart_data:
+        print("⚡ Cache Miss. Fetching API...")
+        if data_source == "FMP":
+            chart_data = await asyncio.to_thread(fmp_service.get_commodity_history, final_symbol, "5M")
+            if not chart_data: chart_data = await asyncio.to_thread(fmp_service.get_crypto_history, final_symbol, "5M")
+        else:
+            chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, final_symbol, "5M")
+        
+        # Save to Redis (5 Minutes TTL)
+        if chart_data:
+            await redis_service.redis_client.set_cache(cache_key, chart_data, 300)
+    else:
+        print("✅ Using Cached Data (0 API Cost)")
 
-    # Task B: Fetch Data for Multiple Timeframes (Math Engine)
-    async def fetch_and_calc(tf):
-        try:
-            raw_data = []
-            
-            # --- HYBRID FETCHING LOGIC ---
-            if data_source == "FMP":
-                # Try Commodity First
-                raw_data = await asyncio.to_thread(fmp_service.get_commodity_history, final_symbol, range_type=tf)
-                # If Empty, Try Crypto
-                if not raw_data:
-                    raw_data = await asyncio.to_thread(fmp_service.get_crypto_history, final_symbol, range_type=tf)
-            else:
-                # Fetch Stocks/Indices from EODHD
-                raw_data = await asyncio.to_thread(eodhd_service.get_historical_data, final_symbol, range_type=tf)
-            
-            # Validation
-            if not raw_data or len(raw_data) < 20: 
-                return tf, None
-            
-            # Convert to Pandas for Math
-            df = pd.DataFrame(raw_data)
-            
-            # Calculate Indicators
-            technicals = await asyncio.to_thread(technical_service.calculate_extended_technicals, df)
-            
-            return tf, technicals
-        except Exception as e:
-            print(f"Error analyzing {tf} for {final_symbol}: {e}")
-            return tf, None
+    if not chart_data or len(chart_data) < 20:
+        return {"identified_symbol": raw_symbol, "analysis_data": "Insufficient market data for analysis."}
 
-    # Run all data tasks in parallel
-    data_tasks = [fetch_and_calc(tf) for tf in TIMEFRAMES_TO_ANALYZE]
+    # 3. LOCAL MATH ENGINE (No AI Latency)
+    # We assume the user wants a Daily/Swing view for the main report
+    # Resample 5M -> Daily for the report
+    daily_data = technical_service.resample_chart_data(chart_data, "1D")
+    df = pd.DataFrame(daily_data)
     
-    # Execute Vision + Data simultaneously
-    results = await asyncio.gather(vision_task, *data_tasks)
+    technicals = technical_service.calculate_technical_indicators(df)
+    pivots = technical_service.calculate_pivot_points(df)
+    mas = technical_service.calculate_moving_averages(df)
 
-    # Unpack Results
-    analysis_text = results[0] # The text report from Gemini
-    tech_results = results[1:] # The list of (tf, data) tuples
+    report = quant_engine.generate_algorithmic_report(raw_symbol, "Daily", technicals, pivots, mas)
 
-    # Structure Technical Data for Frontend
-    technical_data = {tf: data for tf, data in tech_results if data is not None}
-
-    # --- Step 4: Final Response Formatting ---
-    frontend_symbol = final_symbol
-    
-    # Convert EODHD format back to Frontend format if it's a Stock
-    if final_symbol.endswith(".NSE"): 
-        frontend_symbol = final_symbol.replace(".NSE", ".NS")
-    elif final_symbol.endswith(".BSE"): 
-        frontend_symbol = final_symbol.replace(".BSE", ".BO")
+    # 4. Return Data
+    frontend_sym = final_symbol.replace(".NSE", ".NS").replace(".BSE", ".BO")
     
     return {
-        "identified_symbol": frontend_symbol,
-        "analysis_data": analysis_text,
-        "technical_data": technical_data
+        "identified_symbol": frontend_sym,
+        "analysis_data": report,
+        "technical_data": {} # Frontend fetches specific timeframes via /technicals-data endpoint
     }
+
 @router.post("/analyze-pure")
 async def analyze_pure_chart(chart_image: UploadFile = File(...)):
-    """
-    Pure AI Vision Endpoint. No APIs. No Data Feeds. Just Brains.
-    """
-    if not chart_image.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Invalid file type.")
-
+    # Legacy endpoint for pure vision
     image_bytes = await chart_image.read()
-    
-    # Direct call to the Vision Engine
-    analysis_text = await asyncio.to_thread(gemini_service.analyze_pure_vision, image_bytes)
-    
-    return {
-        "analysis": analysis_text
-    }
+    return {"analysis": "Please use the main upload feature for data-backed analysis."}
