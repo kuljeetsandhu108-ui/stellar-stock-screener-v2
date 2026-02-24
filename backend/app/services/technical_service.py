@@ -66,7 +66,7 @@ def resample_chart_data(chart_data: list, target_interval: str):
         resampled.reset_index(inplace=True)
         
         # Convert timestamp back to Unix Seconds
-        resampled['time'] = resampled['datetime'].astype('int64') // 10**9
+        resampled['time'] = (resampled['datetime'] - pd.Timestamp('1970-01-01')) // pd.Timedelta('1s')
         
         # Select and order columns
         final_data = resampled[['time', 'open', 'high', 'low', 'close', 'volume']].to_dict('records')
