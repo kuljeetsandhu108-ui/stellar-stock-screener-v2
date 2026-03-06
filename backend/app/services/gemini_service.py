@@ -24,7 +24,7 @@ def configure_gemini_for_request():
         try: genai.configure(api_key=next(key_cycler))
         except: pass
 
-MODEL_NAME = 'gemini-3-flash-preview'
+MODEL_NAME = 'gemini-1.5-flash'
 
 # --- VISION AI ---
 def identify_ticker_from_image(image_bytes: bytes):
