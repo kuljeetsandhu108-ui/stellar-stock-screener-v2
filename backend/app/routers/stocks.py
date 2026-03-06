@@ -163,12 +163,18 @@ async def search_stock_ticker(query: str = Query(..., min_length=2)):
 
 @router.post("/{symbol}/swot")
 async def get_swot_analysis(symbol: str, request_data: SwotRequest = Body(...)):
-    cache_key = f"swot_v2_{symbol}"
+    cache_key = f"swot_v4_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
-    news_articles = await asyncio.to_thread(news_service.get_company_news, request_data.companyName)
-    news_headlines = [a.get('title', '') for a in news_articles[:10]]
-    swot_analysis = await asyncio.to_thread(gemini_service.generate_swot_analysis, request_data.companyName, request_data.description, news_headlines)
+    
+    # GRAB EXISTING DATA FROM CACHE (0 API Calls!)
+    master_data_key = f"all_data_v27_{symbol}"
+    master_data = await redis_service.redis_client.get_cache(master_data_key)
+    
+    # GENERATE SWOT VIA MATH ENGINE
+    from ..services import swot_engine
+    swot_analysis = swot_engine.generate_algorithmic_swot(request_data.companyName, master_data)
+    
     res = {"swot_analysis": swot_analysis}
     await redis_service.redis_client.set_cache(cache_key, res, 3600)
     return res
@@ -183,27 +189,58 @@ async def get_forecast_analysis(symbol: str, d: ForecastRequest = Body(...)):
 
 @router.post("/{symbol}/fundamental-analysis")
 async def get_fundamental_analysis(symbol: str, d: FundamentalRequest = Body(...)):
-    cache_key = f"fa_v2_{symbol}"
+    cache_key = f"fa_v4_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
-    analysis = await asyncio.to_thread(gemini_service.generate_investment_philosophy_assessment, d.companyName, d.keyMetrics)
-    res = {"assessment": analysis}; await redis_service.redis_client.set_cache(cache_key, res, 86400); return res
+    
+    # ZERO API CALLS - Use Cached Master Data
+    master_data_key = f"all_data_v27_{symbol}"
+    master_data = await redis_service.redis_client.get_cache(master_data_key)
+    
+    from ..services import strategy_engine
+    assessment = strategy_engine.generate_value_philosophy(master_data)
+    
+    res = {"assessment": assessment}
+    await redis_service.redis_client.set_cache(cache_key, res, 86400)
+    return res
 
 @router.post("/{symbol}/canslim-analysis")
 async def get_canslim_analysis(symbol: str, d: CanslimRequest = Body(...)):
-    cache_key = f"can_v2_{symbol}"
+    cache_key = f"can_v4_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
-    analysis = await asyncio.to_thread(gemini_service.generate_canslim_assessment, d.companyName, d.quote, d.quarterlyEarnings, d.annualEarnings, d.institutionalHolders)
-    res = {"assessment": analysis}; await redis_service.redis_client.set_cache(cache_key, res, 3600); return res
+    
+    # ZERO API CALLS - Use Cached Master Data
+    master_data_key = f"all_data_v27_{symbol}"
+    master_data = await redis_service.redis_client.get_cache(master_data_key)
+    
+    from ..services import strategy_engine
+    assessment = strategy_engine.generate_canslim_check(master_data)
+    
+    res = {"assessment": assessment}
+    await redis_service.redis_client.set_cache(cache_key, res, 3600)
+    return res
 
 @router.post("/{symbol}/conclusion-analysis")
 async def get_conclusion_analysis(symbol: str, d: ConclusionRequest = Body(...)):
-    cache_key = f"conc_v2_{symbol}"
+    cache_key = f"conc_v4_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
-    conclusion = await asyncio.to_thread(gemini_service.generate_fundamental_conclusion, d.companyName, d.piotroskiData, d.grahamData, d.darvasData, {k: v for k, v in d.keyStats.items() if v is not None}, d.newsHeadlines)
-    res = {"conclusion": conclusion}; await redis_service.redis_client.set_cache(cache_key, res, 3600); return res
+    
+    from ..services import conclusion_engine
+    
+    # Use Pure Math Engine (0ms latency, 0 API Calls)
+    conclusion = conclusion_engine.generate_algorithmic_conclusion(
+        d.companyName, 
+        d.piotroskiData, 
+        d.grahamData, 
+        d.darvasData, 
+        {k: v for k, v in d.keyStats.items() if v is not None}
+    )
+    
+    res = {"conclusion": conclusion}
+    await redis_service.redis_client.set_cache(cache_key, res, 3600)
+    return res
 
 # ==========================================
 # 4. TECHNICAL ANALYSIS & CHART ENGINE

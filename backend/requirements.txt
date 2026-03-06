@@ -2,7 +2,6 @@ fastapi
 uvicorn[standard]
 python-dotenv
 requests
-google-generativeai
 pandas
 pandas_ta
 pydantic
@@ -16,4 +15,4 @@ fyers-apiv3
 websockets
 httpx
 yfinance
-# force rebuild
+# force rebuildgoogle-genai
