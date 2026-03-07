@@ -48,6 +48,7 @@ def generate_algorithmic_report(symbol, timeframe, technicals, pivots, mas):
         return f"""
 TREND: {trend}
 PATTERNS: Algorithmic structure based on {timeframe} data.
+MOMENTUM: {momentum}
 LEVELS: Support at {s1:.2f}, Resistance at {r1:.2f}.
 VOLUME: Scanning mathematical deviations.
 INDICATORS: RSI ({rsi:.1f}) indicates {momentum}.

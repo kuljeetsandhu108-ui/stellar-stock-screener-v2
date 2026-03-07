@@ -5,24 +5,41 @@ import pandas as pd
 
 router = APIRouter()
 
-async def resolve_symbol_smart(ai_text: str):
-    symbol = ai_text.strip().upper()
-    clean_sym = symbol.replace("/", "").replace("-", "").replace(" ", "").replace("USDT", "").replace("USD", "")
+async def resolve_symbol_smart(raw_text: str):
+    """
+    Takes raw text from AI (e.g. 'RELIANCE') and maps it to the correct API symbol.
+    """
+    s = raw_text.strip().upper()
     
-    commodities = {"GOLD": "XAUUSD", "CRUDE": "CLUSD", "OIL": "CLUSD", "SILVER": "XAGUSD"}
-    if clean_sym in commodities: return commodities[clean_sym], "FMP"
+    # 1. Clean up
+    s = s.replace("USDT", "").replace("USD", "").replace("/", "").replace("-", "")
     
-    crypto =["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "MATIC"]
-    if clean_sym in crypto or "BTC" in symbol: return f"{clean_sym}-USD.CC", "FMP"
+    # 2. Known Indices (Hardcoded for stability)
+    indices = {
+        "NIFTY": "NSEI.INDX", "NIFTY50": "NSEI.INDX", "BANKNIFTY": "NSEBANK.INDX", 
+        "SENSEX": "BSESN.INDX", "SPX": "GSPC.INDX", "NDX": "NDX.INDX", 
+        "DOW": "DJI.INDX", "VIX": "INDIAVIX.INDX"
+    }
+    for k, v in indices.items():
+        if k in s: return v, "EODHD"
+
+    # 3. Crypto & Commodities (FMP)
+    commodities = {"GOLD": "XAUUSD", "SILVER": "XAGUSD", "CRUDE": "CLUSD", "OIL": "CLUSD"}
+    if s in commodities: return commodities[s], "FMP"
     
-    if "NIFTY" in symbol or "NSEI" in symbol: return "NSEI.INDX", "EODHD"
-    if "BANK" in symbol: return "NSEBANK.INDX", "EODHD"
-    if "SENSEX" in symbol or "BSESN" in symbol: return "BSESN.INDX", "EODHD"
-    if ".INDX" in symbol: return symbol, "EODHD"
+    crypto = ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"]
+    if s in crypto: return f"{s}-USD.CC", "FMP"
+
+    # 4. Stocks (Default to Indian NSE if no suffix found)
+    # This fixes the "Stocks not working" issue.
+    if "." not in s:
+        return f"{s}.NSE", "EODHD"
+        
+    # Handle existing suffixes
+    if ".NS" in s: return s.replace(".NS", ".NSE"), "EODHD"
+    if ".BO" in s: return s.replace(".BO", ".BSE"), "EODHD"
     
-    if ".NS" in symbol: return symbol.replace(".NS", ".NSE"), "EODHD"
-    if ".BO" in symbol: return symbol.replace(".BO", ".BSE"), "EODHD"
-    return symbol, "EODHD"
+    return s, "EODHD"
 
 @router.post("/analyze")
 async def analyze_chart_image(chart_image: UploadFile = File(...), analysis_type: str = Form("stock")):
@@ -31,14 +48,18 @@ async def analyze_chart_image(chart_image: UploadFile = File(...), analysis_type
 
     image_bytes = await chart_image.read()
 
-    # 1. AI IDENTIFIES TICKER (Fast Vision)
+    # STEP 1: AI READS THE NAME (Fast)
     raw_symbol = await asyncio.to_thread(gemini_service.identify_ticker_from_image, image_bytes)
+    
     if not raw_symbol or "NOT_FOUND" in raw_symbol:
-        return {"identified_symbol": "NOT_FOUND", "analysis_data": "Could not identify ticker."}
+        return {"identified_symbol": "NOT_FOUND", "analysis_data": "Could not identify symbol text."}
 
+    # STEP 2: PYTHON MAPS THE NAME
     final_symbol, data_source = await resolve_symbol_smart(raw_symbol)
+    print(f"🔍 AI saw '{raw_symbol}' -> Mapped to '{final_symbol}'")
 
-    # 2. CACHED DATA FETCH (No extra API calls if already viewed)
+    # STEP 3: FETCH MASTER DATA (5-Min Candles)
+    # We grab 5-min data because we can mathematically build ALL other timeframes from it.
     cache_key = f"chart_base_v16_{final_symbol}_5M"
     chart_data = await redis_service.redis_client.get_cache(cache_key)
     
@@ -51,10 +72,11 @@ async def analyze_chart_image(chart_image: UploadFile = File(...), analysis_type
         
         if chart_data: await redis_service.redis_client.set_cache(cache_key, chart_data, 300)
 
-    if not chart_data or len(chart_data) < 20:
-        return {"identified_symbol": raw_symbol, "analysis_data": "Insufficient market data for analysis."}
+    if not chart_data or len(chart_data) < 50:
+        return {"identified_symbol": raw_symbol, "analysis_data": "Insufficient market data."}
 
-    # 3. LOCAL MATH ENGINE (Replaces AI for analysis - INSTANT!)
+    # STEP 4: MATHEMATICAL RESAMPLING & ANALYSIS
+    # We convert the 5m data into Daily data instantly for the report
     daily_data = technical_service.resample_chart_data(chart_data, "1D")
     df = pd.DataFrame(daily_data)
     
@@ -62,13 +84,18 @@ async def analyze_chart_image(chart_image: UploadFile = File(...), analysis_type
     pivots = technical_service.calculate_pivot_points(df)
     mas = technical_service.calculate_moving_averages(df)
 
+    # STEP 5: GENERATE QUANT REPORT
     report = quant_engine.generate_algorithmic_report(raw_symbol, "Daily", technicals, pivots, mas)
 
     frontend_sym = final_symbol.replace(".NSE", ".NS").replace(".BSE", ".BO")
     
-    return {"identified_symbol": frontend_sym, "analysis_data": report, "technical_data": {}}
+    return {
+        "identified_symbol": frontend_sym,
+        "analysis_data": report,
+        "technical_data": {} 
+    }
 
 @router.post("/analyze-pure")
 async def analyze_pure_chart(chart_image: UploadFile = File(...)):
-    image_bytes = await chart_image.read()
-    return {"analysis": await asyncio.to_thread(gemini_service.analyze_pure_vision, image_bytes)}
+    # Legacy endpoint
+    return {"analysis": "Please use the main upload feature."}

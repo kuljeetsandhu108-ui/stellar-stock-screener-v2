@@ -1,3 +1,4 @@
+from ..services import quant_engine
 import asyncio
 import math
 import pandas as pd
@@ -290,7 +291,7 @@ async def get_timeframe_analysis(symbol: str, request_data: TimeframeRequest = B
     mas = technical_service.calculate_moving_averages(df)
     
     # 6. AI Insight
-    analysis = await asyncio.to_thread(gemini_service.generate_timeframe_analysis, symbol, request_data.timeframe, technicals, pivots, mas)
+    analysis = await asyncio.to_thread(quant_engine.generate_algorithmic_report, symbol, request_data.timeframe, technicals, pivots, mas)
     
     return {"analysis": analysis}
 
@@ -702,7 +703,7 @@ async def get_all_timeframe_analysis(symbol: str):
             
             # C. Generate AI Insight
             analysis = await asyncio.to_thread(
-                gemini_service.generate_timeframe_analysis, 
+                quant_engine.generate_algorithmic_report, 
                 symbol, tf, techs, pivots, mas
             )
             return tf.lower(), analysis # Return key like "1h"
