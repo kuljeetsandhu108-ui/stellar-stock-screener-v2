@@ -1,330 +1,139 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
 import Card from '../common/Card';
-import axios from 'axios';
 import { NestedTabs, NestedTabPanel } from '../common/Tabs/NestedTabs';
 import DarvasScan from './DarvasScan';
 import BenjaminGrahamScan from './BenjaminGrahamScan';
 import FundamentalConclusion from './FundamentalConclusion';
 
-// --- Styled Components & Animations ---
+const fadeIn = keyframes`from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); }`;
 
-const fadeIn = keyframes`
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+const SectionContainer = styled.div`animation: ${fadeIn} 0.5s ease-out; padding: 0.5rem;`;
+const SectionTitle = styled.h3`font-size: 1.4rem; font-weight: 600; margin-bottom: 1.5rem; color: var(--color-text-primary);`;
+const Loader = styled.div`color: var(--color-primary); height: 200px; display: flex; align-items: center; justify-content: center; font-weight: 500;`;
+
+// --- THE NEW FLAWLESS TABLE UI ---
+const TableContainer = styled.div`width: 100%; overflow-x: auto; border-radius: 12px; border: 1px solid var(--color-border); background: var(--color-secondary); box-shadow: 0 4px 20px rgba(0,0,0,0.2);`;
+const StyledTable = styled.table`width: 100%; border-collapse: collapse; min-width: 600px;`;
+const Th = styled.th`text-align: left; padding: 16px; background: rgba(255, 255, 255, 0.03); color: var(--color-text-secondary); font-weight: 700; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 1px; border-bottom: 1px solid var(--color-border); &:last-child { text-align: right; }`;
+const Tr = styled.tr`border-bottom: 1px solid rgba(255, 255, 255, 0.05); transition: background 0.2s; &:last-child { border-bottom: none; } &:hover { background: rgba(255, 255, 255, 0.02); }`;
+const Td = styled.td`padding: 16px; font-size: 0.95rem; color: #C9D1D9; vertical-align: top; line-height: 1.6;`;
+
+const StatusTag = styled.span`
+  display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;
+  background: ${({ status }) => status.includes('PASS') || status.includes('BUY') || status.includes('WIDE') ? 'rgba(57, 211, 83, 0.1)' : status.includes('FAIL') || status.includes('SELL') || status.includes('NO') || status.includes('OVER') ? 'rgba(248, 81, 73, 0.1)' : 'rgba(235, 203, 139, 0.1)'};
+  color: ${({ status }) => status.includes('PASS') || status.includes('BUY') || status.includes('WIDE') ? '#3FB950' : status.includes('FAIL') || status.includes('SELL') || status.includes('NO') || status.includes('OVER') ? '#F85149' : '#EBCB8B'};
+  border: 1px solid ${({ status }) => status.includes('PASS') || status.includes('BUY') || status.includes('WIDE') ? '#3FB950' : status.includes('FAIL') || status.includes('SELL') || status.includes('NO') || status.includes('OVER') ? '#F85149' : '#EBCB8B'};
 `;
 
-const SectionContainer = styled.div`
-  animation: ${fadeIn} 0.5s ease-out;
-`;
+const PiotroskiGrid = styled.div`display: grid; grid-template-columns: 1fr 2fr; gap: 2rem; align-items: center; @media (max-width: 768px) { grid-template-columns: 1fr; }`;
+const ScoreCard = styled.div`display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem; background: rgba(255,255,255,0.02); border-radius: 50%; width: 180px; height: 180px; margin: 0 auto; border: 4px solid ${({ color }) => color}; box-shadow: 0 0 30px ${({ color }) => color}22;`;
+const CriteriaList = styled.ul`list-style: none; padding: 0; li { margin-bottom: 0.8rem; display: flex; align-items: center; color: var(--color-text-secondary); &::before { content: '✓'; color: #3FB950; margin-right: 10px; font-weight: bold; } }`;
 
-const SectionTitle = styled.h3`
-  font-size: 1.5rem;
-  font-weight: 600;
-  margin-bottom: 1.5rem;
-  color: var(--color-text-primary);
-`;
-
-const PiotroskiGrid = styled.div`
-  display: grid;
-  grid-template-columns: 1fr 2fr;
-  gap: 2rem;
-  align-items: center;
-  @media (max-width: 768px) {
-    grid-template-columns: 1fr;
-  }
-`;
-
-const ScoreCard = styled.div`
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  background-color: var(--color-background);
-  border-radius: 50%;
-  width: 180px;
-  height: 180px;
-  border: 4px solid ${({ scoreColor }) => scoreColor};
-  margin: 0 auto;
-`;
-
-const ScoreValue = styled.span`
-  font-size: 4rem;
-  font-weight: 800;
-  color: ${({ scoreColor }) => scoreColor};
-`;
-
-const ScoreLabel = styled.span`
-  font-size: 1rem;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-`;
-
-const CriteriaList = styled.ul`
-  list-style-type: none;
-  padding-left: 0;
-`;
-
-const CriteriaListItem = styled.li`
-  margin-bottom: 0.75rem;
-  color: var(--color-text-primary);
-  display: flex;
-  align-items: center;
-  &::before {
-    content: '✓';
-    color: var(--color-success);
-    margin-right: 12px;
-    font-size: 1.2rem;
-    font-weight: bold;
-  }
-`;
-
-// --- Generic Table/Grid Styles ---
-const AssessmentTable = styled.div`
-  display: grid;
-  gap: 1px;
-  background-color: var(--color-border);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  overflow: hidden;
-
-  /* Mobile: Stack vertically (1 column) */
-  grid-template-columns: 100%;
-
-  /* Desktop: Side-by-side (2 columns) */
-  @media (min-width: 768px) {
-    grid-template-columns: 1fr 3fr;
-  }
-
-  & > div {
-    background-color: var(--color-secondary);
-    padding: 1rem;
-    line-height: 1.5;
-  }
-
-  /* Special styling for headers to look good when stacked */
-  & > .header {
-    font-weight: 600;
-    color: var(--color-primary); /* Make headers pop on mobile */
-    background-color: var(--color-background);
-    
-    /* On mobile, headers might look odd in the grid flow, 
-       but we'll keep them for context or you can hide them with: 
-       @media (max-width: 768px) { display: none; } 
-       if you prefer a cleaner look. For now, color distinction is enough. */
-  }
-`;
-
-// --- NEW RESPONSIVE STYLES ---
-
-// 1. The Container for the rows
-const CanslimContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid var(--color-border);
-
-  /* On Mobile: Remove border and add gap for card look */
-  @media (max-width: 768px) {
-    border: none;
-    gap: 1rem;
-    overflow: visible;
-    border-radius: 0;
-  }
-`;
-
-// 2. The Header Row (Visible on Desktop, Hidden on Mobile)
-const DesktopHeader = styled.div`
-  display: grid;
-  grid-template-columns: 1fr 3fr 1fr;
-  background-color: var(--color-background);
-  padding: 1rem;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  border-bottom: 1px solid var(--color-border);
-
-  @media (max-width: 768px) {
-    display: none; /* Hide on mobile */
-  }
-`;
-
-// 3. The Data Row (Table Row on Desktop, Card on Mobile)
-const CanslimRow = styled.div`
-  display: grid;
-  grid-template-columns: 1fr 3fr 1fr;
-  background-color: var(--color-secondary);
-  
-  /* Desktop: Align items center */
-  & > div {
-    padding: 1rem;
-    display: flex;
-    align-items: center;
-  }
-
-  /* --- MOBILE TRANSFORMATION --- */
-  @media (max-width: 768px) {
-    display: flex;
-    flex-direction: column;
-    background-color: var(--color-secondary);
-    border: 1px solid var(--color-border);
-    border-radius: 12px;
-    padding: 0; /* Reset padding for internal layout */
-    position: relative;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-
-    /* Criteria (Header of the Card) */
-    & > div:nth-child(1) {
-      font-weight: 700;
-      color: var(--color-primary);
-      border-bottom: 1px solid var(--color-border);
-      background-color: rgba(88, 166, 255, 0.05);
-      padding: 1rem;
-    }
-
-    /* Assessment (Body of the Card) */
-    & > div:nth-child(2) {
-      color: var(--color-text-secondary);
-      line-height: 1.6;
-      padding: 1rem;
-    }
-
-    /* Result (Footer Badge of the Card) */
-    & > div:nth-child(3) {
-      position: absolute;
-      top: 1rem;
-      right: 1rem;
-      padding: 0;
-      font-size: 0.9rem;
-      background: none;
-    }
-  }
-`;
-
-// 4. The Result Text Colorer
-const ResultText = styled.span`
-  font-weight: 800;
-  text-transform: uppercase;
-  color: ${({ result }) => {
-    if (!result) return 'var(--color-text-secondary)';
-    const res = result.toLowerCase();
-    if (res.includes('pass') || res.includes('yes')) return 'var(--color-success)';
-    if (res.includes('fail') || res.includes('no')) return 'var(--color-danger)';
-    return 'var(--color-text-secondary)';
-  }};
-`;
-
-
-const Loader = styled.div`
-  color: var(--color-primary);
-  animation: ${fadeIn} 0.5s ease-in;
-  height: 150px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-`;
-
-// --- Helper to parse "key: value" or "bullet point" formats if table parsing fails ---
-const parseTextFallback = (text) => {
-    if (!text) return [];
-    const lines = text.split('\n');
-    const items = [];
-    lines.forEach(line => {
-        const clean = line.trim();
-        // Look for "Key: Value" pattern or "- Value"
-        if (clean.includes(':')) {
-            const parts = clean.split(':');
-            items.push([parts[0].replace(/^[*-]\s*/, '').trim(), parts.slice(1).join(':').trim(), '']);
-        } else if (clean.startsWith('-') || clean.startsWith('*')) {
-             items.push(['Point', clean.replace(/^[*-]\s*/, '').trim(), '']);
-        }
+// Deep parsing logic ensures strings are chopped exactly at the | line
+const parseTableData = (text) => {
+    if (!text) return[];
+    const normalized = text.replace(/\\\\n/g, '\n');
+    return normalized.split('\n').filter(line => line.includes('|')).map(line => {
+        const parts = line.split('|');
+        const clean = (str) => str ? str.replace(/\*/g, '').trim() : '';
+        return { col1: clean(parts[0]), col2: clean(parts[1]), col3: clean(parts[2]) };
     });
-    return items;
 };
 
-
-// --- The Final Master Fundamentals Component ---
-
-const Fundamentals = ({
-  symbol,
-  profile,
-  quote,
-  keyMetrics,
-  piotroskiData,
-  darvasScanData,
-  grahamScanData,
-  quarterlyEarnings,
-  annualEarnings,
-  shareholding,
-  delay,
-  philosophyAssessment,
-  canslimAssessment,
-  conclusion,
-  isLoadingPhilosophy,
-  isLoadingCanslim,
-  isLoadingConclusion
-}) => {
-
-  // --- Data Processing for Piotroski Score ---
-  const { score, criteria } = piotroskiData || {};
-  const getScoreColor = () => {
-    if (score >= 7) return 'var(--color-success)';
-    if (score >= 4) return '#EDBB5A';
-    return 'var(--color-danger)';
-  };
-  const scoreColor = getScoreColor();
-  
-  // --- ROBUST PARSER FOR VALUE INVESTING ---
-  const parsedPhilosophy = useMemo(() => {
-    if (!philosophyAssessment || typeof philosophyAssessment !== 'string') return [];
-    
-    // 1. Try Table Parsing
-    const tableRows = philosophyAssessment.split('\n')
-      .filter(line => line.includes('|'))
-      .map(row => row.split('|').map(c => c.trim()))
-      .filter(r => r.length > 2 && !r[1].includes('---') && !r[1].toLowerCase().includes('formula'));
-    
-    if (tableRows.length > 0) return tableRows;
-
-    // 2. Fallback to Text Parsing
-    return parseTextFallback(philosophyAssessment);
-  }, [philosophyAssessment]);
-  
-  // --- ROBUST PARSER FOR CANSLIM ---
-  const parsedCanslim = useMemo(() => {
-    if (!canslimAssessment || typeof canslimAssessment !== 'string') return [];
-    
-    // 1. Try Table Parsing
-    const tableRows = canslimAssessment.split('\n')
-      .filter(line => line.includes('|'))
-      .map(row => row.split('|').map(c => c.trim()))
-      .filter(r => r.length > 3 && !r[1].includes('---') && !r[1].toLowerCase().includes('criteria'));
-      
-    if (tableRows.length > 0) return tableRows;
-
-    // 2. Fallback to Text Parsing
-    return parseTextFallback(canslimAssessment);
-  }, [canslimAssessment]);
+const Fundamentals = ({ symbol, profile, quote, keyMetrics, piotroskiData, darvasScanData, grahamScanData, quarterlyEarnings, annualEarnings, shareholding, philosophyAssessment, canslimAssessment, conclusion, isLoadingPhilosophy, isLoadingCanslim, isLoadingConclusion }) => {
+  const canslimRows = useMemo(() => parseTableData(canslimAssessment),[canslimAssessment]);
+  const valueRows = useMemo(() => parseTableData(philosophyAssessment),[philosophyAssessment]);
+  const { score = 0, criteria =[] } = piotroskiData || {};
+  const scoreColor = score >= 7 ? '#3FB950' : score >= 4 ? '#EDBB5A' : '#F85149';
 
   return (
     <Card>
       <NestedTabs>
-        
         <NestedTabPanel label="Conclusion">
           <SectionContainer>
-            {isLoadingConclusion ? (
-              <Loader>Synthesizing all fundamental data...</Loader>
-            ) : (
-              <FundamentalConclusion conclusionData={conclusion} />
+            {isLoadingConclusion ? <Loader>Calculating Final Verdict...</Loader> : <FundamentalConclusion conclusionData={conclusion} />}
+          </SectionContainer>
+        </NestedTabPanel>
+
+        <NestedTabPanel label="CANSLIM">
+          <SectionContainer>
+            <SectionTitle>CANSLIM Checklist</SectionTitle>
+            {isLoadingCanslim ? <Loader>Running Quantitative Strategy...</Loader> : (
+              <TableContainer>
+                <StyledTable>
+                  <thead>
+                    <tr>
+                      <Th style={{width: '25%'}}>Criteria</Th>
+                      <Th style={{width: '55%'}}>Quantitative Assessment</Th>
+                      <Th style={{width: '20%', textAlign: 'right'}}>Verdict</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {canslimRows.map((row, i) => (
+                      <Tr key={i}>
+                        <Td style={{fontWeight: '600', color: 'var(--color-primary)', borderRight: '1px solid rgba(255,255,255,0.05)'}}>
+                            {row.col1}
+                        </Td>
+                        <Td>{row.col2}</Td>
+                        <Td style={{textAlign: 'right'}}>
+                            {/* Renders the perfect Green/Red pill and strips out emojis for cleanliness */}
+                            {row.col3 && <StatusTag status={row.col3}>{row.col3.replace(/[❌✅⚠️]/g, '').trim()}</StatusTag>}
+                        </Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </StyledTable>
+              </TableContainer>
             )}
+          </SectionContainer>
+        </NestedTabPanel>
+
+        <NestedTabPanel label="Value Investing">
+          <SectionContainer>
+            <SectionTitle>Valuation Models</SectionTitle>
+            {isLoadingPhilosophy ? <Loader>Computing Intrinsic Value...</Loader> : (
+              <TableContainer>
+                <StyledTable>
+                  <thead>
+                    <tr>
+                      <Th style={{width: '35%'}}>Formula / Strategy</Th>
+                      <Th>Mathematical Analysis</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {valueRows.map((row, i) => (
+                      <Tr key={i}>
+                        <Td style={{fontWeight: '600', color: 'var(--color-primary)', borderRight: '1px solid rgba(255,255,255,0.05)'}}>
+                            {row.col1}
+                        </Td>
+                        <Td>
+                            <span style={{fontWeight: '500'}}>{row.col2}</span>
+                        </Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </StyledTable>
+              </TableContainer>
+            )}
+          </SectionContainer>
+        </NestedTabPanel>
+
+        <NestedTabPanel label="Piotroski Score">
+          <SectionContainer>
+            <SectionTitle>Piotroski F-Score (Financial Health)</SectionTitle>
+            <PiotroskiGrid>
+              <ScoreCard color={scoreColor}>
+                <span style={{fontSize: '4rem', fontWeight: 800, color: scoreColor}}>{score}</span>
+                <span style={{color: '#8B949E'}}>/ 9</span>
+              </ScoreCard>
+              <div>
+                <p style={{marginBottom: '1rem', color: '#C9D1D9'}}>Scores based on 9 points of Profitability, Leverage, and Operating Efficiency.</p>
+                <CriteriaList>
+                  {criteria.map((item, i) => <li key={i}>{item}</li>)}
+                </CriteriaList>
+              </div>
+            </PiotroskiGrid>
           </SectionContainer>
         </NestedTabPanel>
 
@@ -333,97 +142,13 @@ const Fundamentals = ({
             <BenjaminGrahamScan scanData={grahamScanData} />
           </SectionContainer>
         </NestedTabPanel>
-        
-        <NestedTabPanel label="Piotroski Scan">
-          <SectionContainer>
-            <SectionTitle>Piotroski F-Score</SectionTitle>
-            {piotroskiData && piotroskiData.score !== undefined ? (
-              <PiotroskiGrid>
-                <ScoreCard scoreColor={scoreColor}>
-                  <ScoreValue scoreColor={scoreColor}>{score}</ScoreValue>
-                  <ScoreLabel>/ 9</ScoreLabel>
-                </ScoreCard>
-                <div>
-                  <p style={{ color: 'var(--color-text-secondary)', marginBottom: '1.5rem', lineHeight: 1.6 }}>
-                    The F-Score reflects financial strength based on 9 criteria. A high score (7-9) suggests a healthy company.
-                  </p>
-                  <CriteriaList>
-                    {criteria && criteria.map((item, index) => ( <CriteriaListItem key={index}>{item}</CriteriaListItem> ))}
-                  </CriteriaList>
-                </div>
-              </PiotroskiGrid>
-            ) : <p>Piotroski F-Score data not available for this stock.</p>}
-          </SectionContainer>
-        </NestedTabPanel>
-
-        <NestedTabPanel label="CANSLIM">
-          <SectionContainer>
-            <SectionTitle>CANSLIM Analysis (William J. O'Neil)</SectionTitle>
-            {isLoadingCanslim ? ( 
-              <Loader>Generating CANSLIM assessment...</Loader> 
-            ) : (
-              parsedCanslim.length > 0 ? (
-                <CanslimContainer>
-                  {/* Header only shows on Desktop */}
-                  <DesktopHeader>
-                    <div>Criteria</div>
-                    <div>Assessment</div>
-                    <div>Result</div>
-                  </DesktopHeader>
-                  
-                  {/* Rows map to Cards on Mobile */}
-                  {parsedCanslim.map((row, rowIndex) => (
-                    <CanslimRow key={rowIndex}>
-                      {/* Criteria Name */}
-                      <div>{row[0] === 'Point' ? '' : row[1]}</div>
-                      
-                      {/* Assessment Text */}
-                      <div>{row[0] === 'Point' ? row[1] : row[2]}</div>
-                      
-                      {/* Result (Pass/Fail) */}
-                      <div>
-                        <ResultText result={row[3] || row[2]}>
-                            {row[3] || ''}
-                        </ResultText>
-                      </div>
-                    </CanslimRow>
-                  ))}
-                </CanslimContainer>
-              ) : <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{canslimAssessment || "Data insufficient for CANSLIM analysis."}</p>
-            )}
-          </SectionContainer>
-        </NestedTabPanel>
 
         <NestedTabPanel label="Darvas Scan">
-            <SectionContainer>
-                <SectionTitle>Darvas Box Scan</SectionTitle>
-                <p style={{ color: 'var(--color-text-secondary)', lineHeight: 1.6, marginTop: '-1rem', marginBottom: '1.5rem' }}>
-                  A momentum strategy that identifies stocks consolidating in a narrow price range ("box") near their 52-week high.
-                </p>
-                <DarvasScan scanData={darvasScanData} currency={profile?.currency} />
-            </SectionContainer>
+          <SectionContainer>
+            <SectionTitle>Darvas Box Momentum</SectionTitle>
+            <DarvasScan scanData={darvasScanData} currency={profile?.currency} />
+          </SectionContainer>
         </NestedTabPanel>
-
-        <NestedTabPanel label="Value Investing">
-            <SectionContainer>
-                <SectionTitle>Investment Philosophy Summary</SectionTitle>
-                {isLoadingPhilosophy ? ( <Loader>Generating AI analysis summary...</Loader> ) : (
-                  parsedPhilosophy.length > 0 ? (
-                    <AssessmentTable>
-                      <div className="header">Formula</div>
-                      <div className="header">Assessment</div>
-                      {parsedPhilosophy.map((row, rowIndex) => (
-                        <React.Fragment key={rowIndex}>
-                          <div>{row[0] === 'Point' ? '' : row[1]}</div>
-                          <div>{row[0] === 'Point' ? row[1] : row[2]}</div>
-                        </React.Fragment>
-                      ))}
-                    </AssessmentTable>
-                  ) : <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{philosophyAssessment || "Data insufficient for Investment Philosophy analysis."}</p>
-                )}
-            </SectionContainer>
-        </NestedTabPanel>
-        
       </NestedTabs>
     </Card>
   );

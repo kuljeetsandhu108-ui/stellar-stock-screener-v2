@@ -395,9 +395,9 @@ const ChartAnalysis = ({ analysisData }) => {
     if (!currentText || typeof currentText !== 'string') return null;
     const rawKeys = ['TREND', 'PATTERNS', 'LEVELS', 'VOLUME', 'MOMENTUM', 'INDICATORS', 'CONCLUSION', 'ACTION', 'ENTRY_ZONE', 'STOP_LOSS', 'TARGET_1', 'TARGET_2', 'RISK_REWARD', 'CONFIDENCE', 'RATIONALE'];
     const sections = {};
-    let text = "\n" + currentText.replace(/\*\*/g, '').replace(/-- TRADE TICKET --/g, '');
+    let text = "\n" + currentText.replace(/\\n/g, '\n').replace(/\*\*/g, '').replace(/-- TRADE TICKET --/g, '');
     rawKeys.forEach(key => {
-      const regex = new RegExp(`(?:^|\\n)\\s*${key}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*[A-Z_]{3,}\\s*:|$)`, 'i');
+      const regex = new RegExp(`(?:^|\\n)\\s*${key}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*[A-Z0-9_]{3,}\\s*:|$)`, 'i');
       const match = text.match(regex);
       if (match) sections[key] = match[1].trim();
     });
@@ -471,10 +471,32 @@ const ChartAnalysis = ({ analysisData }) => {
                           </div>
                       </TicketHeader>
                       <MetricGrid>
-                          <MetricBox><MetricLabel><FaCrosshairs /> Entry Zone</MetricLabel><MetricVal color="#58A6FF">{parsed.ENTRY_ZONE}</MetricVal></MetricBox>
-                          <MetricBox><MetricLabel><FaStopCircle /> Invalidation</MetricLabel><MetricVal color="#F85149">{parsed.STOP_LOSS}</MetricVal></MetricBox>
-                          <MetricBox><MetricLabel><FaMoneyBillWave /> Target 1</MetricLabel><MetricVal color="#3FB950">{parsed.TARGET_1}</MetricVal></MetricBox>
-                          <MetricBox><MetricLabel><FaChartLine /> R:R Ratio</MetricLabel><MetricVal color="#EBCB8B">{parsed.RISK_REWARD}</MetricVal></MetricBox>
+                          <MetricBox>
+                              <MetricLabel><FaCrosshairs /> Entry Zone</MetricLabel>
+                              <MetricVal color="#58A6FF">{parsed.ENTRY_ZONE}</MetricVal>
+                          </MetricBox>
+                          <MetricBox>
+                              <MetricLabel><FaStopCircle /> Stop Loss (SL)</MetricLabel>
+                              <MetricVal color="#F85149">{parsed.STOP_LOSS}</MetricVal>
+                          </MetricBox>
+                          <MetricBox style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <MetricLabel><FaMoneyBillWave /> Take Profit Targets</MetricLabel>
+                              <div style={{display:'flex', justifyContent:'space-around', width: '100%', marginTop: '4px'}}>
+                                  <div style={{display:'flex', flexDirection:'column', alignItems:'center'}}>
+                                      <span style={{fontSize:'0.65rem', color:'#8B949E', fontWeight:'bold', letterSpacing:'1px'}}>T1 (1:1.5)</span>
+                                      <span style={{color:'#3FB950', fontWeight:'700', fontSize:'1.15rem', fontFamily:'Roboto Mono'}}>{parsed.TARGET_1}</span>
+                                  </div>
+                                  <div style={{width: '1px', backgroundColor: 'rgba(255,255,255,0.1)', height: '100%'}}></div>
+                                  <div style={{display:'flex', flexDirection:'column', alignItems:'center'}}>
+                                      <span style={{fontSize:'0.65rem', color:'#8B949E', fontWeight:'bold', letterSpacing:'1px'}}>T2 (1:3.0)</span>
+                                      <span style={{color:'#17C3B2', fontWeight:'700', fontSize:'1.15rem', fontFamily:'Roboto Mono'}}>{parsed.TARGET_2}</span>
+                                  </div>
+                              </div>
+                          </MetricBox>
+                          <MetricBox>
+                              <MetricLabel><FaChartLine /> Risk / Reward</MetricLabel>
+                              <MetricVal color="#EBCB8B" style={{fontSize: '1.05rem'}}>{parsed.RISK_REWARD}</MetricVal>
+                          </MetricBox>
                       </MetricGrid>
                       <RationaleBox>
                           <strong><FaRobot style={{marginRight:'8px'}}/> Mathematical Rationale</strong>
