@@ -1,72 +1,83 @@
 def generate_algorithmic_report(symbol, timeframe, technicals, pivots, mas):
-    """Generates Trading Setup using Pure Math with ATR Risk Management (0 API Calls)"""
+    """
+    Institutional Quant Engine using ICT (Inner Circle Trader) concepts, 
+    Mean Reversion, and Volatility Targeting.
+    """
     try:
         # 1. Safe Extraction
         price = float(technicals.get('price_action', {}).get('current_close', 0))
+        if price == 0: return "Data missing.\nACTION: WAIT\nRATIONALE: Price is 0."
+        
         rsi = float(technicals.get('rsi') or 50)
         macd = float(technicals.get('macd') or 0)
         macd_signal = float(technicals.get('macdsignal') or 0)
+        atr = float(technicals.get('atr') or (price * 0.02)) # Fallback ATR is 2%
         
-        # Extract ATR for dynamic volatility-based stops. Fallback to 1.5% if missing.
-        atr = float(technicals.get('atr') or (price * 0.015))
-        
+        ema20 = float(mas.get('20') or price)
         ema50 = float(mas.get('50') or price)
         ema200 = float(mas.get('200') or price)
         
         s1 = float(pivots.get('classic', {}).get('s1') or price * 0.98)
+        s2 = float(pivots.get('classic', {}).get('s2') or price * 0.95)
         r1 = float(pivots.get('classic', {}).get('r1') or price * 1.02)
+        r2 = float(pivots.get('classic', {}).get('r2') or price * 1.05)
+        pp = float(pivots.get('classic', {}).get('pp') or price)
 
-        # 2. Math Logic (Trend & Momentum)
+        # 2. INSTITUTIONAL TREND ANALYSIS (Moving Average Ribbon)
         trend = "Consolidation / Range"
-        if price > ema200 and ema50 > ema200: trend = "Strong Uptrend"
-        elif price < ema200 and ema50 < ema200: trend = "Strong Downtrend"
+        patterns = f"Price is currently oscillating around the Pivot Point ({pp:.2f})."
+        
+        if price > ema20 and ema20 > ema50 and ema50 > ema200:
+            trend = "Aggressive Bullish Trend"
+            patterns = f"Perfect Moving Average alignment (Price > 20 > 50 > 200). Institutional accumulation phase."
+        elif price < ema20 and ema20 < ema50 and ema50 < ema200:
+            trend = "Aggressive Bearish Trend"
+            patterns = f"Negative Moving Average alignment. Institutional distribution phase."
+        elif price > ema200 and price < ema50:
+            trend = "Bullish Pullback"
+            patterns = f"Macro uptrend intact (Price > 200 EMA), but experiencing a short-term liquidity sweep."
 
+        # 3. MOMENTUM & DIVERGENCE
         momentum = "Neutral"
-        if rsi > 60 and macd > macd_signal: momentum = "Bullish Momentum"
-        elif rsi < 40 and macd < macd_signal: momentum = "Bearish Momentum"
-        elif rsi >= 70: momentum = "Overbought"
-        elif rsi <= 30: momentum = "Oversold"
+        if rsi > 65 and macd > macd_signal: momentum = "Strong Bullish Expansion"
+        elif rsi < 35 and macd < macd_signal: momentum = "Strong Bearish Expansion"
+        elif rsi > 75: momentum = "Overbought (Mean Reversion Risk)"
+        elif rsi < 25: momentum = "Oversold (Liquidity Grab / Bounce Risk)"
 
-        # 3. Action & Rationale
+        # 4. INSTITUTIONAL TRADE LOGIC
         action = "WAIT"
-        rationale = "Market is lacking clear algorithmic direction. Capital preservation recommended."
-
-        if "Uptrend" in trend and rsi < 70:
+        rationale = "Price action is trapped in a low-probability chop zone. Awaiting displacement."
+        
+        # Bullish Setup: Trend Continuation OR Deep Mean Reversion
+        if ("Bullish" in trend and rsi < 65) or rsi < 25:
             action = "BUY"
-            rationale = "Price is trading above key moving averages with confirmed bullish momentum."
-        elif "Downtrend" in trend and rsi > 30:
-            action = "SELL"
-            rationale = "Bearish structure intact. Selling on momentum continuation."
-        elif rsi <= 30:
-            action = "BUY"
-            rationale = "Algorithmic mean-reversion setup triggered by extreme oversold RSI."
-        elif rsi >= 70:
-            action = "SELL"
-            rationale = "Algorithmic mean-reversion setup triggered by extreme overbought RSI."
-
-        # 4. Hardcore ATR Risk Management Sizing
-        if action == "BUY":
-            stop_loss = price - (atr * 1.5) # Stop is 1.5x Average True Range below entry
+            stop_loss = price - (atr * 1.5) # Dynamic volatility stop
             risk = price - stop_loss
-            target_1 = price + (risk * 1.5) # 1:1.5 R:R
-            target_2 = price + (risk * 3.0) # 1:3.0 R:R
-            rr_text = "1:1.5 (T1) | 1:3.0 (T2)"
-        elif action == "SELL":
-            stop_loss = price + (atr * 1.5) # Stop is 1.5x Average True Range above entry
+            target_1 = price + (risk * 1.5) 
+            target_2 = price + (risk * 3.0) 
+            rationale = "High-probability long setup based on algorithmic trend alignment and available upside liquidity."
+            
+        # Bearish Setup: Trend Continuation OR Overbought Rejection
+        elif ("Bearish" in trend and rsi > 35) or rsi > 75:
+            action = "SELL"
+            stop_loss = price + (atr * 1.5) 
             risk = stop_loss - price
             target_1 = price - (risk * 1.5)
             target_2 = price - (risk * 3.0)
-            rr_text = "1:1.5 (T1) | 1:3.0 (T2)"
+            rationale = "High-probability short setup targeting lower liquidity pools. Selling into weakness."
+            
         else:
             stop_loss = s1
             target_1 = r1
-            target_2 = r1 * 1.02
+            target_2 = r2
             rr_text = "N/A"
 
-        # 5. Flawless Formatting (Fixes the UI bleeding bug completely)
+        rr_text = "1:1.5 (T1) | 1:3.0 (T2)" if action in ["BUY", "SELL"] else "N/A"
+
+        # 5. FLAWLESS FORMATTING
         lines =[
             f"TREND: {trend}",
-            f"PATTERNS: Algorithmic structure based on {timeframe} data.",
+            f"PATTERNS: {patterns}",
             f"MOMENTUM: {momentum}",
             f"LEVELS: Key Support at {s1:.2f}, Key Resistance at {r1:.2f}.",
             "VOLUME: Algorithm scanning standard deviations.",
@@ -82,7 +93,6 @@ def generate_algorithmic_report(symbol, timeframe, technicals, pivots, mas):
             f"RATIONALE: {rationale}"
         ]
         
-        # We join with hard newline characters to ensure the React regex splits them perfectly
         return "\n".join(lines)
         
     except Exception as e:

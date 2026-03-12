@@ -126,7 +126,7 @@ const StockDetailPage = () => {
   // --- ASSET DETECTION ---
   const isCrypto = symbol.includes('.CC') || symbol.includes('BTC') || symbol.includes('ETH') || (symbol.includes('USD') && !symbol.includes('.'));
   const isIndex = symbol.includes('.INDX') || symbol.includes('^');
-  const isCommodity = symbol.includes('GOLD') || symbol.includes('OIL') || symbol.includes('XAU') || symbol.includes('USO') || symbol.includes('CLUSD');
+  const isCommodity = symbol.includes('GOLD') || symbol.includes('OIL') || symbol.includes('XAU') || symbol.includes('XAG') || symbol.includes('SILVER') || symbol.includes('USO') || symbol.includes('CLUSD') || symbol.includes('UKOIL') || symbol.includes('NGUSD');
   
   // Logic: Stocks have financials. Crypto/Indices/Commodities do not.
   const isStock = !isCrypto && !isIndex && !isCommodity;

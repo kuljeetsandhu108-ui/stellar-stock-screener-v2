@@ -101,3 +101,37 @@ def generate_investment_philosophy_assessment(company_name, metrics): return "Us
 def generate_canslim_assessment(company_name, quote, q, y, i): return "Use Local Math Engine"
 def generate_fundamental_conclusion(company_name, p, g, d, k, n): return "Use Local Math Engine"
 def generate_timeframe_analysis(symbol, timeframe, technicals, pivots, mas): return "Use Local Quant Engine"
+
+
+def analyze_chart_technicals_from_image(image_bytes: bytes):
+    try:
+        configure_gemini_for_request()
+        model = genai.GenerativeModel(MODEL_NAME)
+        prompt = '''Act as an expert Chartered Market Technician. Analyze this stock chart image.
+        Provide a professional technical analysis and a precision trade setup based on the timeframe shown in the image.
+
+        STRICT RESPONSE FORMAT (Do not deviate):
+
+        TREND:[Uptrend / Downtrend / Sideways]
+        PATTERNS: [List key patterns or "None"]
+        MOMENTUM: [Bullish / Bearish / Neutral]
+        LEVELS:[List key Support and Resistance price levels visible]
+        VOLUME: [Describe volume behavior]
+        INDICATORS: [Mention visible indicators]
+        CONCLUSION: [A professional 2-sentence summary]
+        
+        -- TRADE TICKET --
+        ACTION:[BUY / SELL / WAIT]
+        ENTRY_ZONE:[Price ONLY. e.g., "150.00"]
+        STOP_LOSS:[Price ONLY. e.g., "145.00"]
+        TARGET_1: [Price ONLY. e.g., "160.00"]
+        TARGET_2: [Price ONLY. e.g., "165.00"]
+        RISK_REWARD: [Ratio. e.g., "1:3"]
+        CONFIDENCE:[High / Medium / Low]
+        RATIONALE: [One clear sentence explaining the strategy.]'''
+        
+        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
+        return response.text.strip()
+    except Exception as e:
+        print(f"❌ VISION CHART ANALYSIS ERROR: {e}")
+        return "TREND: Error\nACTION: WAIT\nRATIONALE: AI failed to process image."

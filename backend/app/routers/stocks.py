@@ -70,10 +70,12 @@ TRADINGVIEW_OVERRIDE_MAP = {
     "SBIN.NS": "NSE:SBIN",
     "INFY.NS": "NSE:INFY",
     "TCS.NS": "NSE:TCS",
-    "BTC-USD": "BINANCE:BTCUSD",
-    "ETH-USD": "BINANCE:ETHUSD",
-    "XAU-USD.CC": "OANDA:XAUUSD",
-    "USO.US": "TVC:USOIL"
+    "BTC-USD.CC": "BINANCE:BTCUSD",
+    "ETH-USD.CC": "BINANCE:ETHUSD",
+    "XAUUSD": "OANDA:XAUUSD",
+    "XAGUSD": "OANDA:XAGUSD",
+    "CLUSD": "TVC:USOIL",
+    "UKOIL": "TVC:UKOIL"
 }
 
 # ==========================================
@@ -81,28 +83,69 @@ TRADINGVIEW_OVERRIDE_MAP = {
 # ==========================================
 
 def identify_asset_class(symbol: str):
-    """
-    Maps ANY ticker format (Yahoo, TradingView, Colloquial) to our Internal Data Sources.
-    Returns: (Source_System, Clean_Ticker)
-    """
+    from urllib.parse import unquote
     s = unquote(symbol).upper().strip()
     
-    # --- A. COMMODITIES (Yahoo/TV -> FMP) ---
-    if s in ["CL=F", "CL%3DF", "USOIL", "WTI", "CRUDE", "CRUDEOIL", "OIL", "CLUSD"]: return "FMP", "CLUSD"
-    if s in ["BZ=F", "BRENT", "UKOIL", "BRENTOIL"]: return "FMP", "UKOIL"
-    if s in ["GC=F", "GOLD", "XAU", "XAUUSD"]: return "FMP", "XAUUSD"
-    if s in ["SI=F", "SILVER", "XAG", "XAGUSD"]: return "FMP", "XAGUSD"
-    if s in ["NG=F", "GAS", "NATGAS", "NGUSD", "UNG", "UNG.US"]: return "FMP", "NGUSD"
-    if s in ["HG=F", "COPPER", "HGUSD"]: return "FMP", "HGUSD"
-    if s in ["PL=F", "PLATINUM", "PLUSD"]: return "FMP", "PLUSD"
+    crypto_map = {"BITCOIN": "BTC", "ETHEREUM": "ETH", "SOLANA": "SOL", "RIPPLE": "XRP", "DOGECOIN": "DOGE"}
+    for name, short in crypto_map.items():
+        if name in s: s = s.replace(name, short)
+        
+    commodities_map = {
+        "GOLD": "XAUUSD", "XAU": "XAUUSD", "XAUUSD": "XAUUSD", "GC=F": "XAUUSD",
+        "SILVER": "XAGUSD", "XAG": "XAGUSD", "XAGUSD": "XAGUSD", "SI=F": "XAGUSD",
+        "CRUDE": "CLUSD", "OIL": "CLUSD", "WTI": "CLUSD", "CLUSD": "CLUSD", "CL=F": "CLUSD",
+        "BRENT": "UKOIL", "UKOIL": "UKOIL",
+        "NATURALGAS": "NGUSD", "NGUSD": "NGUSD", "NG=F": "NGUSD"
+    }
+    if s in commodities_map: return "FMP", commodities_map[s]
+    
+    crypto_shorts =["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "MATIC", "BNB", "AVAX", "DOT", "LTC", "SHIB"]
+    base = s.replace("-USD.CC", "").replace("-USD", "").replace("USD", "")
+    if base in crypto_shorts: return "EODHD", f"{base}-USD.CC"
+        
+    if "NIFTY" in s or "NSEI" in s: return "EODHD", "NSEI.INDX"
+    if "SENSEX" in s or "BSESN" in s: return "EODHD", "BSESN.INDX"
+    if "BANK" in s: return "EODHD", "NSEBANK.INDX"
+    if ".INDX" in s: return "EODHD", s
 
-    # --- B. CRYPTO (Coinbase/Yahoo -> FMP) ---
-    if ".CC" in s or s in ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "MATIC", "DOT", "LTC"]:
-        clean = s.replace("-USD.CC", "USD").replace(".CC", "")
-        if not clean.endswith("USD"): clean += "USD"
-        return "FMP", clean
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    
+    return "EODHD", s
 
-    # --- C. STOCKS / INDICES (Default -> EODHD) ---
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    
+    return "EODHD", s
+
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    
+    return "EODHD", s
+
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    
+    return "EODHD", s
+
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    return "EODHD", s
+
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    
+    return "EODHD", s 
+    crypto_shorts =["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "MATIC", "BNB", "AVAX", "DOT", "LTC", "SHIB"]
+    for c in crypto_shorts:
+        if s == c or s == f"{c}USD" or s == f"{c}-USD":
+            return "EODHD", f"{c}-USD.CC"
     return "EODHD", s
 
 # ==========================================
@@ -143,9 +186,7 @@ async def search_stock_ticker(query: str = Query(..., min_length=2)):
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
     
-    source, ticker = identify_asset_class(query)
-    if source == "FMP" and ticker in ["XAUUSD", "XAGUSD", "CLUSD", "NGUSD", "UKOIL"]:
-        return {"symbol": ticker} 
+    source, ticker = identify_asset_class(query) 
 
     results = fmp_service.search_ticker(query)
     if results: 
@@ -249,50 +290,62 @@ async def get_conclusion_analysis(symbol: str, d: ConclusionRequest = Body(...))
 
 @router.post("/{symbol}/timeframe-analysis")
 async def get_timeframe_analysis(symbol: str, request_data: TimeframeRequest = Body(...)):
-    """
-    AI Chart Analysis with Mathematical Resampling.
-    Fetches 5M data ONCE, then computes 15M/1H/4H locally for the AI.
-    """
     source, ticker = identify_asset_class(symbol)
     
-    # 1. Determine "Master" Timeframe
-    # If user wants Intraday (15M, 1H, 4H), we fetch 5M Base Data
-    is_intraday_request = request_data.timeframe.upper() in ["5M", "15M", "30M", "1H", "4H"]
+    is_intraday_request = request_data.timeframe.upper() in["5M", "15M", "30M", "1H", "4H"]
     lookup_range = "5M" if is_intraday_request else request_data.timeframe
 
-    # 2. Check Cache for the MASTER Data (e.g., 5M)
-    # Note: Cache key matches get_stock_chart so they share the data pool
     cache_key = f"chart_base_v16_{symbol}_{lookup_range}" 
     chart_list = await redis_service.redis_client.get_cache(cache_key)
     
-    # 3. If Cache Miss, Fetch from API
     if not chart_list:
         if source == "FMP":
-            chart_list = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, range_type=lookup_range)
-            if not chart_list: chart_list = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, range_type=lookup_range)
+            chart_list = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, lookup_range)
+            if not chart_list: chart_list = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, lookup_range)
         else:
-            chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, range_type=lookup_range)
+            chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, lookup_range)
         
-        # Save Master Data
-        if chart_list:
-            await redis_service.redis_client.set_cache(cache_key, chart_list, 300)
+        if chart_list: await redis_service.redis_client.set_cache(cache_key, chart_list, 300)
 
-    if not chart_list: return {"analysis": f"Market data unavailable for {request_data.timeframe}."}
+    # THE INTELLIGENT FALLBACK
+    if not chart_list or len(chart_list) < 20:
+        if is_intraday_request:
+            # If 5M fails (Crypto Free Tier), instantly fetch Daily data instead!
+            print(f"⚠️ Intraday failed for {ticker}. Falling back to Daily Analysis.")
+            cache_key_1d = f"chart_base_v16_{symbol}_1D"
+            chart_list = await redis_service.redis_client.get_cache(cache_key_1d)
+            if not chart_list:
+                chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, "1D")
+                if chart_list: await redis_service.redis_client.set_cache(cache_key_1d, chart_list, 43200)
     
-    # 4. MATHEMATICAL RESAMPLING (The Optimization)
-    # If we have 5M data but the AI needs 1H, we compute it here.
+    # If it STILL fails after the fallback, send the perfect Error Ticket
+    if not chart_list or len(chart_list) < 20:
+         return {"analysis": """TREND: Data Unavailable
+PATTERNS: Insufficient historical data to calculate structure.
+MOMENTUM: N/A
+LEVELS: Key Support at 0.00, Key Resistance at 0.00.
+VOLUME: N/A
+INDICATORS: RSI (50.0) indicates Neutral.
+CONCLUSION: API Data Limit reached for this specific asset.
+ACTION: WAIT
+ENTRY_ZONE: 0.00
+STOP_LOSS: 0.00
+TARGET_1: 0.00
+TARGET_2: 0.00
+RISK_REWARD: N/A
+CONFIDENCE: Low (Missing Data)
+RATIONALE: The data provider does not supply enough candles for this asset."""}
+         
+    # Mathematical Resampling
     if is_intraday_request and request_data.timeframe.upper() != "5M":
          chart_list = technical_service.resample_chart_data(chart_list, request_data.timeframe)
 
-    # 5. Calculate Indicators on the RESAMPLED data
     df = pd.DataFrame(chart_list)
     technicals = technical_service.calculate_technical_indicators(df)
     pivots = technical_service.calculate_pivot_points(df)
     mas = technical_service.calculate_moving_averages(df)
     
-    # 6. AI Insight
-    analysis = await asyncio.to_thread(quant_engine.generate_algorithmic_report, symbol, request_data.timeframe, technicals, pivots, mas)
-    
+    analysis = quant_engine.generate_algorithmic_report(symbol, request_data.timeframe, technicals, pivots, mas)
     return {"analysis": analysis}
 
 
