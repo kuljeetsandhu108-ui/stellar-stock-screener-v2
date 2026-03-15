@@ -28,7 +28,7 @@ The content is organized as follows:
 ## Notes
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
-- Files matching these patterns are excluded: **/.env, **/venv/**, **/node_modules/**, **/build/**, **/package-lock.json, **/*fyersDataSocket*.txt
+- Files matching these patterns are excluded: **/.env, **/venv/**, **/node_modules/**, **/build/**, **/package-lock.json, **/*fyersDataSocket*.txt, **/__pycache__/**
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -48,15 +48,22 @@ backend/app/routers/live.py
 backend/app/routers/stocks.py
 backend/app/routers/stream.py
 backend/app/services/__init__.py
+backend/app/services/chartink_service.py
+backend/app/services/conclusion_engine.py
 backend/app/services/eodhd_service.py
 backend/app/services/fmp_service.py
 backend/app/services/fundamental_service.py
 backend/app/services/gemini_service.py
 backend/app/services/indian_service.py
 backend/app/services/news_service.py
+backend/app/services/ocr_service.py
+backend/app/services/quant_engine.py
 backend/app/services/redis_service.py
+backend/app/services/screener_bullish.py
 backend/app/services/sentiment_service.py
+backend/app/services/strategy_engine.py
 backend/app/services/stream_hub.py
+backend/app/services/swot_engine.py
 backend/app/services/technical_service.py
 backend/app/utils/auth_helper.py
 backend/requirements.txt
@@ -121,7 +128,9 @@ get_real_token.py
 manual_token.py
 nixpacks.toml
 requirements.txt
+test_ai_core.py
 test_api.py
+test_direct.py
 ```
 
 # Files
@@ -165,6 +174,556 @@ Dockerfile
 
 ```
 
+## File: backend/app/routers/__init__.py
+```python
+
+```
+
+## File: backend/app/services/__init__.py
+```python
+
+```
+
+## File: backend/app/services/chartink_service.py
+```python
+import requests
+from bs4 import BeautifulSoup
+
+# The exact formulas requested
+SCREENERS = {
+    "bullish_reversal": "( {cash} ( Daily Slow Stochastic %D( 14,3 ) <= 70 and Daily Slow Stochastic %K( 14,3 ) > Daily Slow Stochastic %D( 14,3 ) and Daily Rsi( 14 ) crossed above 1 day ago Rsi( 14 ) and Daily Rsi( 14 ) <= 80 and Daily Volume > 150000 and Daily Slow Stochastic %K( 14,3 ) > 1 day ago Slow Stochastic %K( 14,3 ) and 1 day ago Slow Stochastic %K( 14,3 ) < 2 days ago Slow Stochastic %K( 14,3 ) and Daily Close >= 10 and 2 days ago Slow Stochastic %K( 14,3 ) < 3 days ago Slow Stochastic %K( 14,3 ) ) )",
+    "volume_breakout": "( {cash} ( Latest Volume > 2 * 1 day ago SMA( latest Volume , 20 ) and Latest Close > Latest Open and Latest Close >= 50 ) )",
+    "golden_cross": "( {cash} ( Latest SMA( latest Close , 50 ) crossed above Latest SMA( latest Close , 200 ) and Latest Close >= 50 ) )"
+}
+
+def fetch_screener_results(screener_id: str):
+    if screener_id not in SCREENERS: return []
+    condition = SCREENERS[screener_id]
+    
+    try:
+        with requests.Session() as s:
+            # 1. STEALTH HEADERS: Mimic a real Chrome Browser exactly
+            s.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Sec-Ch-Ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+                'Sec-Ch-Ua-Mobile': '?0',
+                'Sec-Ch-Ua-Platform': '"Windows"',
+                'Upgrade-Insecure-Requests': '1'
+            })
+            
+            # 2. Get CSRF Token silently
+            r = s.get('https://chartink.com/screener/time-pass-48', timeout=10)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            meta = soup.select_one('meta[name="csrf-token"]')
+            
+            if not meta:
+                return[]
+                
+            # 3. Post the Payload with AJAX Headers
+            s.headers.update({
+                'X-CSRF-TOKEN': meta['content'],
+                'X-Requested-With': 'XMLHttpRequest',
+                'Origin': 'https://chartink.com',
+                'Referer': 'https://chartink.com/screener/time-pass-48',
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                'Accept': '*/*'
+            })
+            
+            res = s.post('https://chartink.com/screener/process', data={'scan_clause': condition}, timeout=10)
+            
+            if res.status_code == 200:
+                data = res.json().get('data', [])
+                # Return top 15 results to keep UI clean
+                return data[:15] 
+        return[]
+    except Exception as e:
+        print(f"⚠️ Chartink Stealth Error: {e}")
+        return[]
+```
+
+## File: backend/app/services/news_service.py
+```python
+import os
+import requests
+from dotenv import load_dotenv
+
+# Load environment variables from the .env file in the `backend` directory
+load_dotenv()
+
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+BASE_URL = "https://newsapi.org/v2/everything"
+
+def get_company_news(query: str, page_size: int = 20):
+    """
+    Fetches recent news articles related to a specific company or query
+    from the News API. It sorts by the most recently published.
+    """
+    if not NEWS_API_KEY:
+        print("Error: NEWS_API_KEY not found in .env file.")
+        return {"error": "News API key not configured."}
+    
+    # We add quotes around the query for more exact matches
+    # e.g., searching for "Apple Inc" instead of just Apple
+    params = {
+        "q": f'"{query}"',
+        "apiKey": NEWS_API_KEY,
+        "language": "en",
+        "sortBy": "publishedAt",
+        "pageSize": page_size
+    }
+    
+    try:
+        response = requests.get(BASE_URL, params=params)
+        response.raise_for_status()  # Raises an HTTPError for bad responses
+        
+        # We extract only the 'articles' list from the response
+        return response.json().get("articles", [])
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching company news for '{query}': {e}")
+        return []
+```
+
+## File: backend/app/services/screener_bullish.py
+```python
+import requests
+from bs4 import BeautifulSoup
+
+def fetch_bullish_reversal():
+    url = 'https://chartink.com/screener/copy-bullish-reversal-538'
+    # The exact mathematical condition from your specific screener link
+    condition = "( {cash} ( Daily Slow Stochastic %D( 14,3 ) <= 70 and Daily Slow Stochastic %K( 14,3 ) > Daily Slow Stochastic %D( 14,3 ) and Daily Rsi( 14 ) crossed above 1 day ago Rsi( 14 ) and Daily Rsi( 14 ) <= 80 and Daily Volume > 150000 and Daily Slow Stochastic %K( 14,3 ) > 1 day ago Slow Stochastic %K( 14,3 ) and 1 day ago Slow Stochastic %K( 14,3 ) < 2 days ago Slow Stochastic %K( 14,3 ) and Daily Close >= 10 and 2 days ago Slow Stochastic %K( 14,3 ) < 3 days ago Slow Stochastic %K( 14,3 ) ) )"
+    
+    try:
+        with requests.Session() as s:
+            # 1. Real Chrome Headers
+            s.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            })
+            
+            # 2. Get the CSRF Token directly from YOUR specific screener page
+            r = s.get(url, timeout=10)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            meta = soup.select_one('meta[name="csrf-token"]')
+            
+            if not meta: return[]
+                
+            # 3. Post the scan
+            s.headers.update({
+                'X-CSRF-TOKEN': meta['content'],
+                'X-Requested-With': 'XMLHttpRequest',
+                'Origin': 'https://chartink.com',
+                'Referer': url
+            })
+            
+            res = s.post('https://chartink.com/screener/process', data={'scan_clause': condition}, timeout=10)
+            
+            if res.status_code == 200:
+                return res.json().get('data', [])[:20] # Return top 20
+                
+        return[]
+    except Exception as e:
+        print(f"⚠️ Dedicated Screener Error: {e}")
+        return[]
+```
+
+## File: frontend/src/api/stockApi.js
+```javascript
+
+```
+
+## File: frontend/src/components/Chart/TradingViewChart.js
+```javascript
+import React, { useEffect, useRef, memo } from 'react';
+import Card from '../common/Card';
+
+const TradingViewChart = ({ symbol }) => {
+  const container = useRef();
+
+  useEffect(() => {
+    // Ensure the TradingView script is loaded and the container ref is set
+    if (window.TradingView && container.current) {
+      // Clear the container before creating a new widget
+      // This is crucial for preventing duplicate charts when the component re-renders
+      container.current.innerHTML = '';
+
+      // Create a new TradingView widget instance
+      new window.TradingView.widget({
+        autosize: true, // This makes the chart fill its container
+        symbol: symbol,
+        interval: "D", // Daily interval
+        timezone: "Etc/UTC",
+        theme: "dark", // Dark theme to match our app
+        style: "1",
+        locale: "en",
+        enable_publishing: false,
+        allow_symbol_change: true,
+        withdateranges: true,
+        hide_side_toolbar: false,
+        studies: [
+          "Volume@tv-basicstudies" // Add volume as a default study
+        ],
+        container_id: container.current.id,
+      });
+    }
+  }, [symbol]); // Re-run the effect if the stock symbol changes
+
+  return (
+    <Card title="Advanced Chart">
+      <div 
+        ref={container} 
+        id={`tradingview_${symbol}`} 
+        style={{ height: "600px", width: "100%" }} 
+      />
+    </Card>
+  );
+};
+
+// Use React.memo to prevent unnecessary re-renders of the chart
+// The chart will only re-render if its 'symbol' prop changes.
+export default memo(TradingViewChart);
+```
+
+## File: frontend/src/components/common/Loader.js
+```javascript
+
+```
+
+## File: frontend/src/components/Financials/RevenueChart.js
+```javascript
+import React from 'react';
+import styled from 'styled-components';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  CartesianGrid
+} from 'recharts';
+
+// --- Styled Components ---
+
+const ChartContainer = styled.div`
+  width: 100%;
+  height: 400px; /* Give the chart a fixed height */
+`;
+
+// Custom Tooltip for a better look and feel
+const CustomTooltipContainer = styled.div`
+  background-color: #2a3441;
+  border: 1px solid var(--color-border);
+  padding: 1rem;
+  border-radius: 8px;
+  color: var(--color-text-primary);
+`;
+
+const TooltipLabel = styled.p`
+  margin-bottom: 0.5rem;
+  font-weight: bold;
+`;
+
+// --- Helper Functions ---
+
+// Formats large numbers into Billions (B) or Millions (M) for the Y-axis
+const formatYAxis = (tick) => {
+  if (Math.abs(tick) >= 1e9) {
+    return `${(tick / 1e9).toFixed(1)}B`;
+  }
+  if (Math.abs(tick) >= 1e6) {
+    return `${(tick / 1e6).toFixed(1)}M`;
+  }
+  return tick;
+};
+
+// Formats large numbers with commas and adds a currency symbol
+const formatCurrency = (value) => {
+    return `$${new Intl.NumberFormat('en-US').format(value)}`;
+};
+
+
+// --- React Component ---
+
+const RevenueChart = ({ data }) => {
+  // The API sends data from newest to oldest, so we reverse it for the chart
+  // and process it into a more usable format.
+  const chartData = data.slice().reverse().map(item => ({
+    year: new Date(item.date).getFullYear(),
+    Revenue: item.revenue,
+    'Net Profit': item.netIncome,
+  }));
+
+  // Custom Tooltip Component
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+      return (
+        <CustomTooltipContainer>
+          <TooltipLabel>{`Year: ${label}`}</TooltipLabel>
+          <p style={{ color: '#8884d8' }}>{`Revenue: ${formatCurrency(payload[0].value)}`}</p>
+          <p style={{ color: '#82ca9d' }}>{`Net Profit: ${formatCurrency(payload[1].value)}`}</p>
+        </CustomTooltipContainer>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <ChartContainer>
+      {/* ResponsiveContainer makes the chart adapt to its parent's size */}
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart
+          data={chartData}
+          margin={{ top: 5, right: 20, left: 30, bottom: 5 }}
+        >
+          <CartesianGrid strokeDasharray="3 3" stroke={ "var(--color-border)" } />
+          <XAxis 
+            dataKey="year" 
+            stroke={ "var(--color-text-secondary)" }
+            tick={{ fill: 'var(--color-text-secondary)', fontSize: 12 }} 
+          />
+          <YAxis 
+            stroke={ "var(--color-text-secondary)" }
+            tickFormatter={formatYAxis}
+            tick={{ fill: 'var(--color-text-secondary)', fontSize: 12 }}
+          />
+          <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(136, 132, 216, 0.1)' }}/>
+          <Legend wrapperStyle={{ fontSize: '14px', paddingTop: '20px' }} />
+          <Bar dataKey="Revenue" fill="#8884d8" />
+          <Bar dataKey="Net Profit" fill="#82ca9d" />
+        </BarChart>
+      </ResponsiveContainer>
+    </ChartContainer>
+  );
+};
+
+export default RevenueChart;
+```
+
+## File: frontend/src/components/News/NewsList.js
+```javascript
+import React from 'react';
+import styled from 'styled-components';
+import Card from '../common/Card';
+
+// --- Styled Components ---
+
+const NewsListContainer = styled.ul`
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+  /* Allows the list to scroll if it's too long */
+  max-height: 500px;
+  overflow-y: auto;
+`;
+
+const NewsItem = styled.li`
+  padding: 1rem 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  
+  &:last-child {
+    border-bottom: none; /* Remove border for the last item */
+  }
+`;
+
+const NewsLink = styled.a`
+  text-decoration: none;
+  color: var(--color-text-primary);
+  transition: color 0.2s ease;
+
+  &:hover {
+    color: var(--color-primary);
+  }
+`;
+
+const NewsTitle = styled.h4`
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+`;
+
+const NewsMeta = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+`;
+
+// --- Helper Function ---
+
+// Formats the ISO date string into a more readable format, e.g., "Nov 08, 2025"
+const formatDate = (isoString) => {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: '2-digit',
+    year: 'numeric',
+  });
+};
+
+
+// --- React Component ---
+
+const NewsList = ({ newsArticles }) => {
+
+  // Defensive check: If there are no articles, show a message.
+  if (!newsArticles || !Array.isArray(newsArticles) || newsArticles.length === 0) {
+    return (
+      <Card title="Latest News">
+        <p>No recent news found for this company.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card title="Latest News">
+      <NewsListContainer>
+        {/* We'll show the top 15 articles */}
+        {newsArticles.slice(0, 15).map((article, index) => (
+          <NewsItem key={index}>
+            <NewsLink href={article.url} target="_blank" rel="noopener noreferrer">
+              <NewsTitle>{article.title}</NewsTitle>
+              <NewsMeta>
+                <span>{article.source.name}</span>
+                <span>{formatDate(article.publishedAt)}</span>
+              </NewsMeta>
+            </NewsLink>
+          </NewsItem>
+        ))}
+      </NewsListContainer>
+    </Card>
+  );
+};
+
+export default NewsList;
+```
+
+## File: frontend/src/components/Shareholding/TrendChart.js
+```javascript
+import React from 'react';
+import styled from 'styled-components';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  Cell
+} from 'recharts';
+
+// --- Styled Components ---
+
+const ChartWrapper = styled.div`
+  width: 100%;
+  height: 350px;
+`;
+
+const ChartTitle = styled.h3`
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  margin-bottom: 2rem;
+`;
+
+// --- React Component ---
+
+const TrendChart = () => {
+  // --- Placeholder Data ---
+  // The free API does not provide this historical data,
+  // so we are using a realistic placeholder structure to build the UI.
+  const placeholderData = [
+    { name: 'Jun 2024', Holding: 13.27, Pledges: 0 },
+    { name: 'Sep 2024', Holding: 13.25, Pledges: 0 },
+    { name: 'Dec 2024', Holding: 13.25, Pledges: 0 },
+    { name: 'Jun 2025', Holding: 11.74, Pledges: 0 },
+    { name: 'Sep 2025', Holding: 11.73, Pledges: 0 },
+  ];
+
+  // Custom Tooltip for better styling
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+      return (
+        <div style={{
+            backgroundColor: 'var(--color-secondary)',
+            border: '1px solid var(--color-border)',
+            padding: '10px',
+            borderRadius: '5px'
+        }}>
+          <p>{label}</p>
+          <p style={{ color: '#8884d8' }}>{`Holding: ${payload[0].value}%`}</p>
+          <p style={{ color: '#82ca9d' }}>{`Pledged: ${payload[1] ? payload[1].value : '0'}%`}</p>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <ChartWrapper>
+      <ChartTitle>Promoter Holding Trend (%)</ChartTitle>
+      <ResponsiveContainer>
+        <BarChart
+          data={placeholderData}
+          margin={{ top: 5, right: 20, left: 0, bottom: 5 }}
+        >
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
+          <XAxis 
+            dataKey="name" 
+            stroke="var(--color-text-secondary)" 
+            tick={{ fill: 'var(--color-text-secondary)', fontSize: 12 }} 
+          />
+          <YAxis 
+            stroke="var(--color-text-secondary)" 
+            domain={[0, 15]} // Set a fixed domain for better visual consistency
+            tick={{ fill: 'var(--color-text-secondary)', fontSize: 12 }} 
+          />
+          <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(136, 132, 216, 0.1)' }} />
+          
+          {/* Bar for Promoter Holding */}
+          <Bar dataKey="Holding" fill="#586994" barSize={30}>
+            {placeholderData.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={entry.Holding < 12 ? '#FE6D73' : '#586994'} />
+            ))}
+          </Bar>
+          
+          {/* Bar for Pledged shares. It will stack on top of the Holding bar.
+              Since our pledges are 0, it won't be visible, which is correct. */}
+          <Bar dataKey="Pledges" stackId="a" fill="#3FB950" />
+        </BarChart>
+      </ResponsiveContainer>
+    </ChartWrapper>
+  );
+};
+
+export default TrendChart;
+```
+
+## File: frontend/src/index.js
+```javascript
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+
+// Find the div with the id of 'root' in the index.html file
+const rootElement = document.getElementById('root');
+
+// Create a root for our React application to render into
+const root = ReactDOM.createRoot(rootElement);
+
+// Render the main App component
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+```
+
 ## File: backend/app/config.py
 ```python
 import os
@@ -183,11 +742,6 @@ if os.path.exists(env_path):
     load_dotenv(dotenv_path=env_path)
 
 print(f"🔧 CONFIG LOADED. EODHD Key found: {'YES' if os.getenv('EODHD_API_KEY') else 'NO'}")
-```
-
-## File: backend/app/routers/__init__.py
-```python
-
 ```
 
 ## File: backend/app/routers/auth.py
@@ -332,9 +886,76 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
         manager.disconnect(websocket)
 ```
 
-## File: backend/app/services/__init__.py
+## File: backend/app/services/conclusion_engine.py
 ```python
+def generate_algorithmic_conclusion(company_name, p_data, g_data, d_data, key_stats):
+    """Generates a structured A-F Grade and Thesis using weighted math, completely bypassing AI."""
+    
+    # 1. Safe Data Extraction
+    p_score = p_data.get('score', 0) if isinstance(p_data, dict) else 0
+    g_score = g_data.get('score', 0) if isinstance(g_data, dict) else 0
+    d_status = d_data.get('status', 'Neutral') if isinstance(d_data, dict) else 'Neutral'
+    pe = key_stats.get('peRatio') or 0
+    
+    # 2. Weighted Scoring Algorithm (Max 100 Points)
+    # Piotroski (Financial Health): 40% weight
+    score = (p_score / 9.0) * 40.0
+    
+    # Graham (Value & Safety): 30% weight
+    score += (g_score / 7.0) * 30.0
+    
+    # Valuation (P/E Penalty/Bonus): 15% weight
+    if 0 < pe < 15: score += 15
+    elif 15 <= pe < 25: score += 10
+    elif 25 <= pe < 40: score += 5
+    # pe > 40 or negative pe gets 0 points
+    
+    # Momentum (Darvas Box): 15% weight
+    if "Breakout" in d_status: score += 15
+    elif "Box" in d_status: score += 10
+    elif "Not" in d_status: score += 5
+    
+    # 3. Grade Assignment
+    if score >= 80:
+        grade = "A"
+        thesis = f"Outstanding fundamental strength and attractive valuation. {company_name} demonstrates excellent operational efficiency and a high margin of safety."
+    elif score >= 65:
+        grade = "B"
+        thesis = f"Solid financials with reasonable growth prospects. {company_name} is a strong candidate for accumulation on market dips."
+    elif score >= 50:
+        grade = "C"
+        thesis = f"Neutral fundamentals. {company_name} shows mixed signals between its current valuation and underlying financial health."
+    elif score >= 35:
+        grade = "D"
+        thesis = f"Weak financial structure or severe overvaluation. {company_name} carries high fundamental risk at current levels."
+    else:
+        grade = "F"
+        thesis = f"Critical financial weakness or massive speculative premium. Algorithm strongly suggests avoiding {company_name} until metrics improve."
 
+    # 4. Dynamic Takeaways Generation
+    takeaways =[]
+    
+    # Financial Health Takeaway
+    if p_score >= 7: takeaways.append(f"High Piotroski F-Score ({p_score}/9) confirms robust profitability, liquidity, and operating efficiency.")
+    elif p_score <= 3: takeaways.append(f"Low Piotroski F-Score ({p_score}/9) warns of deteriorating cash flow or rising leverage.")
+    else: takeaways.append(f"Average Piotroski F-Score ({p_score}/9) indicates stable but unexceptional financial health.")
+        
+    # Value Takeaway
+    if g_score >= 5: takeaways.append(f"Passes {g_score}/7 of Benjamin Graham's strict defensive criteria, indicating a deep value profile.")
+    elif g_score <= 2: takeaways.append(f"Fails most Graham value checks ({g_score}/7), suggesting it is priced for high growth rather than value.")
+        
+    # Valuation & Momentum Takeaway
+    if 0 < pe < 20: takeaways.append(f"Trading at an attractive P/E multiple of {pe:.1f}.")
+    elif pe > 40: takeaways.append(f"Trading at a steep premium (P/E: {pe:.1f}), requiring flawless future execution to justify the price.")
+    
+    takeaways.append(f"Technical momentum context: {d_status}.")
+
+    # 5. Format exactly to match React Frontend Parser
+    takeaways_str = "\n".join([f"- {t}" for t in takeaways])
+    
+    final_output = f"GRADE: {grade}\nTHESIS: {thesis}\nTAKEAWAYS:\n{takeaways_str}"
+    
+    return final_output
 ```
 
 ## File: backend/app/services/indian_service.py
@@ -391,47 +1012,361 @@ def get_indian_shareholding(symbol: str):
         return None
 ```
 
-## File: backend/app/services/news_service.py
+## File: backend/app/services/ocr_service.py
 ```python
+import pytesseract
+from PIL import Image
+import io
+import re
 import os
-import requests
-from dotenv import load_dotenv
 
-# Load environment variables from the .env file in the `backend` directory
-load_dotenv()
+# Point to the Windows installation of Tesseract
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR	esseract.exe"
 
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-BASE_URL = "https://newsapi.org/v2/everything"
-
-def get_company_news(query: str, page_size: int = 20):
-    """
-    Fetches recent news articles related to a specific company or query
-    from the News API. It sorts by the most recently published.
-    """
-    if not NEWS_API_KEY:
-        print("Error: NEWS_API_KEY not found in .env file.")
-        return {"error": "News API key not configured."}
-    
-    # We add quotes around the query for more exact matches
-    # e.g., searching for "Apple Inc" instead of just Apple
-    params = {
-        "q": f'"{query}"',
-        "apiKey": NEWS_API_KEY,
-        "language": "en",
-        "sortBy": "publishedAt",
-        "pageSize": page_size
-    }
-    
+def extract_ticker_fast(image_bytes):
     try:
-        response = requests.get(BASE_URL, params=params)
-        response.raise_for_status()  # Raises an HTTPError for bad responses
+        image = Image.open(io.BytesIO(image_bytes))
+        # Crop the top-left 30% of the image to speed up scanning and find the ticker
+        width, height = image.size
+        crop_area = (0, 0, int(width * 0.3), int(height * 0.2))
+        cropped_img = image.crop(crop_area)
         
-        # We extract only the 'articles' list from the response
-        return response.json().get("articles", [])
+        # Read the text
+        text = pytesseract.image_to_string(cropped_img)
         
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching company news for '{query}': {e}")
-        return []
+        # Find the first uppercase word that looks like a ticker (e.g. RELIANCE, AAPL, NIFTY)
+        matches = re.findall(r'\b[A-Z]{2,12}\b', text)
+        if matches:
+            return matches[0]
+        return "NOT_FOUND"
+    except Exception as e:
+        print(f"OCR Error: {e}")
+        return "NOT_FOUND"
+```
+
+## File: backend/app/services/strategy_engine.py
+```python
+def generate_canslim_check(master_data):
+    """
+    Hardcore CANSLIM Logic with Edge-Case Protection.
+    Returns: Criteria | Assessment | Result
+    """
+    if not master_data: return "Data unavailable.|System could not retrieve metrics.|NEUTRAL"
+    
+    # --- SAFE DATA EXTRACTION ---
+    km = master_data.get('key_metrics') or {}
+    quote = master_data.get('quote') or {}
+    q_earnings = master_data.get('quarterly_income_statements') or []
+    y_earnings = master_data.get('annual_revenue_and_profit') or []
+    share_bd = master_data.get('shareholding_breakdown') or {}
+    
+    output_rows = []
+
+    # 1. C - CURRENT EARNINGS (The "Explosive" Check)
+    # Target: EPS growth > 18-25% in recent quarters
+    c_status = "⚠️ NEUTRAL"
+    c_text = "Insufficient quarterly data available."
+    
+    if len(q_earnings) >= 5:
+        curr_eps = q_earnings[0].get('eps') or 0
+        prev_eps = q_earnings[4].get('eps') or 0
+        
+        if prev_eps > 0:
+            growth = ((curr_eps - prev_eps) / prev_eps) * 100
+            if growth >= 25:
+                c_status = "✅ PASS"
+                c_text = f"Explosive Growth! Quarterly EPS surged {growth:.1f}% YoY (Target: >25%)."
+            elif growth >= 15:
+                c_status = "✅ PASS"
+                c_text = f"Solid Growth. EPS up {growth:.1f}% YoY."
+            elif growth > 0:
+                c_status = "❌ FAIL"
+                c_text = f"Sluggish. EPS grew only {growth:.1f}% (Needs >18%)."
+            else:
+                c_status = "❌ FAIL"
+                c_text = f"Negative Growth. EPS fell by {abs(growth):.1f}%."
+        elif prev_eps <= 0 and curr_eps > 0:
+            c_status = "✅ PASS"
+            c_text = "Turnaround Play. Company swung from Loss to Profit this quarter."
+        else:
+            c_status = "❌ FAIL"
+            c_text = "Company is currently unprofitable."
+            
+    output_rows.append(f"**C - Current Earnings**|{c_text}|{c_status}")
+
+    # 2. A - ANNUAL GROWTH (The "Proven" Check)
+    # Target: >25% Annual CAGR
+    a_status = "⚠️ NEUTRAL"
+    a_text = "Insufficient annual data."
+    
+    if len(y_earnings) >= 2:
+        curr_y = y_earnings[0].get('eps') or 0
+        prev_y = y_earnings[1].get('eps') or 0
+        
+        if prev_y > 0:
+            growth = ((curr_y - prev_y) / prev_y) * 100
+            if growth >= 25:
+                a_status = "✅ PASS"
+                a_text = f"Stellar Track Record. Annual EPS jumped {growth:.1f}%."
+            elif growth > 0:
+                a_status = "❌ FAIL"
+                a_text = f"Mediocre. Annual growth is {growth:.1f}% (Target >25%)."
+            else:
+                a_status = "❌ FAIL"
+                a_text = "Earnings Contracting. Annual EPS declined."
+        elif prev_y <= 0 and curr_y > 0:
+            a_status = "✅ PASS"
+            a_text = "Turnaround. Annual earnings moved into positive territory."
+        else:
+            a_status = "❌ FAIL"
+            a_text = "Loss Making. Company reported an annual net loss."
+            
+    output_rows.append(f"**A - Annual Growth**|{a_text}|{a_status}")
+
+    # 3. N - NEW (Highs/Products)
+    # Proxy: Near 52W High implies "New" momentum
+    price = quote.get('price') or 0
+    high52 = quote.get('yearHigh') or price or 1
+    
+    dist_high = ((high52 - price) / high52) * 100
+    
+    if dist_high < 5:
+        n_status = "✅ PASS"
+        n_text = "Breakout Mode. Trading within 5% of 52-Week High."
+    elif dist_high < 15:
+        n_status = "⚠️ NEAR"
+        n_text = f"Setting Up. Stock is {dist_high:.1f}% below the 52-Week High."
+    else:
+        n_status = "❌ FAIL"
+        n_text = f"Correction. Trading {dist_high:.1f}% below highs (Lacks 'New' momentum)."
+        
+    output_rows.append(f"**N - New Highs**|{n_text}|{n_status}")
+
+    # 4. S - SUPPLY (Volume)
+    # Check if recent volume is higher than average
+    vol = quote.get('volume') or 0
+    avg_vol = quote.get('avgVolume') or vol or 1
+    
+    if vol > avg_vol * 1.5:
+        s_status = "✅ PASS"
+        s_text = "High Demand. Volume is 50%+ above average (Institutional Accumulation)."
+    elif vol > avg_vol:
+        s_status = "✅ PASS"
+        s_text = "Active. Volume is above average."
+    else:
+        s_status = "⚠️ WEAK"
+        s_text = "Low Liquidity. Volume is below average (Lack of conviction)."
+        
+    output_rows.append(f"**S - Supply/Demand**|{s_text}|{s_status}")
+
+    # 5. L - LEADER (Relative Strength)
+    # Using Beta and Price vs 200 EMA
+    beta = km.get('beta') or 1.0
+    mas = master_data.get('moving_averages') or {}
+    ema200 = mas.get('200') or 0
+    
+    if price > ema200 and beta > 1:
+        l_status = "✅ PASS"
+        l_text = f"Market Leader. Beta {beta:.2f} & trading above 200-EMA."
+    elif price > ema200:
+        l_status = "⚠️ NEUTRAL"
+        l_text = "Stable. Trading above 200-EMA but Beta is low."
+    else:
+        l_status = "❌ FAIL"
+        l_text = "Laggard. Trading below key 200-day trendline."
+        
+    output_rows.append(f"**L - Leader/Laggard**|{l_text}|{l_status}")
+
+    # 6. I - INSTITUTIONAL SPONSORSHIP
+    inst_own = share_bd.get('fii', 0) + share_bd.get('dii', 0)
+    
+    if inst_own > 30:
+        i_status = "✅ PASS"
+        i_text = f"Strong Backing. {inst_own:.1f}% held by Institutions."
+    elif inst_own > 15:
+        i_status = "✅ PASS"
+        i_text = f"Moderate Backing. {inst_own:.1f}% institutional holding."
+    else:
+        i_status = "❌ FAIL"
+        i_text = f"Retail Heavy. Only {inst_own:.1f}% institutional ownership."
+        
+    output_rows.append(f"**I - Sponsorship**|{i_text}|{i_status}")
+
+    # 7. M - MARKET DIRECTION
+    m_status = "⚠️ CHECK"
+    m_text = "Always verify NIFTY/SENSEX is in a confirmed uptrend before entering."
+    output_rows.append(f"**M - Market Direction**|{m_text}|{m_status}")
+
+    return "\n".join(output_rows)
+
+
+def generate_value_philosophy(master_data):
+    """
+    Hardcore Value Logic (Graham & Lynch).
+    Returns: Formula | Assessment
+    """
+    if not master_data: return "Data unavailable|N/A"
+
+    km = master_data.get('key_metrics') or {}
+    quote = master_data.get('quote') or {}
+    
+    pe = km.get('peRatioTTM') or 0
+    pb = km.get('priceToBookRatioTTM') or 0
+    roe = km.get('returnOnCapitalEmployedTTM') or 0
+    growth = km.get('revenueGrowth') or 0.01 # Avoid div/0
+    
+    output_rows = []
+
+    # 1. GRAHAM NUMBER (Intrinsic Value)
+    # Formula: SqRt(22.5 * EPS * BookValue)
+    try:
+        eps = km.get('epsTTM') or 0
+        # Estimate Book Value from P/B if raw BV is missing
+        price = quote.get('price') or 0
+        bvps = price / pb if pb > 0 else 0
+        
+        if eps > 0 and bvps > 0:
+            graham_num = (22.5 * eps * bvps) ** 0.5
+            diff = ((graham_num - price) / price) * 100
+            
+            if price < graham_num:
+                g_text = f"✅ **UNDERVALUED**. Intrinsic Value is {graham_num:.2f} (Upside: +{diff:.1f}%)."
+            else:
+                g_text = f"❌ **OVERVALUED**. Intrinsic Value is {graham_num:.2f} (Premium: {abs(diff):.1f}%)."
+        else:
+            g_text = "⚠️ **N/A**. Cannot calculate (Negative Earnings or Book Value)."
+    except:
+        g_text = "⚠️ **Error**. Insufficient data."
+        
+    output_rows.append(f"**Ben Graham's Intrinsic Value**|{g_text}")
+
+    # 2. PETER LYNCH (PEG Ratio)
+    # Formula: P/E divided by Growth Rate
+    # Fair value is PEG = 1.0. < 0.5 is cheap. > 2.0 is expensive.
+    try:
+        growth_rate = growth * 100 # Convert to percentage
+        if growth_rate > 0:
+            peg = pe / growth_rate
+            if peg < 0.5:
+                p_text = f"✅ **SCREAMING BUY**. PEG is {peg:.2f} (Extremely Cheap for its growth)."
+            elif peg < 1.0:
+                p_text = f"✅ **BUY**. PEG is {peg:.2f} (Growth is cheap)."
+            elif peg < 2.0:
+                p_text = f"⚠️ **HOLD**. PEG is {peg:.2f} (Fairly priced)."
+            else:
+                p_text = f"❌ **SELL**. PEG is {peg:.2f} (Growth is too expensive)."
+        else:
+            p_text = "❌ **AVOID**. Company has negative growth."
+    except:
+        p_text = "⚠️ **N/A**. Missing growth metrics."
+        
+    output_rows.append(f"**Peter Lynch Fair Value (PEG)**|{p_text}")
+
+    # 3. WARREN BUFFETT (Moat Check)
+    if roe > 0.20:
+        b_text = f"✅ **WIDE MOAT**. Incredible efficiency (ROE: {roe*100:.1f}%)."
+    elif roe > 0.12:
+        b_text = f"✅ **STABLE**. Decent returns (ROE: {roe*100:.1f}%)."
+    else:
+        b_text = f"❌ **NO MOAT**. Poor capital returns (ROE: {roe*100:.1f}%)."
+        
+    output_rows.append(f"**Buffett Moat Indicator**|{b_text}")
+
+    return "\n".join(output_rows)
+```
+
+## File: backend/app/services/swot_engine.py
+```python
+def generate_algorithmic_swot(company_name, master_data=None):
+    """Generates a highly detailed, data-driven SWOT analysis using pure mathematics."""
+    if not master_data:
+        master_data = {}
+        
+    km = master_data.get('key_metrics') or {}
+    quote = master_data.get('quote') or {}
+    techs = master_data.get('technical_indicators') or {}
+    mas = master_data.get('moving_averages') or {}
+    piotroski = master_data.get('piotroski_f_score', {}).get('score', 5)
+    share_bd = master_data.get('shareholding_breakdown') or {}
+    
+    # --- SAFE EXTRACTION ---
+    pe = km.get('peRatioTTM') or 0
+    rev_growth = km.get('revenueGrowth') or 0
+    margins = km.get('grossMargins') or 0
+    beta = km.get('beta') or 1.0
+    roc = km.get('returnOnCapitalEmployedTTM') or 0
+    
+    price = quote.get('price') or 0
+    year_high = quote.get('yearHigh') or 0
+    year_low = quote.get('yearLow') or 0
+    
+    rsi = techs.get('rsi') or 50
+    macd = techs.get('macd') or 0
+    macd_signal = techs.get('macdsignal') or 0
+    ema200 = mas.get('200') or 0
+    
+    # Calculate "Smart Money" Holdings
+    inst_holding = share_bd.get('fii', 0) + share_bd.get('dii', 0)
+    
+    strengths =[]
+    weaknesses = []
+    opportunities = []
+    threats =[]
+    
+    # ==========================================
+    # 1. CALCULATE STRENGTHS
+    # ==========================================
+    if piotroski >= 7: strengths.append(f"Exceptional fundamental health with a Piotroski F-Score of {piotroski}/9.")
+    if margins > 0.3: strengths.append("High gross profit margins (>30%), indicating strong pricing power and a competitive moat.")
+    if roc > 0.15: strengths.append(f"Excellent Return on Capital ({roc*100:.1f}%), showing highly efficient management.")
+    if price > ema200 and ema200 > 0: strengths.append("Stock is currently trading above its 200-day moving average, confirming a long-term macro uptrend.")
+    if inst_holding > 40: strengths.append(f"Strong 'Smart Money' backing with {inst_holding:.1f}% institutional ownership (FII/DII).")
+    
+    # Fix the astronomical revenue bug (Ensures it's a valid percentage ratio)
+    if 0 < rev_growth < 5: strengths.append(f"Consistent top-line revenue growth ({rev_growth*100:.1f}% YoY).")
+        
+    if not strengths: strengths.append(f"{company_name} maintains a steady presence in its core market.")
+
+    # ==========================================
+    # 2. CALCULATE WEAKNESSES
+    # ==========================================
+    if piotroski <= 3: weaknesses.append(f"Weak fundamental financial stability (Piotroski F-Score: {piotroski}/9).")
+    if pe > 40: weaknesses.append(f"High valuation premium (P/E: {pe:.1f}), reducing the margin of safety for value investors.")
+    elif pe < 0: weaknesses.append("Currently operating with negative earnings (Net Loss).")
+    if rev_growth < 0: weaknesses.append(f"Declining revenue trend over the past year ({rev_growth*100:.1f}%).")
+    if price < ema200 and ema200 > 0: weaknesses.append("Trading below the 200-day moving average, signaling long-term bearish momentum.")
+    
+    if not weaknesses: weaknesses.append("Susceptible to broader macroeconomic downturns and sector rotations.")
+
+    # ==========================================
+    # 3. CALCULATE OPPORTUNITIES
+    # ==========================================
+    if rsi < 35: opportunities.append(f"Technically oversold conditions (RSI: {rsi:.1f}), presenting a potential mean-reversion buying opportunity.")
+    if macd > macd_signal and rsi < 60: opportunities.append("Bullish MACD crossover suggests accelerating short-term upward momentum.")
+    if year_low > 0 and price < (year_low * 1.1): opportunities.append("Trading near 52-week lows, potentially offering an attractive risk-to-reward entry for value buyers.")
+    opportunities.append("Potential for market share expansion through new product cycles or regional scaling.")
+    opportunities.append("Strategic M&A or partnerships could act as significant fundamental catalysts.")
+
+    # ==========================================
+    # 4. CALCULATE THREATS
+    # ==========================================
+    if rsi > 70: threats.append(f"Technically overbought (RSI: {rsi:.1f}), increasing the risk of a sharp short-term price correction.")
+    if macd < macd_signal and rsi > 40: threats.append("Bearish MACD crossover indicates building downward sell pressure.")
+    if beta > 1.5: threats.append(f"High Beta ({beta:.2f}) indicates the stock is significantly more volatile than the broader market.")
+    if year_high > 0 and price > (year_high * 0.95): threats.append("Approaching 52-week highs, which historically acts as heavy overhead resistance.")
+    if pe > 50: threats.append("Highly vulnerable to severe valuation contraction if future earnings growth misses expectations.")
+    
+    threats.append("Regulatory changes and aggressive competitive pressures in the industry.")
+
+    # ==========================================
+    # 5. FORMAT AND LIMIT OUTPUT (Max 4 bullets each)
+    # ==========================================
+    swot_markdown = "**Strengths**\n" + "\n".join([f"- {s}" for s in strengths[:4]]) + "\n\n"
+    swot_markdown += "**Weaknesses**\n" + "\n".join([f"- {w}" for w in weaknesses[:4]]) + "\n\n"
+    swot_markdown += "**Opportunities**\n" + "\n".join([f"- {o}" for o in opportunities[:4]]) + "\n\n"
+    swot_markdown += "**Threats**\n" + "\n".join([f"- {t}" for t in threats[:4]])
+    
+    return swot_markdown
 ```
 
 ## File: backend/app/utils/auth_helper.py
@@ -500,66 +1435,98 @@ print(f"Redis URL: {os.getenv('REDIS_URL')}")
 print("------------------")
 ```
 
-## File: frontend/src/api/stockApi.js
-```javascript
+## File: frontend/public/index.html
+```html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <script src="https://cdn.fyers.in/socket/v3/fyers-socket.js"></script>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta
+      name="description"
+      content="Stellar Stock Screener - AI-Powered Financial Analysis"
+    />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+    
+    <!-- This is where the TradingView library will be loaded from -->
+    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 
+    <title>Stellar Stock Screener</title>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    
+    <!-- THIS IS THE CRITICAL LINE -->
+    <div id="root"></div>
+    
+  </body>
+</html>
 ```
 
-## File: frontend/src/components/Chart/TradingViewChart.js
+## File: frontend/src/components/common/Card.js
 ```javascript
-import React, { useEffect, useRef, memo } from 'react';
-import Card from '../common/Card';
+import React from 'react';
+import styled from 'styled-components';
 
-const TradingViewChart = ({ symbol }) => {
-  const container = useRef();
+// This is our master styled component for all content blocks.
+const CardContainer = styled.div`
+  background-color: var(--color-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  margin-bottom: 1.5rem; 
+  width: 100%;
+  
+  /* Mobile: Tight padding */
+  padding: 1rem; 
 
-  useEffect(() => {
-    // Ensure the TradingView script is loaded and the container ref is set
-    if (window.TradingView && container.current) {
-      // Clear the container before creating a new widget
-      // This is crucial for preventing duplicate charts when the component re-renders
-      container.current.innerHTML = '';
+  /* Desktop: Luxurious padding */
+  @media (min-width: 768px) {
+    padding: 2rem;
+    margin-bottom: 2rem;
+    
+  }
+`;
 
-      // Create a new TradingView widget instance
-      new window.TradingView.widget({
-        autosize: true, // This makes the chart fill its container
-        symbol: symbol,
-        interval: "D", // Daily interval
-        timezone: "Etc/UTC",
-        theme: "dark", // Dark theme to match our app
-        style: "1",
-        locale: "en",
-        enable_publishing: false,
-        allow_symbol_change: true,
-        withdateranges: true,
-        hide_side_toolbar: false,
-        studies: [
-          "Volume@tv-basicstudies" // Add volume as a default study
-        ],
-        container_id: container.current.id,
-      });
-    }
-  }, [symbol]); // Re-run the effect if the stock symbol changes
+const CardHeader = styled.div`
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--color-border);
+`;
 
+const CardTitle = styled.h2`
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+`;
+
+const CardContent = styled.div`
+  /* The content inside the card will be placed here */
+`;
+
+// This is a reusable React component that accepts a title and content.
+const Card = ({ title, children }) => {
   return (
-    <Card title="Advanced Chart">
-      <div 
-        ref={container} 
-        id={`tradingview_${symbol}`} 
-        style={{ height: "600px", width: "100%" }} 
-      />
-    </Card>
+    <CardContainer>
+      {/* The title is optional; if a title is provided, the header will render. */}
+      {title && (
+        <CardHeader>
+          <CardTitle>{title}</CardTitle>
+        </CardHeader>
+      )}
+      <CardContent>
+        {/* 'children' is a special prop in React that lets us pass components inside other components.
+            Whatever we place inside <Card>...</Card> will be rendered here. */}
+        {children}
+      </CardContent>
+    </CardContainer>
   );
 };
 
-// Use React.memo to prevent unnecessary re-renders of the chart
-// The chart will only re-render if its 'symbol' prop changes.
-export default memo(TradingViewChart);
-```
-
-## File: frontend/src/components/common/Loader.js
-```javascript
-
+export default Card;
 ```
 
 ## File: frontend/src/components/Financials/AboutCompany.js
@@ -992,118 +1959,6 @@ const KeyStats = ({ stats }) => {
 export default KeyStats;
 ```
 
-## File: frontend/src/components/Financials/RevenueChart.js
-```javascript
-import React from 'react';
-import styled from 'styled-components';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  CartesianGrid
-} from 'recharts';
-
-// --- Styled Components ---
-
-const ChartContainer = styled.div`
-  width: 100%;
-  height: 400px; /* Give the chart a fixed height */
-`;
-
-// Custom Tooltip for a better look and feel
-const CustomTooltipContainer = styled.div`
-  background-color: #2a3441;
-  border: 1px solid var(--color-border);
-  padding: 1rem;
-  border-radius: 8px;
-  color: var(--color-text-primary);
-`;
-
-const TooltipLabel = styled.p`
-  margin-bottom: 0.5rem;
-  font-weight: bold;
-`;
-
-// --- Helper Functions ---
-
-// Formats large numbers into Billions (B) or Millions (M) for the Y-axis
-const formatYAxis = (tick) => {
-  if (Math.abs(tick) >= 1e9) {
-    return `${(tick / 1e9).toFixed(1)}B`;
-  }
-  if (Math.abs(tick) >= 1e6) {
-    return `${(tick / 1e6).toFixed(1)}M`;
-  }
-  return tick;
-};
-
-// Formats large numbers with commas and adds a currency symbol
-const formatCurrency = (value) => {
-    return `$${new Intl.NumberFormat('en-US').format(value)}`;
-};
-
-
-// --- React Component ---
-
-const RevenueChart = ({ data }) => {
-  // The API sends data from newest to oldest, so we reverse it for the chart
-  // and process it into a more usable format.
-  const chartData = data.slice().reverse().map(item => ({
-    year: new Date(item.date).getFullYear(),
-    Revenue: item.revenue,
-    'Net Profit': item.netIncome,
-  }));
-
-  // Custom Tooltip Component
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <CustomTooltipContainer>
-          <TooltipLabel>{`Year: ${label}`}</TooltipLabel>
-          <p style={{ color: '#8884d8' }}>{`Revenue: ${formatCurrency(payload[0].value)}`}</p>
-          <p style={{ color: '#82ca9d' }}>{`Net Profit: ${formatCurrency(payload[1].value)}`}</p>
-        </CustomTooltipContainer>
-      );
-    }
-    return null;
-  };
-
-  return (
-    <ChartContainer>
-      {/* ResponsiveContainer makes the chart adapt to its parent's size */}
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart
-          data={chartData}
-          margin={{ top: 5, right: 20, left: 30, bottom: 5 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" stroke={ "var(--color-border)" } />
-          <XAxis 
-            dataKey="year" 
-            stroke={ "var(--color-text-secondary)" }
-            tick={{ fill: 'var(--color-text-secondary)', fontSize: 12 }} 
-          />
-          <YAxis 
-            stroke={ "var(--color-text-secondary)" }
-            tickFormatter={formatYAxis}
-            tick={{ fill: 'var(--color-text-secondary)', fontSize: 12 }}
-          />
-          <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(136, 132, 216, 0.1)' }}/>
-          <Legend wrapperStyle={{ fontSize: '14px', paddingTop: '20px' }} />
-          <Bar dataKey="Revenue" fill="#8884d8" />
-          <Bar dataKey="Net Profit" fill="#82ca9d" />
-        </BarChart>
-      </ResponsiveContainer>
-    </ChartContainer>
-  );
-};
-
-export default RevenueChart;
-```
-
 ## File: frontend/src/components/Financials/StatementTable.js
 ```javascript
 import React from 'react';
@@ -1534,400 +2389,6 @@ const BenjaminGrahamScan = ({ scanData }) => {
 export default BenjaminGrahamScan;
 ```
 
-## File: frontend/src/components/Header/ConnectBroker.js
-```javascript
-import React, { useState, useEffect } from 'react';
-import styled from 'styled-components';
-import axios from 'axios';
-import { FaPlug, FaCheckCircle, FaSignOutAlt } from 'react-icons/fa';
-
-const Button = styled.button`
-  background: ${({ connected }) => (connected ? 'rgba(63, 185, 80, 0.15)' : 'linear-gradient(135deg, #58A6FF, #238636)')};
-  border: 1px solid ${({ connected }) => (connected ? '#3FB950' : 'transparent')};
-  color: ${({ connected }) => (connected ? '#3FB950' : '#ffffff')};
-  padding: 8px 16px;
-  border-radius: 20px;
-  font-weight: 600;
-  font-size: 0.85rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  transition: all 0.2s ease;
-  white-space: nowrap;
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-  }
-`;
-
-const ConnectBroker = () => {
-  const [token, setToken] = useState(localStorage.getItem('fyers_token'));
-
-  const handleLogin = async () => {
-    try {
-      // 1. Get the login URL from backend
-      // We use window.location.origin to dynamically pick localhost or 127.0.0.1
-      const backendUrl = window.location.origin.replace('3000', '8000'); 
-      const res = await axios.get(`${backendUrl}/api/auth/fyers/login-url`);
-      
-      if (res.data.url) {
-        window.location.href = res.data.url;
-      }
-    } catch (e) {
-      console.error("Login Error", e);
-      // Detailed error message for debugging
-      alert(`Could not connect to broker. Server says: ${e.message}`);
-    }
-  };
-
-  const handleLogout = () => {
-      localStorage.removeItem('fyers_token');
-      localStorage.removeItem('fyers_client_id');
-      setToken(null);
-      window.location.reload(); // Refresh to reset sockets
-  };
-
-  if (token) {
-    return (
-      <Button connected onClick={handleLogout} title="Click to Disconnect">
-        <FaCheckCircle /> Fyers Connected
-      </Button>
-    );
-  }
-
-  return (
-    <Button onClick={handleLogin}>
-      <FaPlug /> Connect Broker
-    </Button>
-  );
-};
-
-export default ConnectBroker;
-```
-
-## File: frontend/src/components/IndexDetailPage/IndexChartAnalysis.js
-```javascript
-import React, { useMemo } from 'react';
-import styled, { keyframes } from 'styled-components';
-import Card from '../common/Card';
-import { 
-  FaGlobeAmericas, FaChartLine, FaShieldAlt, FaBullseye, 
-  FaExclamationTriangle, FaLayerGroup, FaArrowUp, FaArrowDown, FaExchangeAlt 
-} from 'react-icons/fa';
-
-// --- STYLED COMPONENTS (Gold/Macro Theme) ---
-
-const fadeIn = keyframes`from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); }`;
-
-const AnalysisContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  animation: ${fadeIn} 0.6s ease-out;
-`;
-
-const MacroVerdictCard = styled(Card)`
-  text-align: center;
-  border-left: 4px solid #EBCB8B; /* Gold Border */
-  background: linear-gradient(145deg, rgba(235, 203, 139, 0.05), rgba(13, 17, 23, 1));
-`;
-
-const TrendDisplay = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  font-size: 2rem;
-  font-weight: 800;
-  margin-bottom: 1rem;
-  color: ${({ color }) => color};
-  text-transform: uppercase;
-  letter-spacing: 1px;
-`;
-
-const MacroText = styled.p`
-  font-size: 1.1rem;
-  color: var(--color-text-primary);
-  line-height: 1.8;
-  font-style: italic;
-  max-width: 90%;
-  margin: 0 auto;
-`;
-
-const GridSection = styled.div`
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
-  
-  @media (max-width: 768px) {
-    grid-template-columns: 1fr;
-  }
-`;
-
-const ZoneCard = styled.div`
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 1.5rem;
-  position: relative;
-  overflow: hidden;
-`;
-
-const ZoneTitle = styled.h4`
-  color: #EBCB8B; /* Gold */
-  font-size: 1rem;
-  font-weight: 700;
-  margin-bottom: 1rem;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-`;
-
-const LevelList = styled.ul`
-  list-style: none;
-  padding: 0;
-  margin: 0;
-`;
-
-const LevelItem = styled.li`
-  color: var(--color-text-secondary);
-  margin-bottom: 0.8rem;
-  display: flex;
-  align-items: start;
-  gap: 10px;
-  line-height: 1.5;
-
-  svg { color: #EBCB8B; margin-top: 4px; }
-`;
-
-const StrategyBox = styled.div`
-  background: linear-gradient(135deg, rgba(235, 203, 139, 0.1), rgba(13, 17, 23, 0.8));
-  border: 1px solid #EBCB8B;
-  border-radius: 12px;
-  padding: 2rem;
-  position: relative;
-`;
-
-const StrategyHeader = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
-  border-bottom: 1px solid rgba(235, 203, 139, 0.2);
-  padding-bottom: 1rem;
-`;
-
-const DirectionBadge = styled.span`
-  background: ${({ isBullish }) => isBullish ? '#3FB950' : '#F85149'};
-  color: #000;
-  padding: 5px 15px;
-  border-radius: 50px;
-  font-weight: 800;
-  font-size: 1rem;
-  text-transform: uppercase;
-`;
-
-const MetricRow = styled.div`
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 1rem;
-  font-size: 1.1rem;
-`;
-
-const Label = styled.span` color: var(--color-text-secondary); font-size: 0.9rem; `;
-const Value = styled.span` font-weight: 700; color: #EBCB8B; font-family: 'Roboto Mono'; `;
-
-// --- COMPONENT ---
-
-const IndexChartAnalysis = ({ analysisData }) => {
-  
-  // --- PARSER ---
-  const parsed = useMemo(() => {
-    if (!analysisData || typeof analysisData !== 'string') return null;
-    
-    const rawKeys = ['TREND', 'PATTERNS', 'LEVELS', 'VOLUME', 'MOMENTUM', 'INDICATORS', 'CONCLUSION', 'ACTION', 'ENTRY_ZONE', 'STOP_LOSS', 'TARGET_1', 'TARGET_2', 'RISK_REWARD', 'CONFIDENCE', 'RATIONALE'];
-    const sections = {};
-    let text = "\n" + analysisData.replace(/\*\*/g, '');
-
-    rawKeys.forEach(key => {
-      const regex = new RegExp(`(?:^|\\n)\\s*${key}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*[A-Z_]{3,}\\s*:|$)`, 'i');
-      const match = text.match(regex);
-      if (match) sections[key] = match[1].trim();
-    });
-    return sections;
-  }, [analysisData]);
-
-  if (!parsed) return null;
-
-  // Visual Logic
-  const isBullish = parsed.TREND?.toLowerCase().includes('uptrend') || parsed.TREND?.toLowerCase().includes('bullish');
-  const isBearish = parsed.TREND?.toLowerCase().includes('downtrend') || parsed.TREND?.toLowerCase().includes('bearish');
-  
-  const TrendIcon = isBullish ? FaArrowUp : isBearish ? FaArrowDown : FaExchangeAlt;
-  const trendColor = isBullish ? '#3FB950' : isBearish ? '#F85149' : '#EBCB8B';
-
-  return (
-    <AnalysisContainer>
-      
-      {/* 1. MACRO VERDICT */}
-      <MacroVerdictCard>
-        <div style={{color: '#EBCB8B', fontSize: '0.8rem', fontWeight: 600, marginBottom: '10px', textTransform: 'uppercase'}}>AI Macro Outlook</div>
-        <TrendDisplay color={trendColor}>
-           <TrendIcon /> {parsed.TREND || 'Consolidation'}
-        </TrendDisplay>
-        <MacroText>
-          "{parsed.CONCLUSION || parsed.RATIONALE}"
-        </MacroText>
-      </MacroVerdictCard>
-
-      {/* 2. STRATEGY ROOM */}
-      <StrategyBox>
-        <StrategyHeader>
-           <div style={{display:'flex', flexDirection:'column'}}>
-               <span style={{color:'#EBCB8B', fontSize:'0.8rem', fontWeight: 700}}>MARKET BIAS</span>
-               <span style={{color:'white', fontSize:'1.4rem', fontWeight: 700}}>
-                   {parsed.ACTION?.toUpperCase() || 'WAIT'}
-               </span>
-           </div>
-           <DirectionBadge isBullish={isBullish || parsed.ACTION?.includes('BUY')}>
-               {parsed.ACTION?.includes('BUY') ? 'LONG' : parsed.ACTION?.includes('SELL') ? 'SHORT' : 'NEUTRAL'}
-           </DirectionBadge>
-        </StrategyHeader>
-        
-        <MetricRow><Label>Entry Zone</Label><Value>{parsed.ENTRY_ZONE}</Value></MetricRow>
-        <MetricRow><Label>Invalidation (SL)</Label><Value style={{color:'#F85149'}}>{parsed.STOP_LOSS}</Value></MetricRow>
-        <MetricRow><Label>Objective 1</Label><Value style={{color:'#3FB950'}}>{parsed.TARGET_1}</Value></MetricRow>
-        <MetricRow><Label>Objective 2</Label><Value style={{color:'#3FB950'}}>{parsed.TARGET_2}</Value></MetricRow>
-      </StrategyBox>
-
-      {/* 3. TECHNICAL DEEP DIVE */}
-      <GridSection>
-        <ZoneCard>
-          <ZoneTitle><FaShieldAlt /> Key Levels</ZoneTitle>
-          <LevelList>
-             <LevelItem><FaChartLine /> {parsed.LEVELS}</LevelItem>
-          </LevelList>
-        </ZoneCard>
-
-        <ZoneCard>
-          <ZoneTitle><FaLayerGroup /> Market Structure</ZoneTitle>
-          <LevelList>
-             {parsed.PATTERNS && <LevelItem><FaGlobeAmericas /> {parsed.PATTERNS}</LevelItem>}
-             {parsed.VOLUME && <LevelItem><FaChartLine /> {parsed.VOLUME}</LevelItem>}
-             {parsed.INDICATORS && <LevelItem><FaBullseye /> {parsed.INDICATORS}</LevelItem>}
-          </LevelList>
-        </ZoneCard>
-      </GridSection>
-
-    </AnalysisContainer>
-  );
-};
-
-export default IndexChartAnalysis;
-```
-
-## File: frontend/src/components/News/NewsList.js
-```javascript
-import React from 'react';
-import styled from 'styled-components';
-import Card from '../common/Card';
-
-// --- Styled Components ---
-
-const NewsListContainer = styled.ul`
-  list-style-type: none;
-  padding: 0;
-  margin: 0;
-  /* Allows the list to scroll if it's too long */
-  max-height: 500px;
-  overflow-y: auto;
-`;
-
-const NewsItem = styled.li`
-  padding: 1rem 0.5rem;
-  border-bottom: 1px solid var(--color-border);
-  
-  &:last-child {
-    border-bottom: none; /* Remove border for the last item */
-  }
-`;
-
-const NewsLink = styled.a`
-  text-decoration: none;
-  color: var(--color-text-primary);
-  transition: color 0.2s ease;
-
-  &:hover {
-    color: var(--color-primary);
-  }
-`;
-
-const NewsTitle = styled.h4`
-  font-size: 1rem;
-  font-weight: 600;
-  margin-bottom: 0.5rem;
-`;
-
-const NewsMeta = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.8rem;
-  color: var(--color-text-secondary);
-`;
-
-// --- Helper Function ---
-
-// Formats the ISO date string into a more readable format, e.g., "Nov 08, 2025"
-const formatDate = (isoString) => {
-  if (!isoString) return '';
-  const date = new Date(isoString);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-  });
-};
-
-
-// --- React Component ---
-
-const NewsList = ({ newsArticles }) => {
-
-  // Defensive check: If there are no articles, show a message.
-  if (!newsArticles || !Array.isArray(newsArticles) || newsArticles.length === 0) {
-    return (
-      <Card title="Latest News">
-        <p>No recent news found for this company.</p>
-      </Card>
-    );
-  }
-
-  return (
-    <Card title="Latest News">
-      <NewsListContainer>
-        {/* We'll show the top 15 articles */}
-        {newsArticles.slice(0, 15).map((article, index) => (
-          <NewsItem key={index}>
-            <NewsLink href={article.url} target="_blank" rel="noopener noreferrer">
-              <NewsTitle>{article.title}</NewsTitle>
-              <NewsMeta>
-                <span>{article.source.name}</span>
-                <span>{formatDate(article.publishedAt)}</span>
-              </NewsMeta>
-            </NewsLink>
-          </NewsItem>
-        ))}
-      </NewsListContainer>
-    </Card>
-  );
-};
-
-export default NewsList;
-```
-
 ## File: frontend/src/components/Overview/PriceLevels.js
 ```javascript
 import React from 'react';
@@ -2305,126 +2766,229 @@ const OwnershipTrend = ({ historicalStatements }) => {
 export default OwnershipTrend;
 ```
 
-## File: frontend/src/components/Shareholding/TrendChart.js
+## File: frontend/src/components/Technicals/MovingAverages.js
 ```javascript
 import React from 'react';
 import styled from 'styled-components';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-  Cell
-} from 'recharts';
 
 // --- Styled Components ---
 
-const ChartWrapper = styled.div`
+const TableContainer = styled.div`
   width: 100%;
-  height: 350px;
+  max-width: 300px; /* Constrain width for a compact, clean look */
+  margin-left: auto; /* Push the table to the right within its grid container */
 `;
 
-const ChartTitle = styled.h3`
-  text-align: center;
+const StyledTable = styled.table`
+  width: 100%;
+  border-collapse: collapse;
+`;
+
+const TableHeader = styled.th`
+  padding: 10px;
   color: var(--color-text-secondary);
   font-weight: 500;
-  margin-bottom: 2rem;
+  font-size: 0.9rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
 `;
 
-// --- React Component ---
+const TableCell = styled.td`
+  padding: 10px;
+  font-size: 0.95rem;
 
-const TrendChart = () => {
-  // --- Placeholder Data ---
-  // The free API does not provide this historical data,
-  // so we are using a realistic placeholder structure to build the UI.
-  const placeholderData = [
-    { name: 'Jun 2024', Holding: 13.27, Pledges: 0 },
-    { name: 'Sep 2024', Holding: 13.25, Pledges: 0 },
-    { name: 'Dec 2024', Holding: 13.25, Pledges: 0 },
-    { name: 'Jun 2025', Holding: 11.74, Pledges: 0 },
-    { name: 'Sep 2025', Holding: 11.73, Pledges: 0 },
+  /* Style the period (e.g., "5 Days") cell */
+  &:first-child {
+    color: var(--color-text-secondary);
+  }
+
+  /* Style the calculated value cell */
+  &:last-child {
+    font-weight: 600;
+    color: var(--color-text-primary);
+    text-align: right;
+    font-family: 'Roboto Mono', monospace; /* Use a monospaced font for numbers */
+  }
+`;
+
+const TableRow = styled.tr`
+  border-bottom: 1px solid var(--color-border);
+
+  &:last-child {
+    border-bottom: none; /* Remove the border for the last row */
+  }
+`;
+
+// --- The New, Dynamic React Component ---
+
+// The component now accepts 'maData' as a prop from its parent.
+const MovingAverages = ({ maData }) => {
+  // If the data is missing or empty, we show an informative message.
+  if (!maData || Object.keys(maData).length === 0) {
+    return (
+      <TableContainer>
+        <p>Moving average data is not available.</p>
+      </TableContainer>
+    );
+  }
+
+  // We create a structured array to ensure the rows are always in the correct order.
+  const ma_periods = [
+    { period: '5 Days', key: '5' },
+    { period: '10 Days', key: '10' },
+    { period: '20 Days', key: '20' },
+    { period: '50 Days', key: '50' },
+    { period: '100 Days', key: '100' },
+    { period: '200 Days', key: '200' },
   ];
 
-  // Custom Tooltip for better styling
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{
-            backgroundColor: 'var(--color-secondary)',
-            border: '1px solid var(--color-border)',
-            padding: '10px',
-            borderRadius: '5px'
-        }}>
-          <p>{label}</p>
-          <p style={{ color: '#8884d8' }}>{`Holding: ${payload[0].value}%`}</p>
-          <p style={{ color: '#82ca9d' }}>{`Pledged: ${payload[1] ? payload[1].value : '0'}%`}</p>
-        </div>
-      );
-    }
-    return null;
-  };
-
   return (
-    <ChartWrapper>
-      <ChartTitle>Promoter Holding Trend (%)</ChartTitle>
-      <ResponsiveContainer>
-        <BarChart
-          data={placeholderData}
-          margin={{ top: 5, right: 20, left: 0, bottom: 5 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-          <XAxis 
-            dataKey="name" 
-            stroke="var(--color-text-secondary)" 
-            tick={{ fill: 'var(--color-text-secondary)', fontSize: 12 }} 
-          />
-          <YAxis 
-            stroke="var(--color-text-secondary)" 
-            domain={[0, 15]} // Set a fixed domain for better visual consistency
-            tick={{ fill: 'var(--color-text-secondary)', fontSize: 12 }} 
-          />
-          <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(136, 132, 216, 0.1)' }} />
-          
-          {/* Bar for Promoter Holding */}
-          <Bar dataKey="Holding" fill="#586994" barSize={30}>
-            {placeholderData.map((entry, index) => (
-              <Cell key={`cell-${index}`} fill={entry.Holding < 12 ? '#FE6D73' : '#586994'} />
-            ))}
-          </Bar>
-          
-          {/* Bar for Pledged shares. It will stack on top of the Holding bar.
-              Since our pledges are 0, it won't be visible, which is correct. */}
-          <Bar dataKey="Pledges" stackId="a" fill="#3FB950" />
-        </BarChart>
-      </ResponsiveContainer>
-    </ChartWrapper>
+    <TableContainer>
+      <StyledTable>
+        <thead>
+          <tr>
+            <TableHeader>Period (SMA)</TableHeader>
+            <TableHeader style={{ textAlign: 'right' }}>Value</TableHeader>
+          </tr>
+        </thead>
+        <tbody>
+          {ma_periods.map(item => {
+            const value = maData[item.key];
+            return (
+              <TableRow key={item.period}>
+                <TableCell>{item.period}</TableCell>
+                {/* We check if the value is a valid number before displaying */}
+                <TableCell>{typeof value === 'number' ? value.toFixed(2) : 'N/A'}</TableCell>
+              </TableRow>
+            );
+          })}
+        </tbody>
+      </StyledTable>
+    </TableContainer>
   );
 };
 
-export default TrendChart;
+export default MovingAverages;
 ```
 
-## File: frontend/src/index.js
+## File: frontend/src/components/Technicals/PivotLevels.js
 ```javascript
 import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
+import styled from 'styled-components';
 
-// Find the div with the id of 'root' in the index.html file
-const rootElement = document.getElementById('root');
+// --- Styled Components ---
 
-// Create a root for our React application to render into
-const root = ReactDOM.createRoot(rootElement);
+const TableContainer = styled.div`
+  width: 100%;
+  overflow-x: auto; /* Allows horizontal scrolling on small screens if needed */
+`;
 
-// Render the main App component
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+const StyledTable = styled.table`
+  width: 100%;
+  border-collapse: collapse;
+  text-align: center;
+`;
+
+const TableHeader = styled.th`
+  padding: 12px;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap; /* Prevents headers from wrapping */
+`;
+
+const TableCell = styled.td`
+  padding: 12px;
+  font-size: 0.95rem;
+  font-family: 'Roboto Mono', monospace; /* Use a monospaced font for numbers */
+  border-bottom: 1px solid var(--color-border);
+
+  /* Style the 'Type' column differently */
+  &:first-child {
+    font-weight: 600;
+    color: var(--color-text-primary);
+    text-align: left;
+    font-family: 'Inter', sans-serif;
+  }
+`;
+
+const TableRow = styled.tr`
+  /* A subtle hover effect for better user experience */
+  &:hover {
+    background-color: rgba(48, 54, 61, 0.5);
+  }
+
+  /* Remove bottom border for the very last row */
+  &:last-child > td {
+      border-bottom: none;
+  }
+`;
+
+// --- The New, Dynamic React Component ---
+
+// The component now accepts 'pivotData' as a prop from its parent.
+const PivotLevels = ({ pivotData }) => {
+  // If the data is missing or empty, we show an informative message.
+  if (!pivotData || Object.keys(pivotData).length === 0) {
+    return (
+      <TableContainer>
+        <p>Pivot point data is not available.</p>
+      </TableContainer>
+    );
+  }
+
+  // We dynamically create our rows from the keys in the 'pivotData' object
+  // that our new backend provides (e.g., "classic", "fibonacci", "camarilla").
+  const pivotRows = [
+    { type: 'Classic', data: pivotData.classic },
+    { type: 'Fibonacci', data: pivotData.fibonacci },
+    { type: 'Camarilla', data: pivotData.camarilla },
+  ];
+
+  return (
+    <TableContainer>
+      <StyledTable>
+        <thead>
+          <tr>
+            <TableHeader>Type</TableHeader>
+            <TableHeader>R3</TableHeader>
+            <TableHeader>R2</TableHeader>
+            <TableHeader>R1</TableHeader>
+            <TableHeader>Pivot Point (PP)</TableHeader>
+            <TableHeader>S1</TableHeader>
+            <TableHeader>S2</TableHeader>
+            <TableHeader>S3</TableHeader>
+          </tr>
+        </thead>
+        <tbody>
+          {pivotRows.map(row => {
+            const { type, data } = row;
+            // A safety check: Don't render a row if its specific data is missing
+            if (!data) return null;
+            
+            return (
+              <TableRow key={type}>
+                <TableCell>{type}</TableCell>
+                {/* We use optional chaining (?.) and the nullish coalescing operator (??) 
+                    for maximum safety. This prevents crashes if a value is null or undefined. */}
+                <TableCell>{data.r3?.toFixed(2) ?? 'N/A'}</TableCell>
+                <TableCell>{data.r2?.toFixed(2) ?? 'N/A'}</TableCell>
+                <TableCell>{data.r1?.toFixed(2) ?? 'N/A'}</TableCell>
+                <TableCell>{data.pp?.toFixed(2) ?? 'N/A'}</TableCell>
+                <TableCell>{data.s1?.toFixed(2) ?? 'N/A'}</TableCell>
+                <TableCell>{data.s2?.toFixed(2) ?? 'N/A'}</TableCell>
+                <TableCell>{data.s3?.toFixed(2) ?? 'N/A'}</TableCell>
+              </TableRow>
+            );
+          })}
+        </tbody>
+      </StyledTable>
+    </TableContainer>
+  );
+};
+
+export default PivotLevels;
 ```
 
 ## File: frontend/src/pages/AuthCallback.js
@@ -2587,6 +3151,79 @@ const PureVisionPage = () => {
 };
 
 export default PureVisionPage;
+```
+
+## File: frontend/src/styles/GlobalStyles.js
+```javascript
+import { createGlobalStyle } from 'styled-components';
+
+export const GlobalStyles = createGlobalStyle`
+  /* CSS Variables for our color palette */
+  :root {
+    --color-background: #0D1117;       /* Deep, dark blue-grey (like GitHub) */
+    --color-primary: #58A6FF;          /* A vibrant, accessible blue */
+    --color-secondary: #161B22;       /* Slightly lighter background for cards/containers */
+    --color-text-primary: #C9D1D9;     /* Light grey for primary text */
+    --color-text-secondary: #8B949E;   /* Darker grey for secondary text/labels */
+    --color-border: #30363D;          /* Border color */
+    --color-success: #3FB950;          /* Green for positive changes */
+    --color-danger: #F85149;           /* Red for negative changes */
+    --font-family-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  /* Resetting default styles */
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Mobile First: Slightly smaller base size */
+    font-size: 14px; 
+    
+    /* Tablet & Desktop: Scale up */
+    @media (min-width: 768px) {
+      font-size: 16px;
+    }
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-text-primary);
+    font-family: var(--font-family-sans);
+    line-height: 1.5;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: var(--color-text-primary);
+    font-weight: 600;
+  }
+
+  a {
+    color: var(--color-primary);
+    text-decoration: none;
+  }
+
+  /* Custom scrollbar for a more modern look */
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-secondary);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #4A5568; /* A neutral grey */
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #718096;
+  }
+`;
 ```
 
 ## File: frontend/src/utils/FyersClientEngine.js
@@ -2877,6 +3514,77 @@ except Exception as e:
 
 ```
 
+## File: test_ai_core.py
+```python
+import os
+import sys
+import traceback
+
+print("\n" + "="*50)
+print("🤖 PURE AI CORE DIAGNOSTIC TOOL")
+print("="*50 + "\n")
+
+# 1. CHECK LIBRARIES
+try:
+    import google.generativeai as genai
+    print("✅ google.generativeai library loaded.")
+except ImportError:
+    print("❌ ERROR: google.generativeai is NOT installed. Run: pip install google-generativeai")
+    sys.exit(1)
+    
+try:
+    from dotenv import load_dotenv
+    print("✅ python-dotenv library loaded.")
+except ImportError:
+    print("❌ ERROR: python-dotenv is NOT installed.")
+    sys.exit(1)
+
+# 2. LOCATE .ENV FILE
+env_paths =['backend/.env', '.env', '../backend/.env', 'backend/.env.txt']
+found_env = False
+for ep in env_paths:
+    if os.path.exists(ep):
+        load_dotenv(ep)
+        print(f"✅ Loaded environment variables from: {ep}")
+        found_env = True
+        break
+        
+if not found_env:
+    print("❌ ERROR: Could not locate .env file! The AI has no keys.")
+    print("Current working directory:", os.getcwd())
+    sys.exit(1)
+
+# 3. VERIFY API KEY
+key_str = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY")
+if not key_str:
+    print("❌ ERROR: GEMINI_API_KEY is completely empty or missing inside the .env file.")
+    sys.exit(1)
+    
+keys =[k.strip() for k in key_str.split(',') if k.strip()]
+if not keys:
+    print("❌ ERROR: Key format is invalid.")
+    sys.exit(1)
+
+first_key = keys[0]
+print(f"🔑 Extracted Key: {first_key[:5]}...{first_key[-4:]}")
+
+# 4. PING GOOGLE SERVERS DIRECTLY
+print("\n📡 Pinging Google's Servers (Model: gemini-1.5-flash)...")
+try:
+    genai.configure(api_key=first_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    response = model.generate_content("Respond with exactly two words: 'SYSTEM ONLINE'")
+    
+    print(f"\n🎉 GOOGLE RAW RESPONSE: {response.text.strip()}")
+    print("✅ THE AI CORE IS 100% HEALTHY!")
+    
+except Exception as e:
+    print("\n❌ CRITICAL AI FAILURE DETECTED!")
+    print("-" * 50)
+    traceback.print_exc()
+    print("-" * 50)
+```
+
 ## File: test_api.py
 ```python
 import os
@@ -2918,98 +3626,24 @@ else:
 print("-" * 30)
 ```
 
-## File: frontend/public/index.html
-```html
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <script src="https://cdn.fyers.in/socket/v3/fyers-socket.js"></script>
-    <meta charset="utf-8" />
-    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#000000" />
-    <meta
-      name="description"
-      content="Stellar Stock Screener - AI-Powered Financial Analysis"
-    />
-    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
-    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
-    
-    <!-- This is where the TradingView library will be loaded from -->
-    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+## File: test_direct.py
+```python
+import google.generativeai as genai
 
-    <title>Stellar Stock Screener</title>
-  </head>
-  <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
-    
-    <!-- THIS IS THE CRITICAL LINE -->
-    <div id="root"></div>
-    
-  </body>
-</html>
-```
+# WE WILL PASTE THE KEY DIRECTLY HERE
+TEST_KEY = "AIzaSyBtFhJ3Zbfkr3Phx1OBAa6hkSySROwKBZA,AIzaSyBwzrQpesMjkWvEOBV1dAtHx30qpjEeCC0,AIzaSyCqxMV8ZpfdmRVFscnIN1qIS918n-1feIg"
 
-## File: frontend/src/components/common/Card.js
-```javascript
-import React from 'react';
-import styled from 'styled-components';
+print("\n" + "="*50)
+print(f"Testing Key: {TEST_KEY[:5]}...{TEST_KEY[-4:]}")
 
-// This is our master styled component for all content blocks.
-const CardContainer = styled.div`
-  background-color: var(--color-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  margin-bottom: 1.5rem; 
-  width: 100%;
-  
-  /* Mobile: Tight padding */
-  padding: 1rem; 
-
-  /* Desktop: Luxurious padding */
-  @media (min-width: 768px) {
-    padding: 2rem;
-    margin-bottom: 2rem;
-    
-  }
-`;
-
-const CardHeader = styled.div`
-  margin-bottom: 1.5rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid var(--color-border);
-`;
-
-const CardTitle = styled.h2`
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--color-text-primary);
-`;
-
-const CardContent = styled.div`
-  /* The content inside the card will be placed here */
-`;
-
-// This is a reusable React component that accepts a title and content.
-const Card = ({ title, children }) => {
-  return (
-    <CardContainer>
-      {/* The title is optional; if a title is provided, the header will render. */}
-      {title && (
-        <CardHeader>
-          <CardTitle>{title}</CardTitle>
-        </CardHeader>
-      )}
-      <CardContent>
-        {/* 'children' is a special prop in React that lets us pass components inside other components.
-            Whatever we place inside <Card>...</Card> will be rendered here. */}
-        {children}
-      </CardContent>
-    </CardContainer>
-  );
-};
-
-export default Card;
+try:
+    genai.configure(api_key=TEST_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    res = model.generate_content("Reply with exactly the word 'ONLINE'.")
+    print(f"🎉 SUCCESS! Google says: {res.text.strip()}")
+except Exception as e:
+    print(f"❌ FAILED: {e}")
+print("="*50 + "\n")
 ```
 
 ## File: frontend/src/components/common/Tabs/NestedTabs.js
@@ -3287,208 +3921,445 @@ const DarvasScan = ({ scanData, currency }) => {
 export default DarvasScan;
 ```
 
+## File: frontend/src/components/Header/ConnectBroker.js
+```javascript
+import React, { useState, useEffect } from 'react';
+import styled from 'styled-components';
+import axios from 'axios';
+import { FaPlug, FaCheckCircle, FaSignOutAlt } from 'react-icons/fa';
+
+const Button = styled.button`
+  background: ${({ connected }) => (connected ? 'rgba(63, 185, 80, 0.15)' : 'linear-gradient(135deg, #58A6FF, #238636)')};
+  border: 1px solid ${({ connected }) => (connected ? '#3FB950' : 'transparent')};
+  color: ${({ connected }) => (connected ? '#3FB950' : '#ffffff')};
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+`;
+
+const ConnectBroker = () => {
+  const [token, setToken] = useState(localStorage.getItem('fyers_token'));
+
+  const handleLogin = async () => {
+    try {
+      // 1. Get the login URL from backend
+      // We use window.location.origin to dynamically pick localhost or 127.0.0.1
+      const backendUrl = ''; 
+      const res = await axios.get(`${backendUrl}/api/auth/fyers/login-url`);
+      
+      if (res.data.url) {
+        window.location.href = res.data.url;
+      }
+    } catch (e) {
+      console.error("Login Error", e);
+      // Detailed error message for debugging
+      alert(`Could not connect to broker. Server says: ${e.message}`);
+    }
+  };
+
+  const handleLogout = () => {
+      localStorage.removeItem('fyers_token');
+      localStorage.removeItem('fyers_client_id');
+      setToken(null);
+      window.location.reload(); // Refresh to reset sockets
+  };
+
+  if (token) {
+    return (
+      <Button connected onClick={handleLogout} title="Click to Disconnect">
+        <FaCheckCircle /> Fyers Connected
+      </Button>
+    );
+  }
+
+  return (
+    <Button onClick={handleLogin}>
+      <FaPlug /> Connect Broker
+    </Button>
+  );
+};
+
+export default ConnectBroker;
+```
+
+## File: frontend/src/components/IndexDetailPage/IndexChartAnalysis.js
+```javascript
+import React, { useMemo } from 'react';
+import styled, { keyframes } from 'styled-components';
+import Card from '../common/Card';
+import { 
+  FaGlobeAmericas, FaChartLine, FaShieldAlt, FaBullseye, 
+  FaLayerGroup, FaArrowUp, FaArrowDown, FaExchangeAlt,
+  FaCrosshairs, FaStopCircle, FaMoneyBillWave
+} from 'react-icons/fa';
+
+// --- STYLED COMPONENTS (Gold/Macro Theme) ---
+const fadeIn = keyframes`from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); }`;
+
+const AnalysisContainer = styled.div`display: flex; flex-direction: column; gap: 1.5rem; animation: ${fadeIn} 0.6s ease-out;`;
+
+const MacroVerdictCard = styled(Card)`
+  text-align: center; border-left: 4px solid #EBCB8B; 
+  background: linear-gradient(145deg, rgba(235, 203, 139, 0.05), rgba(13, 17, 23, 1));
+`;
+
+const TrendDisplay = styled.div`
+  display: flex; align-items: center; justify-content: center; gap: 1rem; font-size: 2rem; font-weight: 800; margin-bottom: 1rem; color: ${({ color }) => color}; text-transform: uppercase; letter-spacing: 1px;
+`;
+
+const MacroText = styled.p`font-size: 1.1rem; color: var(--color-text-primary); line-height: 1.8; font-style: italic; max-width: 90%; margin: 0 auto;`;
+
+const GridSection = styled.div`display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; @media (max-width: 768px) { grid-template-columns: 1fr; }`;
+
+const ZoneCard = styled.div`background: rgba(255, 255, 255, 0.03); border: 1px solid var(--color-border); border-radius: 12px; padding: 1.5rem; position: relative; overflow: hidden;`;
+const ZoneTitle = styled.h4`color: #EBCB8B; font-size: 1rem; font-weight: 700; margin-bottom: 1rem; display: flex; align-items: center; gap: 8px;`;
+const LevelList = styled.ul`list-style: none; padding: 0; margin: 0;`;
+const LevelItem = styled.li`color: var(--color-text-secondary); margin-bottom: 0.8rem; display: flex; align-items: start; gap: 10px; line-height: 1.5; svg { color: #EBCB8B; margin-top: 4px; }`;
+
+const StrategyBox = styled.div`
+  background: linear-gradient(135deg, #161B22 0%, #0D1117 100%);
+  border: 1px solid ${({ action }) => (action === 'BUY' ? '#238636' : action === 'SELL' ? '#DA3633' : '#8B949E')};
+  border-radius: 16px; padding: 0; position: relative; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+`;
+
+const StrategyHeader = styled.div`display: flex; justify-content: space-between; align-items: center; padding: 1.5rem 2rem; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.05);`;
+
+const DirectionBadge = styled.span`
+  background: ${({ action }) => (action === 'BUY' ? 'rgba(57, 211, 83, 0.15)' : action === 'SELL' ? 'rgba(248, 81, 73, 0.15)' : 'rgba(139, 148, 158, 0.15)')};
+  color: ${({ action }) => (action === 'BUY' ? '#3FB950' : action === 'SELL' ? '#F85149' : '#8B949E')};
+  border: 1px solid ${({ action }) => (action === 'BUY' ? '#3FB950' : action === 'SELL' ? '#F85149' : '#8B949E')};
+  padding: 0.5rem 1.5rem; border-radius: 8px; font-weight: 800; font-size: 1.1rem; letter-spacing: 1.5px;
+`;
+
+const MetricGrid = styled.div`display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: rgba(255,255,255,0.05); @media (max-width: 768px) { grid-template-columns: 1fr 1fr; }`;
+const MetricBox = styled.div`background: #0D1117; padding: 1.5rem; text-align: center; transition: background 0.2s; &:hover { background: #161B22; }`;
+const MetricLabel = styled.div`font-size: 0.7rem; color: #8B949E; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px;`;
+const MetricVal = styled.div`font-size: 1.25rem; font-weight: 700; font-family: 'Roboto Mono', monospace; color: ${({ color }) => color || '#C9D1D9'};`;
+
+const RationaleBox = styled.div`padding: 1.5rem 2rem; background: rgba(235, 203, 139, 0.05); border-top: 1px solid rgba(235, 203, 139, 0.1); color: #C9D1D9; line-height: 1.6; font-size: 0.95rem;`;
+
+// --- COMPONENT ---
+const IndexChartAnalysis = ({ analysisData }) => {
+  
+  // --- PERFECT PARSER (Includes 0-9 for targets and \n fix) ---
+  const parsed = useMemo(() => {
+    if (!analysisData || typeof analysisData !== 'string') return null;
+    
+    const rawKeys =['TREND', 'PATTERNS', 'LEVELS', 'VOLUME', 'MOMENTUM', 'INDICATORS', 'CONCLUSION', 'ACTION', 'ENTRY_ZONE', 'STOP_LOSS', 'TARGET_1', 'TARGET_2', 'RISK_REWARD', 'CONFIDENCE', 'RATIONALE'];
+    const sections = {};
+    
+    let text = "\n" + analysisData.replace(/\\\\n/g, '\n').replace(/\*\*/g, '').replace(/-- TRADE TICKET --/g, '');
+
+    rawKeys.forEach(key => {
+      const regex = new RegExp(`(?:^|\\n)\\s*${key}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*[A-Z0-9_]{3,}\\s*:|$)`, 'i');
+      const match = text.match(regex);
+      if (match) sections[key] = match[1].trim();
+    });
+    return sections;
+  }, [analysisData]);
+
+  if (!parsed) return null;
+
+  const isBullish = parsed.TREND?.toLowerCase().includes('uptrend') || parsed.TREND?.toLowerCase().includes('bullish');
+  const isBearish = parsed.TREND?.toLowerCase().includes('downtrend') || parsed.TREND?.toLowerCase().includes('bearish');
+  
+  const TrendIcon = isBullish ? FaArrowUp : isBearish ? FaArrowDown : FaExchangeAlt;
+  const trendColor = isBullish ? '#3FB950' : isBearish ? '#F85149' : '#EBCB8B';
+  const action = parsed.ACTION?.toUpperCase() || 'WAIT';
+
+  return (
+    <AnalysisContainer>
+      <MacroVerdictCard>
+        <div style={{color: '#EBCB8B', fontSize: '0.8rem', fontWeight: 600, marginBottom: '10px', textTransform: 'uppercase'}}>Quantitative Macro Outlook</div>
+        <TrendDisplay color={trendColor}><TrendIcon /> {parsed.TREND || 'Consolidation'}</TrendDisplay>
+        <MacroText>"{parsed.CONCLUSION || parsed.RATIONALE}"</MacroText>
+      </MacroVerdictCard>
+
+      {parsed.ENTRY_ZONE && (
+        <StrategyBox action={action}>
+            <StrategyHeader>
+                <div>
+                    <div style={{fontSize:'0.75rem', color:'#8B949E', letterSpacing:'1px', marginBottom:'5px'}}>STRATEGY SIGNAL</div>
+                    <DirectionBadge action={action}>{action}</DirectionBadge>
+                </div>
+                <div style={{textAlign:'right'}}>
+                    <div style={{fontSize:'0.75rem', color:'#8B949E', letterSpacing:'1px', marginBottom:'5px'}}>CONFIDENCE</div>
+                    <div style={{fontSize:'1.5rem', fontWeight:'bold', color:'#C9D1D9'}}>{parsed.CONFIDENCE || 'High (Data-Driven)'}</div>
+                </div>
+            </StrategyHeader>
+            
+            <MetricGrid>
+                <MetricBox>
+                    <MetricLabel><FaCrosshairs /> Entry Zone</MetricLabel>
+                    <MetricVal color="#58A6FF">{parsed.ENTRY_ZONE}</MetricVal>
+                </MetricBox>
+                <MetricBox>
+                    <MetricLabel><FaStopCircle /> Stop Loss (SL)</MetricLabel>
+                    <MetricVal color="#F85149">{parsed.STOP_LOSS}</MetricVal>
+                </MetricBox>
+                <MetricBox style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <MetricLabel><FaMoneyBillWave /> Take Profit Targets</MetricLabel>
+                    <div style={{display:'flex', justifyContent:'space-around', width: '100%', marginTop: '4px'}}>
+                        <div style={{display:'flex', flexDirection:'column', alignItems:'center'}}>
+                            <span style={{fontSize:'0.65rem', color:'#8B949E', fontWeight:'bold', letterSpacing:'1px'}}>T1 (1:1.5)</span>
+                            <span style={{color:'#3FB950', fontWeight:'700', fontSize:'1.15rem', fontFamily:'Roboto Mono'}}>{parsed.TARGET_1}</span>
+                        </div>
+                        <div style={{width: '1px', backgroundColor: 'rgba(255,255,255,0.1)', height: '100%'}}></div>
+                        <div style={{display:'flex', flexDirection:'column', alignItems:'center'}}>
+                            <span style={{fontSize:'0.65rem', color:'#8B949E', fontWeight:'bold', letterSpacing:'1px'}}>T2 (1:3.0)</span>
+                            <span style={{color:'#17C3B2', fontWeight:'700', fontSize:'1.15rem', fontFamily:'Roboto Mono'}}>{parsed.TARGET_2}</span>
+                        </div>
+                    </div>
+                </MetricBox>
+                <MetricBox>
+                    <MetricLabel><FaChartLine /> Risk / Reward</MetricLabel>
+                    <MetricVal color="#EBCB8B" style={{fontSize: '1.05rem'}}>{parsed.RISK_REWARD}</MetricVal>
+                </MetricBox>
+            </MetricGrid>
+            
+            <RationaleBox>
+                <strong style={{color:'#EBCB8B', marginRight:'8px'}}>Mathematical Rationale:</strong> {parsed.RATIONALE}
+            </RationaleBox>
+        </StrategyBox>
+      )}
+
+      <GridSection>
+        <ZoneCard>
+          <ZoneTitle><FaShieldAlt /> Key Levels</ZoneTitle>
+          <LevelList>
+             <LevelItem><FaChartLine /> {parsed.LEVELS || 'Calculating Support/Resistance...'}</LevelItem>
+             <LevelItem><FaBullseye /> Momentum: {parsed.MOMENTUM || 'Neutral'}</LevelItem>
+          </LevelList>
+        </ZoneCard>
+        <ZoneCard>
+          <ZoneTitle><FaLayerGroup /> Market Structure</ZoneTitle>
+          <LevelList>
+             <LevelItem><FaGlobeAmericas /> {parsed.PATTERNS || 'Algorithmic structural review.'}</LevelItem>
+             {parsed.INDICATORS && <LevelItem><FaChartLine /> {parsed.INDICATORS}</LevelItem>}
+          </LevelList>
+        </ZoneCard>
+      </GridSection>
+    </AnalysisContainer>
+  );
+};
+
+export default IndexChartAnalysis;
+```
+
 ## File: frontend/src/components/Peers/PeersComparison.js
 ```javascript
 import React, { useState, useEffect, useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
 import Card from '../common/Card';
+import { FaCrown, FaBalanceScale, FaChartLine, FaGlobe } from 'react-icons/fa';
 
-// --- Styled Components ---
+// --- ANIMATIONS & STYLES ---
+const fadeIn = keyframes`from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); }`;
 
-const fadeIn = keyframes`
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+const Loader = styled.div`display: flex; align-items: center; justify-content: center; height: 150px; color: var(--color-primary); font-weight: 500; letter-spacing: 1px;`;
+
+// --- WINNER CARD UI ---
+const WinnerCard = styled.div`
+  background: linear-gradient(135deg, rgba(235, 203, 139, 0.1) 0%, rgba(13, 17, 23, 0.9) 100%);
+  border: 1px solid #EBCB8B; border-radius: 12px; padding: 2rem; margin-bottom: 2rem;
+  box-shadow: 0 10px 30px rgba(235, 203, 139, 0.05); animation: ${fadeIn} 0.5s ease-out;
+  position: relative; overflow: hidden;
 `;
 
-const Loader = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 200px;
-  color: var(--color-primary);
-  animation: ${fadeIn} 0.5s ease-in;
+const WinnerHeader = styled.div`
+  display: flex; align-items: center; gap: 10px; color: #EBCB8B; font-weight: 800; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 1rem;
 `;
 
-const TableContainer = styled.div`
-  width: 100%;
-  overflow-x: auto; /* Allows horizontal scrolling on small screens */
-  animation: ${fadeIn} 0.5s ease-in;
+const WinnerSymbol = styled.h2`
+  font-size: 2.5rem; font-weight: 900; color: #fff; margin: 0 0 0.5rem 0; font-family: 'Roboto Mono', monospace;
+  text-shadow: 0 0 20px rgba(255,255,255,0.2);
 `;
 
-const StyledTable = styled.table`
-  width: 100%;
-  border-collapse: collapse;
-  text-align: right;
+const WinnerScore = styled.div`
+  position: absolute; top: 2rem; right: 2rem; background: rgba(63, 185, 80, 0.15); border: 1px solid #3FB950;
+  color: #3FB950; padding: 10px 20px; border-radius: 50px; font-weight: 800; font-size: 1.2rem;
+  box-shadow: 0 0 20px rgba(63, 185, 80, 0.2);
+  @media (max-width: 768px) { position: relative; top: 0; right: 0; width: fit-content; margin-bottom: 1rem; }
 `;
 
-const TableHeader = styled.th`
-  padding: 1rem;
-  color: var(--color-text-secondary);
-  font-weight: 500;
-  font-size: 0.9rem;
-  border-bottom: 1px solid var(--color-border);
-  cursor: pointer;
-  transition: color 0.2s ease;
-  white-space: nowrap;
+const RationaleText = styled.p`font-size: 1.05rem; color: #C9D1D9; line-height: 1.6; max-width: 800px; margin: 0;`;
 
-  &:first-child {
-    text-align: left;
-  }
+const Highlight = styled.span`color: ${({ color }) => color}; font-weight: 700;`;
 
-  &:hover {
-    color: var(--color-text-primary);
-  }
-`;
+// --- TABLE UI ---
+const TableContainer = styled.div`width: 100%; overflow-x: auto; border-radius: 12px; border: 1px solid var(--color-border); background: var(--color-secondary); animation: ${fadeIn} 0.7s ease-out;`;
+const StyledTable = styled.table`width: 100%; border-collapse: collapse; min-width: 800px;`;
+const Th = styled.th`text-align: left; padding: 16px; background: rgba(255, 255, 255, 0.03); color: var(--color-text-secondary); font-weight: 700; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 1px; border-bottom: 1px solid var(--color-border); cursor: pointer; transition: color 0.2s; &:hover{color: #fff;} &:last-child{text-align: right;}`;
+const Tr = styled.tr`border-bottom: 1px solid rgba(255, 255, 255, 0.05); transition: background 0.2s; background-color: ${({ $isMain }) => $isMain ? 'rgba(88, 166, 255, 0.1)' : 'transparent'}; &:last-child { border-bottom: none; } &:hover { background: rgba(255, 255, 255, 0.03); }`;
+const Td = styled.td`padding: 16px; font-size: 0.95rem; color: #C9D1D9; vertical-align: middle; font-family: 'Roboto Mono', monospace; &:first-child{font-weight: 700; color: var(--color-primary); font-family: 'Inter', sans-serif;} &:last-child{text-align: right;}`;
 
-const TableRow = styled.tr`
-  /* Highlight the row for the main symbol being analyzed */
-background-color: ${({ $isMainSymbol }) => $isMainSymbol ? 'rgba(88, 166, 255, 0.1)' : 'transparent'};  
-  &:not(:last-child) {
-    border-bottom: 1px solid var(--color-border);
-  }
-`;
+const ScoreBarContainer = styled.div`width: 100px; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; margin-left: auto; display: inline-block; vertical-align: middle; margin-right: 10px;`;
+const ScoreBarFill = styled.div`height: 100%; width: ${({ pct }) => pct}%; background: ${({ color }) => color}; border-radius: 3px;`;
 
-const TableCell = styled.td`
-  padding: 1rem;
-  font-size: 0.95rem;
-  font-family: 'Roboto Mono', monospace; /* Use a monospaced font for numerical data */
-
-  &:first-child {
-    font-weight: 600;
-    color: var(--color-text-primary);
-    text-align: left;
-    font-family: 'Inter', sans-serif; /* Use the standard font for the symbol name */
-  }
-`;
-
-// --- Helper Functions to Format Data ---
-
+// --- FORMATTERS ---
 const formatMarketCap = (num) => {
-  if (num === null || num === undefined || isNaN(num)) return 'N/A';
+  if (!num || isNaN(num)) return '--';
   if (Math.abs(num) >= 1e12) return `${(num / 1e12).toFixed(2)}T`;
   if (Math.abs(num) >= 1e9) return `${(num / 1e9).toFixed(2)}B`;
   if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(2)}M`;
   return num.toLocaleString();
 };
+const formatPercent = (num) => (!num || isNaN(num)) ? '--' : `${(num > 0 ? '+' : '')}${num.toFixed(2)}%`;
+const formatNumber = (num) => (!num || isNaN(num) || num === 0) ? '--' : num.toFixed(2);
 
-const formatPercent = (num) => {
-  if (num === null || num === undefined || isNaN(num)) return 'N/A';
-  return `${(num * 100).toFixed(2)}%`;
-};
-
-const formatNumber = (num) => {
-  if (num === null || num === undefined || isNaN(num)) return 'N/A';
-  return num.toFixed(2);
-};
-
-// --- The Definitive, Robust React Component ---
-
+// --- MAIN COMPONENT ---
 const PeersComparison = ({ symbol }) => {
   const [peersData, setPeersData] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [sortConfig, setSortConfig] = useState({ key: 'marketCap', direction: 'descending' });
+  const [sortConfig, setSortConfig] = useState({ key: 'smartScore', direction: 'descending' });
 
   useEffect(() => {
-    const fetchPeersData = async () => {
-      if (!symbol) {
-        setIsLoading(false);
-        return;
-      }
-      setIsLoading(true);
-      try {
-        const response = await axios.get(`/api/stocks/${symbol}/peers`);
-        setPeersData(response.data);
-      } catch (error) {
-        console.error("Failed to fetch peers data:", error);
-        setPeersData([]);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    // Add a small delay to this lazy-loaded fetch.
-    const timer = setTimeout(fetchPeersData, 300);
-    return () => clearTimeout(timer);
+    let isMounted = true;
+    if (!symbol) { setIsLoading(false); return; }
+    
+    axios.get(`/api/stocks/${symbol}/peers`)
+      .then(res => { if(isMounted) setPeersData(res.data); })
+      .catch(() => { if(isMounted) setPeersData([]); })
+      .finally(() => { if(isMounted) setIsLoading(false); });
+      
+    return () => { isMounted = false; };
   }, [symbol]);
 
-  // This is the logic for sorting the table's columns.
-  const sortedPeers = useMemo(() => {
-    let sortableItems = [...peersData];
-    if (sortConfig !== null) {
-      sortableItems.sort((a, b) => {
-        // This robust logic checks for both FMP's key and Yahoo's key.
-        const aValue = a[sortConfig.key] || a[sortConfig.key.replace('TTM', '')] || 0;
-        const bValue = b[sortConfig.key] || b[sortConfig.key.replace('TTM', '')] || 0;
+  // 💥 THE QUANTITATIVE SCORING ENGINE 💥
+  const scoredPeers = useMemo(() => {
+    if (!peersData || peersData.length === 0) return[];
+
+    return peersData.map(peer => {
+        let valueScore = 0;
+        const pe = peer.peRatioTTM || 0;
         
-        if (aValue < bValue) {
-          return sortConfig.direction === 'ascending' ? -1 : 1;
-        }
-        if (aValue > bValue) {
-          return sortConfig.direction === 'ascending' ? 1 : -1;
-        }
+        // 1. Value Math (Max 50 pts)
+        if (pe > 0 && pe <= 15) valueScore = 50;
+        else if (pe > 15 && pe <= 35) valueScore = 50 - ((pe - 15) * 2);
+        else if (pe > 35) valueScore = Math.max(0, 10 - (pe - 35));
+
+        // 2. Momentum Math (Max 50 pts)
+        let momScore = 25; 
+        const mom = peer.revenueGrowth || 0; 
+        momScore += (mom * 2); 
+        momScore = Math.min(Math.max(momScore, 0), 50);
+
+        // 3. Mega-Cap Stability Bonus (Max 5 pts)
+        let capBonus = 0;
+        if (peer.marketCap > 1e11) capBonus = 2; 
+        if (peer.marketCap > 1e12) capBonus = 5; 
+
+        // 4. Total Calculation
+        let totalScore = Math.min(valueScore + momScore + capBonus, 100);
+
+        return { ...peer, smartScore: totalScore, valueScore, momScore };
+    });
+  },[peersData]);
+
+  // Handle Sorting
+  const sortedAndScored = useMemo(() => {
+    let sortable = [...scoredPeers];
+    sortable.sort((a, b) => {
+        const aVal = a[sortConfig.key] || 0;
+        const bVal = b[sortConfig.key] || 0;
+        if (aVal < bVal) return sortConfig.direction === 'ascending' ? -1 : 1;
+        if (aVal > bVal) return sortConfig.direction === 'ascending' ? 1 : -1;
         return 0;
-      });
-    }
-    return sortableItems;
-  }, [peersData, sortConfig]);
+    });
+    return sortable;
+  }, [scoredPeers, sortConfig]);
 
   const requestSort = (key) => {
-    let direction = 'ascending';
-    if (sortConfig.key === key && sortConfig.direction === 'ascending') {
-      direction = 'descending';
-    }
-    setSortConfig({ key, direction });
+    let dir = 'ascending';
+    if (sortConfig.key === key && sortConfig.direction === 'ascending') dir = 'descending';
+    setSortConfig({ key, direction: dir });
   };
 
-  // --- Render Logic ---
+  const getScoreColor = (score) => {
+      if (score >= 70) return '#3FB950';
+      if (score >= 40) return '#EBCB8B';
+      return '#F85149';
+  };
 
-  if (isLoading) {
-    return (
-      <Card title="Peers Comparison">
-        <Loader>Finding and analyzing peers with AI...</Loader>
-      </Card>
-    );
-  }
+  if (isLoading) return <Card title="Sector & Peers"><Loader>Compiling Sector Data...</Loader></Card>;
+  if (!scoredPeers || scoredPeers.length <= 1) return <Card title="Sector & Peers"><p style={{color:'#8B949E'}}>Quantitative peer comparison unavailable.</p></Card>;
 
-  if (!peersData || peersData.length <= 1) {
-    return (
-      <Card title="Peers Comparison">
-        <p>Peer comparison data is not available for this stock.</p>
-      </Card>
-    );
+  // Find the absolute best stock in the sector
+  const winner = [...scoredPeers].sort((a, b) => b.smartScore - a.smartScore)[0];
+  
+  // Mathematically generate the explanation
+  let winReason = "";
+  if (winner.valueScore >= 40 && winner.momScore >= 35) {
+      winReason = `an exceptional balance of deep value (P/E: ${formatNumber(winner.peRatioTTM)}) and powerful upward momentum (${formatPercent(winner.revenueGrowth)}).`;
+  } else if (winner.valueScore >= 40) {
+      winReason = `a highly attractive valuation discount (P/E: ${formatNumber(winner.peRatioTTM)}) compared to its peers, limiting downside risk.`;
+  } else if (winner.momScore >= 40) {
+      winReason = `market-leading price momentum (${formatPercent(winner.revenueGrowth)}), indicating aggressive institutional accumulation.`;
+  } else {
+      winReason = `the most stable composite metrics in a currently weak sector environment.`;
   }
 
   return (
-    <Card title="Peers Comparison">
+    <Card title="Sector & Peers">
+      
+      {/* 💥 THE QUANTITATIVE CONCLUSION WINNER CARD 💥 */}
+      <WinnerCard>
+          <WinnerHeader><FaCrown size={16} /> Quantitative Sector Leader</WinnerHeader>
+          <WinnerScore>Score: {winner.smartScore.toFixed(0)}/100</WinnerScore>
+          <WinnerSymbol>{winner.symbol}</WinnerSymbol>
+          <RationaleText>
+              Based on algorithmic ranking, <Highlight color="#fff">{winner.symbol}</Highlight> is currently the top-performing asset in this peer group. 
+              The quantitative model selected this stock because it offers <Highlight color="#3FB950">{winReason}</Highlight>
+          </RationaleText>
+      </WinnerCard>
+
       <TableContainer>
         <StyledTable>
           <thead>
             <tr>
-              <TableHeader onClick={() => requestSort('symbol')}>Symbol</TableHeader>
-              <TableHeader onClick={() => requestSort('marketCap')}>Market Cap</TableHeader>
-              <TableHeader onClick={() => requestSort('peRatioTTM')}>P/E Ratio (TTM)</TableHeader>
-              <TableHeader onClick={() => requestSort('revenueGrowth')}>Revenue Growth</TableHeader>
-              <TableHeader onClick={() => requestSort('grossMargins')}>Gross Margin</TableHeader>
+              <Th onClick={() => requestSort('symbol')}>Symbol</Th>
+              <Th onClick={() => requestSort('marketCap')}>Market Cap</Th>
+              <Th onClick={() => requestSort('peRatioTTM')}>P/E Ratio</Th>
+              <Th onClick={() => requestSort('revenueGrowth')}>Momentum</Th>
+              <Th onClick={() => requestSort('smartScore')}>Smart Score</Th>
             </tr>
           </thead>
           <tbody>
-            {sortedPeers.map(peer => (
-<TableRow key={peer.symbol} $isMainSymbol={peer.symbol === symbol}>
-                <TableCell>{peer.symbol}</TableCell>
-                {/* This is the ultimate robust display logic, checking for both FMP's key and Yahoo's key for every cell */}
-                <TableCell>{formatMarketCap(peer.marketCapTTM || peer.marketCap)}</TableCell>
-                <TableCell>{formatNumber(peer.peRatioTTM)}</TableCell>
-                <TableCell>{formatPercent(peer.revenueGrowthTTM || peer.revenueGrowth)}</TableCell>
-                <TableCell>{formatPercent(peer.grossProfitMarginTTM || peer.grossMargins)}</TableCell>
-              </TableRow>
+            {sortedAndScored.map(peer => (
+              <Tr key={peer.symbol} $isMain={peer.symbol === symbol}>
+                <Td>{peer.symbol}</Td>
+                <Td>{formatMarketCap(peer.marketCap)}</Td>
+                <Td>{formatNumber(peer.peRatioTTM)}</Td>
+                <Td style={{color: peer.revenueGrowth > 0 ? '#3FB950' : peer.revenueGrowth < 0 ? '#F85149' : '#C9D1D9'}}>
+                    {formatPercent(peer.revenueGrowth)}
+                </Td>
+                <Td>
+                    <ScoreBarContainer>
+                        <ScoreBarFill pct={peer.smartScore} color={getScoreColor(peer.smartScore)} />
+                    </ScoreBarContainer>
+                    <span style={{color: getScoreColor(peer.smartScore), fontWeight: '700'}}>
+                        {peer.smartScore.toFixed(0)}
+                    </span>
+                </Td>
+              </Tr>
             ))}
           </tbody>
         </StyledTable>
       </TableContainer>
+
     </Card>
   );
 };
@@ -3496,229 +4367,162 @@ const PeersComparison = ({ symbol }) => {
 export default PeersComparison;
 ```
 
-## File: frontend/src/components/Technicals/MovingAverages.js
+## File: frontend/src/components/Shareholding/Shareholding.js
 ```javascript
 import React from 'react';
 import styled from 'styled-components';
+import Card from '../common/Card';
+import DonutChart from './DonutChart';
+import TrendChart from './TrendChart';
+import OwnershipTrend from './OwnershipTrend';
 
 // --- Styled Components ---
 
-const TableContainer = styled.div`
+const GridContainer = styled.div`
+  display: grid;
+  /* Create two columns of equal width */
+  grid-template-columns: 1fr 1fr; 
+  gap: 2rem; /* Space between the two charts */
+  align-items: center; /* Vertically align the content */
+  
+  /* On smaller screens, stack the charts on top of each other */
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const ChartContainer = styled.div`
   width: 100%;
-  max-width: 300px; /* Constrain width for a compact, clean look */
-  margin-left: auto; /* Push the table to the right within its grid container */
 `;
 
-const StyledTable = styled.table`
-  width: 100%;
-  border-collapse: collapse;
-`;
-
-const TableHeader = styled.th`
-  padding: 10px;
-  color: var(--color-text-secondary);
-  font-weight: 500;
-  font-size: 0.9rem;
-  text-align: left;
-  border-bottom: 1px solid var(--color-border);
-`;
-
-const TableCell = styled.td`
-  padding: 10px;
-  font-size: 0.95rem;
-
-  /* Style the period (e.g., "5 Days") cell */
-  &:first-child {
+const SectionTitle = styled.h3`
+    font-size: 1.2rem;
+    font-weight: 500;
     color: var(--color-text-secondary);
-  }
-
-  /* Style the calculated value cell */
-  &:last-child {
-    font-weight: 600;
-    color: var(--color-text-primary);
-    text-align: right;
-    font-family: 'Roboto Mono', monospace; /* Use a monospaced font for numbers */
-  }
+    text-align: center;
+    margin-bottom: 2rem;
 `;
 
-const TableRow = styled.tr`
-  border-bottom: 1px solid var(--color-border);
+// --- The Upgraded React Component ---
 
-  &:last-child {
-    border-bottom: none; /* Remove the border for the last row */
-  }
-`;
+// It now accepts 'historicalStatements' instead of 'historicalOwnership'
+const Shareholding = ({ shareholdingData, historicalStatements, shareholdingBreakdown }) => {
 
-// --- The New, Dynamic React Component ---
-
-// The component now accepts 'maData' as a prop from its parent.
-const MovingAverages = ({ maData }) => {
-  // If the data is missing or empty, we show an informative message.
-  if (!maData || Object.keys(maData).length === 0) {
+  // Defensive check: If there's no current shareholding data, show a message.
+  if (!shareholdingData || !Array.isArray(shareholdingData) || shareholdingData.length === 0) {
     return (
-      <TableContainer>
-        <p>Moving average data is not available.</p>
-      </TableContainer>
+      <Card title="Shareholding">
+        <p>Shareholding data is not available for this stock.</p>
+      </Card>
     );
   }
 
-  // We create a structured array to ensure the rows are always in the correct order.
-  const ma_periods = [
-    { period: '5 Days', key: '5' },
-    { period: '10 Days', key: '10' },
-    { period: '20 Days', key: '20' },
-    { period: '50 Days', key: '50' },
-    { period: '100 Days', key: '100' },
-    { period: '200 Days', key: '200' },
-  ];
-
   return (
-    <TableContainer>
-      <StyledTable>
-        <thead>
-          <tr>
-            <TableHeader>Period (SMA)</TableHeader>
-            <TableHeader style={{ textAlign: 'right' }}>Value</TableHeader>
-          </tr>
-        </thead>
-        <tbody>
-          {ma_periods.map(item => {
-            const value = maData[item.key];
-            return (
-              <TableRow key={item.period}>
-                <TableCell>{item.period}</TableCell>
-                {/* We check if the value is a valid number before displaying */}
-                <TableCell>{typeof value === 'number' ? value.toFixed(2) : 'N/A'}</TableCell>
-              </TableRow>
-            );
-          })}
-        </tbody>
-      </StyledTable>
-    </TableContainer>
+    <Card title="Shareholding">
+      {/* --- This top section for summary charts is unchanged --- */}
+      <GridContainer>
+        <ChartContainer>
+          <SectionTitle>Summary</SectionTitle>
+          <DonutChart breakdown={shareholdingBreakdown} />
+
+        </ChartContainer>
+        <ChartContainer>
+           <TrendChart />
+        </ChartContainer>
+      </GridContainer>
+
+      {/* --- THIS IS THE UPDATED PART --- */}
+      {/* We now pass the 'historicalStatements' prop to our new OwnershipTrend component. */}
+      {/* This component will now render the Shares Outstanding trend chart. */}
+      <OwnershipTrend historicalStatements={historicalStatements} />
+
+    </Card>
   );
 };
 
-export default MovingAverages;
+export default Shareholding;
 ```
 
-## File: frontend/src/components/Technicals/PivotLevels.js
+## File: frontend/src/components/Technicals/RatingDial.js
 ```javascript
 import React from 'react';
 import styled from 'styled-components';
+import GaugeChart from 'react-gauge-chart';
 
-// --- Styled Components ---
+// --- Styled Components (No changes here) ---
 
-const TableContainer = styled.div`
+const DialContainer = styled.div`
   width: 100%;
-  overflow-x: auto; /* Allows horizontal scrolling on small screens if needed */
+  max-width: 400px;
+  margin: 0 auto;
 `;
 
-const StyledTable = styled.table`
-  width: 100%;
-  border-collapse: collapse;
+const RatingText = styled.div`
+  font-size: 2rem;
+  font-weight: 700;
   text-align: center;
+  margin-top: -30px;
+  color: ${({ $ratingColor }) => $ratingColor};
 `;
 
-const TableHeader = styled.th`
-  padding: 12px;
-  color: var(--color-text-secondary);
-  font-weight: 500;
-  font-size: 0.9rem;
-  border-bottom: 1px solid var(--color-border);
-  white-space: nowrap; /* Prevents headers from wrapping */
-`;
+// --- The React Component (Logic is now more robust) ---
 
-const TableCell = styled.td`
-  padding: 12px;
-  font-size: 0.95rem;
-  font-family: 'Roboto Mono', monospace; /* Use a monospaced font for numbers */
-  border-bottom: 1px solid var(--color-border);
+const RatingDial = ({ rating }) => {
+  const getRatingDetails = () => {
+    // --- THIS IS THE CRITICAL FIX ---
+    // We add a "guard clause". If the rating prop is missing or not a string,
+    // we default to a Neutral state immediately. This prevents the .toLowerCase() error.
+    if (!rating || typeof rating !== 'string') {
+      return { percent: 0.5, color: 'var(--color-text-secondary)', text: 'Neutral' };
+    }
 
-  /* Style the 'Type' column differently */
-  &:first-child {
-    font-weight: 600;
-    color: var(--color-text-primary);
-    text-align: left;
-    font-family: 'Inter', sans-serif;
-  }
-`;
+    // The rest of the logic remains the same
+    switch (rating.toLowerCase()) {
+      case 'strong buy':
+      case 'bullish':
+      case 'very bullish':
+        return { percent: 0.9, color: 'var(--color-success)', text: 'Strong Buy' };
+      case 'buy':
+      case 'outperform':
+        return { percent: 0.7, color: 'var(--color-success)', text: 'Buy' };
+      case 'hold':
+      case 'neutral':
+        return { percent: 0.5, color: '#EDBB5A', text: 'Hold' };
+      case 'sell':
+      case 'underperform':
+        return { percent: 0.3, color: 'var(--color-danger)', text: 'Sell' };
+      case 'strong sell':
+      case 'bearish':
+        return { percent: 0.1, color: 'var(--color-danger)', text: 'Strong Sell' };
+      default:
+        return { percent: 0.5, color: 'var(--color-text-secondary)', text: 'Neutral' };
+    }
+  };
 
-const TableRow = styled.tr`
-  /* A subtle hover effect for better user experience */
-  &:hover {
-    background-color: rgba(48, 54, 61, 0.5);
-  }
-
-  /* Remove bottom border for the very last row */
-  &:last-child > td {
-      border-bottom: none;
-  }
-`;
-
-// --- The New, Dynamic React Component ---
-
-// The component now accepts 'pivotData' as a prop from its parent.
-const PivotLevels = ({ pivotData }) => {
-  // If the data is missing or empty, we show an informative message.
-  if (!pivotData || Object.keys(pivotData).length === 0) {
-    return (
-      <TableContainer>
-        <p>Pivot point data is not available.</p>
-      </TableContainer>
-    );
-  }
-
-  // We dynamically create our rows from the keys in the 'pivotData' object
-  // that our new backend provides (e.g., "classic", "fibonacci", "camarilla").
-  const pivotRows = [
-    { type: 'Classic', data: pivotData.classic },
-    { type: 'Fibonacci', data: pivotData.fibonacci },
-    { type: 'Camarilla', data: pivotData.camarilla },
-  ];
+  const { percent, color, text } = getRatingDetails();
 
   return (
-    <TableContainer>
-      <StyledTable>
-        <thead>
-          <tr>
-            <TableHeader>Type</TableHeader>
-            <TableHeader>R3</TableHeader>
-            <TableHeader>R2</TableHeader>
-            <TableHeader>R1</TableHeader>
-            <TableHeader>Pivot Point (PP)</TableHeader>
-            <TableHeader>S1</TableHeader>
-            <TableHeader>S2</TableHeader>
-            <TableHeader>S3</TableHeader>
-          </tr>
-        </thead>
-        <tbody>
-          {pivotRows.map(row => {
-            const { type, data } = row;
-            // A safety check: Don't render a row if its specific data is missing
-            if (!data) return null;
-            
-            return (
-              <TableRow key={type}>
-                <TableCell>{type}</TableCell>
-                {/* We use optional chaining (?.) and the nullish coalescing operator (??) 
-                    for maximum safety. This prevents crashes if a value is null or undefined. */}
-                <TableCell>{data.r3?.toFixed(2) ?? 'N/A'}</TableCell>
-                <TableCell>{data.r2?.toFixed(2) ?? 'N/A'}</TableCell>
-                <TableCell>{data.r1?.toFixed(2) ?? 'N/A'}</TableCell>
-                <TableCell>{data.pp?.toFixed(2) ?? 'N/A'}</TableCell>
-                <TableCell>{data.s1?.toFixed(2) ?? 'N/A'}</TableCell>
-                <TableCell>{data.s2?.toFixed(2) ?? 'N/A'}</TableCell>
-                <TableCell>{data.s3?.toFixed(2) ?? 'N/A'}</TableCell>
-              </TableRow>
-            );
-          })}
-        </tbody>
-      </StyledTable>
-    </TableContainer>
+    <DialContainer>
+      <GaugeChart
+        id="technical-rating-gauge"
+        nrOfLevels={30}
+        colors={['#F85149', '#EDBB5A', '#3FB950']}
+        arcWidth={0.3}
+        percent={percent}
+        textColor={'transparent'}
+        needleBaseColor={'#FFFFFF'}
+        needleColor={'#C9D1D9'}
+        animate={true}
+        animDelay={500}
+      />
+        <RatingText $ratingColor={color}>
+        {text}
+      </RatingText>
+    </DialContainer>
   );
 };
 
-export default PivotLevels;
+export default RatingDial;
 ```
 
 ## File: frontend/src/components/Technicals/TechnicalIndicatorsTable.js
@@ -3869,79 +4673,6 @@ const TechnicalIndicatorsTable = ({ indicators }) => {
 };
 
 export default TechnicalIndicatorsTable;
-```
-
-## File: frontend/src/styles/GlobalStyles.js
-```javascript
-import { createGlobalStyle } from 'styled-components';
-
-export const GlobalStyles = createGlobalStyle`
-  /* CSS Variables for our color palette */
-  :root {
-    --color-background: #0D1117;       /* Deep, dark blue-grey (like GitHub) */
-    --color-primary: #58A6FF;          /* A vibrant, accessible blue */
-    --color-secondary: #161B22;       /* Slightly lighter background for cards/containers */
-    --color-text-primary: #C9D1D9;     /* Light grey for primary text */
-    --color-text-secondary: #8B949E;   /* Darker grey for secondary text/labels */
-    --color-border: #30363D;          /* Border color */
-    --color-success: #3FB950;          /* Green for positive changes */
-    --color-danger: #F85149;           /* Red for negative changes */
-    --font-family-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  }
-
-  /* Resetting default styles */
-  *,
-  *::before,
-  *::after {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
-
-  html {
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    /* Mobile First: Slightly smaller base size */
-    font-size: 14px; 
-    
-    /* Tablet & Desktop: Scale up */
-    @media (min-width: 768px) {
-      font-size: 16px;
-    }
-  }
-
-  body {
-    background-color: var(--color-background);
-    color: var(--color-text-primary);
-    font-family: var(--font-family-sans);
-    line-height: 1.5;
-  }
-
-  h1, h2, h3, h4, h5, h6 {
-    color: var(--color-text-primary);
-    font-weight: 600;
-  }
-
-  a {
-    color: var(--color-primary);
-    text-decoration: none;
-  }
-
-  /* Custom scrollbar for a more modern look */
-  ::-webkit-scrollbar {
-    width: 8px;
-  }
-  ::-webkit-scrollbar-track {
-    background: var(--color-secondary);
-  }
-  ::-webkit-scrollbar-thumb {
-    background: #4A5568; /* A neutral grey */
-    border-radius: 4px;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: #718096;
-  }
-`;
 ```
 
 ## File: backend/app/services/sentiment_service.py
@@ -4164,6 +4895,134 @@ if __name__ == "__main__":
         print("🛑 Worker shutting down.")
     except Exception as e:
         print(f"❌ Worker Fatal Error: {e}")
+```
+
+## File: frontend/src/App.js
+```javascript
+import React from 'react';
+import PureVisionPage from './pages/PureVisionPage';
+import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
+import { GlobalStyles } from './styles/GlobalStyles';
+import HomePage from './pages/HomePage';
+import StockDetailPage from './pages/StockDetailPage';
+// --- NEW: Import our new Index Detail Page ---
+import IndexDetailPage from './pages/IndexDetailPage';
+import AuthCallback from './pages/AuthCallback'; // Import this
+
+
+function App() {
+  return (
+    <>
+      {/* This component injects our beautiful dark theme styles into the entire app */}
+      <GlobalStyles />
+
+      {/* The Router handles all page navigation */}
+      <Router>
+        <Routes>
+          {/* Route for the main landing/search page */}
+          <Route path="/" element={<HomePage />} />
+
+          {/* Route for the detailed stock analysis page */}
+          <Route path="/stock/:symbol" element={<StockDetailPage />} />
+
+          {/* --- NEW ROUTE ADDED HERE --- */}
+          {/* Route for the detailed index analysis page. 
+              The ":encodedSymbol" will hold the URL-safe version of the index symbol. */}
+          <Route path="/index/:encodedSymbol" element={<IndexDetailPage />} />
+          <Route path="/vision-result" element={<PureVisionPage />} />
+          <Route path="/auth-callback" element={<AuthCallback />} />
+
+
+        </Routes>
+      </Router>
+    </>
+  );
+}
+
+export default App;
+```
+
+## File: frontend/src/components/Financials/Financials.js
+```javascript
+import React from 'react';
+import styled from 'styled-components';
+
+// --- Import all our components ---
+import Card from '../common/Card';
+import RevenueChart from './RevenueChart';
+import KeyStats from './KeyStats';
+import AboutCompany from './AboutCompany';
+import BalanceSheet from './BalanceSheet';
+// --- NEW: Import our new Financial Statements viewer ---
+import FinancialStatements from './FinancialStatements';
+
+// --- Styled Components ---
+
+const FinancialsContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2rem; /* Adds space between each section */
+`;
+
+// --- The Final, Upgraded React Component ---
+
+const Financials = ({
+  profile,
+  keyStats,
+  financialData,
+  balanceSheetData,
+  // --- NEW: Accepting all the new data props ---
+  annualCashFlow,
+  quarterlyIncome,
+  quarterlyBalance,
+  quarterlyCashFlow
+}) => {
+  // Defensive check: If we don't have the core profile data, show a generic message.
+  if (!profile) {
+    return (
+      <Card>
+        <p>Financial data is not available for this stock.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <FinancialsContainer>
+
+        {/* --- Section 1: Key Stats (Unchanged) --- */}
+        <KeyStats stats={keyStats} />
+        
+        {/* --- Section 2: Balance Sheet Charts (Unchanged) --- */}
+        <BalanceSheet balanceSheetData={balanceSheetData} />
+
+        {/* --- Section 3: Income Statement Chart (Unchanged) --- */}
+        <div>
+            <h3 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.5rem' }}>Income Statement (5-Year Trend)</h3>
+            <RevenueChart data={financialData} />
+        </div>
+
+        {/* --- Section 4: Detailed Financial Statements Viewer (NEW!) --- */}
+        {/* We add our new component here, passing all the necessary annual and quarterly data down to it. */}
+        <FinancialStatements
+          currency={profile.currency}
+          annualIncome={financialData}
+          annualBalance={balanceSheetData}
+          annualCashFlow={annualCashFlow}
+          quarterlyIncome={quarterlyIncome}
+          quarterlyBalance={quarterlyBalance}
+          quarterlyCashFlow={quarterlyCashFlow}
+        />
+
+        {/* --- Section 5: About the Company (Unchanged) --- */}
+        <AboutCompany profile={profile} />
+
+      </FinancialsContainer>
+    </Card>
+  );
+};
+
+export default Financials;
 ```
 
 ## File: frontend/src/components/Forecasts/PriceTarget.js
@@ -4662,162 +5521,173 @@ const OverallSentiment = ({ sentimentData }) => {
 export default OverallSentiment;
 ```
 
-## File: frontend/src/components/Shareholding/Shareholding.js
+## File: frontend/src/components/Shareholding/DonutChart.js
 ```javascript
 import React from 'react';
-import styled from 'styled-components';
-import Card from '../common/Card';
-import DonutChart from './DonutChart';
-import TrendChart from './TrendChart';
-import OwnershipTrend from './OwnershipTrend';
+import styled, { keyframes } from 'styled-components';
+import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
+import { FaChartPie } from 'react-icons/fa'; // Import an icon for the placeholder
 
 // --- Styled Components ---
 
-const GridContainer = styled.div`
-  display: grid;
-  /* Create two columns of equal width */
-  grid-template-columns: 1fr 1fr; 
-  gap: 2rem; /* Space between the two charts */
-  align-items: center; /* Vertically align the content */
-  
-  /* On smaller screens, stack the charts on top of each other */
-  @media (max-width: 1200px) {
-    grid-template-columns: 1fr;
-  }
+const fadeIn = keyframes`
+  from { opacity: 0; }
+  to { opacity: 1; }
 `;
 
-const ChartContainer = styled.div`
+const ChartWrapper = styled.div`
   width: 100%;
+  height: 350px;
+  position: relative;
 `;
 
-const SectionTitle = styled.h3`
-    font-size: 1.2rem;
-    font-weight: 500;
-    color: var(--color-text-secondary);
-    text-align: center;
-    margin-bottom: 2rem;
+// --- NEW: Beautiful Placeholder Styles ---
+const PlaceholderContainer = styled.div`
+  width: 100%;
+  height: 350px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(255, 255, 255, 0.02);
+  border-radius: 12px;
+  border: 1px dashed var(--color-border);
+  padding: 2rem;
+  text-align: center;
+  animation: ${fadeIn} 0.5s ease-in;
+`;
+
+const PlaceholderIcon = styled.div`
+  font-size: 3rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 1rem;
+  opacity: 0.5;
+`;
+
+const PlaceholderTitle = styled.h4`
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 0.5rem;
+`;
+
+const DisclaimerText = styled.p`
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  max-width: 80%;
+  margin: 0 auto;
+  font-style: italic;
 `;
 
 // --- The Upgraded React Component ---
 
-// It now accepts 'historicalStatements' instead of 'historicalOwnership'
-const Shareholding = ({ shareholdingData, historicalStatements, shareholdingBreakdown }) => {
-
-  // Defensive check: If there's no current shareholding data, show a message.
-  if (!shareholdingData || !Array.isArray(shareholdingData) || shareholdingData.length === 0) {
-    return (
-      <Card title="Shareholding">
-        <p>Shareholding data is not available for this stock.</p>
-      </Card>
-    );
-  }
-
-  return (
-    <Card title="Shareholding">
-      {/* --- This top section for summary charts is unchanged --- */}
-      <GridContainer>
-        <ChartContainer>
-          <SectionTitle>Summary</SectionTitle>
-          <DonutChart breakdown={shareholdingBreakdown} />
-
-        </ChartContainer>
-        <ChartContainer>
-           <TrendChart />
-        </ChartContainer>
-      </GridContainer>
-
-      {/* --- THIS IS THE UPDATED PART --- */}
-      {/* We now pass the 'historicalStatements' prop to our new OwnershipTrend component. */}
-      {/* This component will now render the Shares Outstanding trend chart. */}
-      <OwnershipTrend historicalStatements={historicalStatements} />
-
-    </Card>
-  );
-};
-
-export default Shareholding;
-```
-
-## File: frontend/src/components/Technicals/RatingDial.js
-```javascript
-import React from 'react';
-import styled from 'styled-components';
-import GaugeChart from 'react-gauge-chart';
-
-// --- Styled Components (No changes here) ---
-
-const DialContainer = styled.div`
-  width: 100%;
-  max-width: 400px;
-  margin: 0 auto;
-`;
-
-const RatingText = styled.div`
-  font-size: 2rem;
-  font-weight: 700;
-  text-align: center;
-  margin-top: -30px;
-  color: ${({ $ratingColor }) => $ratingColor};
-`;
-
-// --- The React Component (Logic is now more robust) ---
-
-const RatingDial = ({ rating }) => {
-  const getRatingDetails = () => {
-    // --- THIS IS THE CRITICAL FIX ---
-    // We add a "guard clause". If the rating prop is missing or not a string,
-    // we default to a Neutral state immediately. This prevents the .toLowerCase() error.
-    if (!rating || typeof rating !== 'string') {
-      return { percent: 0.5, color: 'var(--color-text-secondary)', text: 'Neutral' };
-    }
-
-    // The rest of the logic remains the same
-    switch (rating.toLowerCase()) {
-      case 'strong buy':
-      case 'bullish':
-      case 'very bullish':
-        return { percent: 0.9, color: 'var(--color-success)', text: 'Strong Buy' };
-      case 'buy':
-      case 'outperform':
-        return { percent: 0.7, color: 'var(--color-success)', text: 'Buy' };
-      case 'hold':
-      case 'neutral':
-        return { percent: 0.5, color: '#EDBB5A', text: 'Hold' };
-      case 'sell':
-      case 'underperform':
-        return { percent: 0.3, color: 'var(--color-danger)', text: 'Sell' };
-      case 'strong sell':
-      case 'bearish':
-        return { percent: 0.1, color: 'var(--color-danger)', text: 'Strong Sell' };
-      default:
-        return { percent: 0.5, color: 'var(--color-text-secondary)', text: 'Neutral' };
-    }
+const DonutChart = ({ breakdown }) => {
+  // Define our professional color palette.
+  const COLORS = {
+    Promoter: '#3B82F6', // Blue
+    FII: '#10B981',      // Green
+    DII: '#F59E0B',      // Amber/Yellow
+    Public: '#EF4444',   // Red
   };
 
-  const { percent, color, text } = getRatingDetails();
+  // --- LOGIC CHECK: Do we have valid data? ---
+  // If breakdown is missing, empty, or has 'public' as undefined, we treat it as missing.
+  const hasData = breakdown && Object.keys(breakdown).length > 0 && breakdown.public !== undefined;
+
+  // If NO data, render the beautiful placeholder
+  if (!hasData) {
+      return (
+          <PlaceholderContainer>
+              <PlaceholderIcon>
+                  <FaChartPie />
+              </PlaceholderIcon>
+              <PlaceholderTitle>Data Coming Soon</PlaceholderTitle>
+              <DisclaimerText>
+                  Detailed shareholding patterns for this specific region are currently being integrated into our system. 
+                  <br />
+                  This section is a placeholder and will be updated automatically once the data source is live.
+              </DisclaimerText>
+          </PlaceholderContainer>
+      );
+  }
+
+  // --- Data Processing (Only runs if we have data) ---
+  const chartData = [
+    { name: 'Promoter', value: breakdown.promoter, color: COLORS.Promoter },
+    { name: 'FII', value: breakdown.fii, color: COLORS.FII },
+    { name: 'DII', value: breakdown.dii, color: COLORS.DII },
+    { name: 'Public', value: breakdown.public, color: COLORS.Public },
+  ].filter(entry => entry.value > 0.01);
+
+  const renderCustomizedLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name }) => {
+    const RADIAN = Math.PI / 180;
+    const radius = outerRadius * 1.4; 
+    const x = cx + radius * Math.cos(-midAngle * RADIAN);
+    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+
+    return (
+      <text
+        x={x}
+        y={y}
+        fill="var(--color-text-primary)"
+        textAnchor={x > cx ? 'start' : 'end'}
+        dominantBaseline="central"
+        fontSize="14px"
+        fontWeight="600"
+      >
+        {`${name} ${(percent * 100).toFixed(1)}%`}
+      </text>
+    );
+  };
 
   return (
-    <DialContainer>
-      <GaugeChart
-        id="technical-rating-gauge"
-        nrOfLevels={30}
-        colors={['#F85149', '#EDBB5A', '#3FB950']}
-        arcWidth={0.3}
-        percent={percent}
-        textColor={'transparent'}
-        needleBaseColor={'#FFFFFF'}
-        needleColor={'#C9D1D9'}
-        animate={true}
-        animDelay={500}
-      />
-        <RatingText $ratingColor={color}>
-        {text}
-      </RatingText>
-    </DialContainer>
+    <ChartWrapper>
+      <ResponsiveContainer>
+        <PieChart margin={{ top: 40, right: 40, bottom: 40, left: 40 }}>
+          <Pie
+            data={chartData}
+            cx="50%"
+            cy="50%"
+            innerRadius={80}
+            outerRadius={120}
+            fill="#8884d8"
+            paddingAngle={5}
+            dataKey="value"
+            nameKey="name"
+            labelLine={false}
+            label={renderCustomizedLabel}
+          >
+            {chartData.map((entry) => (
+              <Cell key={`cell-${entry.name}`} fill={entry.color} stroke={entry.color} />
+            ))}
+          </Pie>
+        </PieChart>
+      </ResponsiveContainer>
+    </ChartWrapper>
   );
 };
 
-export default RatingDial;
+export default DonutChart;
+```
+
+## File: nixpacks.toml
+```toml
+# Tell Railway to install both Python and Node
+providers = ["python", "nodejs"]
+
+[phases.install]
+# Install dependencies
+cmds = ["npm --prefix frontend install", "pip install -r backend/requirements.txt"]
+
+[phases.build]
+# Build React
+cmds = ["npm --prefix frontend run build"]
+
+[start]
+# STANDARD PRODUCTION LAUNCH
+# We run 4 workers. They will coordinate via Redis to pick 1 Data Fetcher.
+cmd = "gunicorn backend.app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120"
 ```
 
 ## File: backend/app/services/fundamental_service.py
@@ -5285,49 +6155,55 @@ class RedisManager:
 redis_client = RedisManager()
 ```
 
-## File: frontend/src/App.js
-```javascript
-import React from 'react';
-import PureVisionPage from './pages/PureVisionPage';
-import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
-import { GlobalStyles } from './styles/GlobalStyles';
-import HomePage from './pages/HomePage';
-import StockDetailPage from './pages/StockDetailPage';
-// --- NEW: Import our new Index Detail Page ---
-import IndexDetailPage from './pages/IndexDetailPage';
-import AuthCallback from './pages/AuthCallback'; // Import this
-
-
-function App() {
-  return (
-    <>
-      {/* This component injects our beautiful dark theme styles into the entire app */}
-      <GlobalStyles />
-
-      {/* The Router handles all page navigation */}
-      <Router>
-        <Routes>
-          {/* Route for the main landing/search page */}
-          <Route path="/" element={<HomePage />} />
-
-          {/* Route for the detailed stock analysis page */}
-          <Route path="/stock/:symbol" element={<StockDetailPage />} />
-
-          {/* --- NEW ROUTE ADDED HERE --- */}
-          {/* Route for the detailed index analysis page. 
-              The ":encodedSymbol" will hold the URL-safe version of the index symbol. */}
-          <Route path="/index/:encodedSymbol" element={<IndexDetailPage />} />
-          <Route path="/vision-result" element={<PureVisionPage />} />
-          <Route path="/auth-callback" element={<AuthCallback />} />
-
-
-        </Routes>
-      </Router>
-    </>
-  );
+## File: frontend/package.json
+```json
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "proxy": "http://localhost:8000",
+  "dependencies": {
+    "@testing-library/jest-dom": "^5.17.0",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^13.5.0",
+    "axios": "^1.13.2",
+    "lightweight-charts": "^5.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-gauge-chart": "^0.5.1",
+    "react-icons": "^5.5.0",
+    "react-router-dom": "^7.9.5",
+    "react-scripts": "5.0.1",
+    "recharts": "^3.3.0",
+    "styled-components": "^6.1.19",
+    "technicalindicators": "^3.1.0",
+    "web-vitals": "^2.1.4"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "CI=false react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
 }
-
-export default App;
 ```
 
 ## File: frontend/src/components/common/Tabs/Tabs.js
@@ -5516,844 +6392,107 @@ const TabPanel = ({ label, children }) => {
 export { Tabs, TabPanel };
 ```
 
-## File: frontend/src/components/Financials/Financials.js
-```javascript
-import React from 'react';
-import styled from 'styled-components';
-
-// --- Import all our components ---
-import Card from '../common/Card';
-import RevenueChart from './RevenueChart';
-import KeyStats from './KeyStats';
-import AboutCompany from './AboutCompany';
-import BalanceSheet from './BalanceSheet';
-// --- NEW: Import our new Financial Statements viewer ---
-import FinancialStatements from './FinancialStatements';
-
-// --- Styled Components ---
-
-const FinancialsContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 2rem; /* Adds space between each section */
-`;
-
-// --- The Final, Upgraded React Component ---
-
-const Financials = ({
-  profile,
-  keyStats,
-  financialData,
-  balanceSheetData,
-  // --- NEW: Accepting all the new data props ---
-  annualCashFlow,
-  quarterlyIncome,
-  quarterlyBalance,
-  quarterlyCashFlow
-}) => {
-  // Defensive check: If we don't have the core profile data, show a generic message.
-  if (!profile) {
-    return (
-      <Card>
-        <p>Financial data is not available for this stock.</p>
-      </Card>
-    );
-  }
-
-  return (
-    <Card>
-      <FinancialsContainer>
-
-        {/* --- Section 1: Key Stats (Unchanged) --- */}
-        <KeyStats stats={keyStats} />
+## File: backend/app/services/quant_engine.py
+```python
+def generate_algorithmic_report(symbol, timeframe, technicals, pivots, mas):
+    """
+    Institutional Quant Engine using ICT (Inner Circle Trader) concepts, 
+    Mean Reversion, and Volatility Targeting.
+    """
+    try:
+        # 1. Safe Extraction
+        price = float(technicals.get('price_action', {}).get('current_close', 0))
+        if price == 0: return "Data missing.\nACTION: WAIT\nRATIONALE: Price is 0."
         
-        {/* --- Section 2: Balance Sheet Charts (Unchanged) --- */}
-        <BalanceSheet balanceSheetData={balanceSheetData} />
+        rsi = float(technicals.get('rsi') or 50)
+        macd = float(technicals.get('macd') or 0)
+        macd_signal = float(technicals.get('macdsignal') or 0)
+        atr = float(technicals.get('atr') or (price * 0.02)) # Fallback ATR is 2%
+        
+        ema20 = float(mas.get('20') or price)
+        ema50 = float(mas.get('50') or price)
+        ema200 = float(mas.get('200') or price)
+        
+        s1 = float(pivots.get('classic', {}).get('s1') or price * 0.98)
+        s2 = float(pivots.get('classic', {}).get('s2') or price * 0.95)
+        r1 = float(pivots.get('classic', {}).get('r1') or price * 1.02)
+        r2 = float(pivots.get('classic', {}).get('r2') or price * 1.05)
+        pp = float(pivots.get('classic', {}).get('pp') or price)
 
-        {/* --- Section 3: Income Statement Chart (Unchanged) --- */}
-        <div>
-            <h3 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.5rem' }}>Income Statement (5-Year Trend)</h3>
-            <RevenueChart data={financialData} />
-        </div>
+        # 2. INSTITUTIONAL TREND ANALYSIS (Moving Average Ribbon)
+        trend = "Consolidation / Range"
+        patterns = f"Price is currently oscillating around the Pivot Point ({pp:.2f})."
+        
+        if price > ema20 and ema20 > ema50 and ema50 > ema200:
+            trend = "Aggressive Bullish Trend"
+            patterns = f"Perfect Moving Average alignment (Price > 20 > 50 > 200). Institutional accumulation phase."
+        elif price < ema20 and ema20 < ema50 and ema50 < ema200:
+            trend = "Aggressive Bearish Trend"
+            patterns = f"Negative Moving Average alignment. Institutional distribution phase."
+        elif price > ema200 and price < ema50:
+            trend = "Bullish Pullback"
+            patterns = f"Macro uptrend intact (Price > 200 EMA), but experiencing a short-term liquidity sweep."
 
-        {/* --- Section 4: Detailed Financial Statements Viewer (NEW!) --- */}
-        {/* We add our new component here, passing all the necessary annual and quarterly data down to it. */}
-        <FinancialStatements
-          currency={profile.currency}
-          annualIncome={financialData}
-          annualBalance={balanceSheetData}
-          annualCashFlow={annualCashFlow}
-          quarterlyIncome={quarterlyIncome}
-          quarterlyBalance={quarterlyBalance}
-          quarterlyCashFlow={quarterlyCashFlow}
-        />
+        # 3. MOMENTUM & DIVERGENCE
+        momentum = "Neutral"
+        if rsi > 65 and macd > macd_signal: momentum = "Strong Bullish Expansion"
+        elif rsi < 35 and macd < macd_signal: momentum = "Strong Bearish Expansion"
+        elif rsi > 75: momentum = "Overbought (Mean Reversion Risk)"
+        elif rsi < 25: momentum = "Oversold (Liquidity Grab / Bounce Risk)"
 
-        {/* --- Section 5: About the Company (Unchanged) --- */}
-        <AboutCompany profile={profile} />
-
-      </FinancialsContainer>
-    </Card>
-  );
-};
-
-export default Financials;
-```
-
-## File: frontend/src/components/Indices/IndicesBanner.js
-```javascript
-import React, { useState, useEffect, useRef } from 'react';
-import styled, { keyframes, css } from 'styled-components';
-import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
-
-// ==========================================
-// 1. HIGH-END ANIMATIONS
-// ==========================================
-
-const fadeIn = keyframes`
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
-`;
-
-const flashGreen = keyframes`
-  0% { color: var(--color-text-primary); transform: scale(1); }
-  10% { color: #3FB950; text-shadow: 0 0 15px rgba(63, 185, 80, 0.6); transform: scale(1.05); }
-  100% { color: var(--color-text-primary); transform: scale(1); }
-`;
-
-const flashRed = keyframes`
-  0% { color: var(--color-text-primary); transform: scale(1); }
-  10% { color: #F85149; text-shadow: 0 0 15px rgba(248, 81, 73, 0.6); transform: scale(1.05); }
-  100% { color: var(--color-text-primary); transform: scale(1); }
-`;
-
-// ==========================================
-// 2. STYLED COMPONENTS
-// ==========================================
-
-const BannerContainer = styled.div`
-  width: 100%;
-  padding: 1rem 0;
-  margin-bottom: 2rem;
-  overflow: hidden;
-`;
-
-const CardScroller = styled.div`
-  display: flex;
-  gap: 1rem;
-  overflow-x: auto;
-  padding: 0.5rem;
-  
-  /* Hide scrollbar for sleek look */
-  &::-webkit-scrollbar { display: none; }
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-`;
-
-const IndexCard = styled.div`
-  flex-shrink: 0;
-  width: 220px;
-  padding: 1.2rem;
-  background-color: var(--color-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 16px;
-  cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-  animation: ${fadeIn} 0.5s ease-out;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-
-  &:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
-    border-color: var(--color-primary);
-  }
-`;
-
-const IndexHeader = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.8rem;
-`;
-
-const IndexName = styled.h3`
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  margin: 0;
-  letter-spacing: 0.5px;
-`;
-
-const CurrencyBadge = styled.span`
-  font-size: 0.65rem;
-  background: rgba(255, 255, 255, 0.08);
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: var(--color-text-secondary);
-  font-weight: 700;
-`;
-
-const IndexPrice = styled.div`
-  font-size: 1.4rem;
-  font-weight: 700;
-  color: var(--color-text-primary);
-  margin-bottom: 0.4rem;
-  font-family: 'Roboto Mono', monospace;
-  
-  /* Dynamic Flashing Logic */
-  ${({ flash }) => flash === 'up' && css`animation: ${flashGreen} 0.5s ease-out;`}
-  ${({ flash }) => flash === 'down' && css`animation: ${flashRed} 0.5s ease-out;`}
-`;
-
-const IndexChange = styled.div`
-  font-size: 0.85rem;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: ${({ isPositive }) => (isPositive ? 'var(--color-success)' : 'var(--color-danger)')};
-`;
-
-const ConnectionDot = styled.div`
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: ${({ active }) => active ? '#3FB950' : 'transparent'};
-  box-shadow: ${({ active }) => active ? '0 0 5px #3FB950' : 'none'};
-  transition: background-color 0.3s ease;
-`;
-
-// ==========================================
-// 3. LOGIC & COMPONENT
-// ==========================================
-
-const getCurrencySymbol = (code) => {
-    switch (code) { 
-        case 'INR': return '₹'; 
-        case 'USD': return '$'; 
-        case 'JPY': return '¥'; 
-        case 'EUR': return '€'; 
-        default: return '$'; 
-    }
-};
-
-const IndicesBanner = () => {
-  const [indices, setIndices] = useState([]);
-  const [flashStates, setFlashStates] = useState({});
-  const [isConnected, setIsConnected] = useState(false);
-  const wsRef = useRef(null);
-  const navigate = useNavigate();
-  const isMounted = useRef(true);
-
-  // --- 1. INITIAL LOAD (REST API) ---
-  useEffect(() => {
-    isMounted.current = true;
-    const loadInitial = async () => {
-        try {
-            // Use Environment Variable for Flexibility (Vercel vs Local)
-            const baseUrl = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
-            const res = await axios.get(`${baseUrl}/api/indices/summary`);
+        # 4. INSTITUTIONAL TRADE LOGIC
+        action = "WAIT"
+        rationale = "Price action is trapped in a low-probability chop zone. Awaiting displacement."
+        
+        # Bullish Setup: Trend Continuation OR Deep Mean Reversion
+        if ("Bullish" in trend and rsi < 65) or rsi < 25:
+            action = "BUY"
+            stop_loss = price - (atr * 1.5) # Dynamic volatility stop
+            risk = price - stop_loss
+            target_1 = price + (risk * 1.5) 
+            target_2 = price + (risk * 3.0) 
+            rationale = "High-probability long setup based on algorithmic trend alignment and available upside liquidity."
             
-            if (res.data && Array.isArray(res.data) && isMounted.current) {
-                setIndices(res.data);
-            }
-        } catch(e) {
-            console.error("Initial load failed", e);
-        }
-    };
-    loadInitial();
-    
-    return () => { isMounted.current = false; };
-  }, []);
-
-  // --- 2. LIVE WEBSOCKET ENGINE ---
-  useEffect(() => {
-    // Dynamic URL Construction (Works on Vercel & Localhost)
-    const getWsUrl = () => {
-        const apiUrl = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
-        const wsProtocol = apiUrl.includes('https') ? 'wss://' : 'ws://';
-        const host = apiUrl.replace(/^https?:\/\//, '');
-        // Connect to the specific channel for homepage ticker
-        return `${wsProtocol}${host}/ws/live/MARKET_OVERVIEW`;
-    };
-
-    const wsUrl = getWsUrl();
-    let pingInterval = null;
-
-    const connect = () => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) return;
-
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-            if (!isMounted.current) return;
-            setIsConnected(true);
+        # Bearish Setup: Trend Continuation OR Overbought Rejection
+        elif ("Bearish" in trend and rsi > 35) or rsi > 75:
+            action = "SELL"
+            stop_loss = price + (atr * 1.5) 
+            risk = stop_loss - price
+            target_1 = price - (risk * 1.5)
+            target_2 = price - (risk * 3.0)
+            rationale = "High-probability short setup targeting lower liquidity pools. Selling into weakness."
             
-            // Heartbeat: Keep connection alive on Railway
-            pingInterval = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send("ping");
-                }
-            }, 10000); 
-        };
+        else:
+            stop_loss = s1
+            target_1 = r1
+            target_2 = r2
+            rr_text = "N/A"
 
-        ws.onmessage = (event) => {
-            if (!isMounted.current) return;
-            try {
-                const update = JSON.parse(event.data);
-                const symbol = update.symbol; 
-                
-                if (!symbol) return;
+        rr_text = "1:1.5 (T1) | 1:3.0 (T2)" if action in ["BUY", "SELL"] else "N/A"
 
-                setIndices(prevIndices => {
-                    return prevIndices.map(idx => {
-                        // Match incoming update to existing card
-                        if (idx.symbol === symbol) {
-                            
-                            // Visual Flash Logic
-                            if (update.price !== idx.price) {
-                                const dir = update.price > idx.price ? 'up' : 'down';
-                                
-                                setFlashStates(prev => ({ ...prev, [symbol]: dir }));
-                                
-                                // Clear flash after animation
-                                setTimeout(() => {
-                                    if (isMounted.current) {
-                                        setFlashStates(prev => {
-                                            const next = { ...prev };
-                                            delete next[symbol];
-                                            return next;
-                                        });
-                                    }
-                                }, 600);
-                            }
-                            
-                            // Return Updated Card Data
-                            return {
-                                ...idx,
-                                price: update.price,
-                                change: update.change,
-                                percent_change: update.percent_change
-                            };
-                        }
-                        return idx; // No change for this card
-                    });
-                });
-            } catch(e) {
-                // Silent fail for keep-alive packets
-            }
-        };
+        # 5. FLAWLESS FORMATTING
+        lines =[
+            f"TREND: {trend}",
+            f"PATTERNS: {patterns}",
+            f"MOMENTUM: {momentum}",
+            f"LEVELS: Key Support at {s1:.2f}, Key Resistance at {r1:.2f}.",
+            "VOLUME: Algorithm scanning standard deviations.",
+            f"INDICATORS: RSI ({rsi:.1f}) indicates {momentum}.",
+            f"CONCLUSION: The quantitative model detects a {trend}.",
+            "ACTION: " + action,
+            f"ENTRY_ZONE: {price:.2f}",
+            f"STOP_LOSS: {stop_loss:.2f}",
+            f"TARGET_1: {target_1:.2f}",
+            f"TARGET_2: {target_2:.2f}",
+            f"RISK_REWARD: {rr_text}",
+            "CONFIDENCE: High (Quant-Driven)",
+            f"RATIONALE: {rationale}"
+        ]
         
-        ws.onclose = () => {
-            if (isMounted.current) setIsConnected(false);
-            if (pingInterval) clearInterval(pingInterval);
-            // Auto-Reconnect after 3 seconds if connection drops
-            if (isMounted.current) setTimeout(connect, 3000);
-        };
-    };
-
-    connect();
-
-    // Cleanup on Unmount
-    return () => { 
-        if (pingInterval) clearInterval(pingInterval);
-        if(wsRef.current) wsRef.current.close(); 
-    };
-  }, []);
-
-  const handleCardClick = (symbol) => {
-    navigate(`/index/${encodeURIComponent(symbol)}`);
-  };
-
-  // Render nothing until data loads (prevents empty flashes)
-  if (indices.length === 0) return null;
-
-  return (
-    <BannerContainer>
-      <CardScroller>
-        {indices.map(index => {
-          // Safe Number Conversion (Fixes .toFixed crash)
-          const safePrice = Number(index.price) || 0;
-          const safeChange = Number(index.change) || 0;
-          const safePct = Number(index.percent_change) || 0;
-          
-          const isPositive = safeChange >= 0;
-          const symbol = getCurrencySymbol(index.currency);
-          const flash = flashStates[index.symbol];
-          
-          return (
-            <IndexCard key={index.symbol} onClick={() => handleCardClick(index.symbol)}>
-              <ConnectionDot active={isConnected} />
-              <IndexHeader>
-                <IndexName>{index.name}</IndexName>
-                <CurrencyBadge>{index.currency}</CurrencyBadge>
-              </IndexHeader>
-              
-              <IndexPrice flash={flash}>
-                {symbol}{safePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </IndexPrice>
-              
-              <IndexChange isPositive={isPositive}>
-                {isPositive ? '▲' : '▼'} 
-                {Math.abs(safeChange).toFixed(2)} ({safePct.toFixed(2)}%)
-              </IndexChange>
-            </IndexCard>
-          );
-        })}
-      </CardScroller>
-    </BannerContainer>
-  );
-};
-
-export default IndicesBanner;
-```
-
-## File: frontend/src/components/Shareholding/DonutChart.js
-```javascript
-import React from 'react';
-import styled, { keyframes } from 'styled-components';
-import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
-import { FaChartPie } from 'react-icons/fa'; // Import an icon for the placeholder
-
-// --- Styled Components ---
-
-const fadeIn = keyframes`
-  from { opacity: 0; }
-  to { opacity: 1; }
-`;
-
-const ChartWrapper = styled.div`
-  width: 100%;
-  height: 350px;
-  position: relative;
-`;
-
-// --- NEW: Beautiful Placeholder Styles ---
-const PlaceholderContainer = styled.div`
-  width: 100%;
-  height: 350px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background-color: rgba(255, 255, 255, 0.02);
-  border-radius: 12px;
-  border: 1px dashed var(--color-border);
-  padding: 2rem;
-  text-align: center;
-  animation: ${fadeIn} 0.5s ease-in;
-`;
-
-const PlaceholderIcon = styled.div`
-  font-size: 3rem;
-  color: var(--color-text-secondary);
-  margin-bottom: 1rem;
-  opacity: 0.5;
-`;
-
-const PlaceholderTitle = styled.h4`
-  font-size: 1.2rem;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin-bottom: 0.5rem;
-`;
-
-const DisclaimerText = styled.p`
-  font-size: 0.9rem;
-  color: var(--color-text-secondary);
-  line-height: 1.6;
-  max-width: 80%;
-  margin: 0 auto;
-  font-style: italic;
-`;
-
-// --- The Upgraded React Component ---
-
-const DonutChart = ({ breakdown }) => {
-  // Define our professional color palette.
-  const COLORS = {
-    Promoter: '#3B82F6', // Blue
-    FII: '#10B981',      // Green
-    DII: '#F59E0B',      // Amber/Yellow
-    Public: '#EF4444',   // Red
-  };
-
-  // --- LOGIC CHECK: Do we have valid data? ---
-  // If breakdown is missing, empty, or has 'public' as undefined, we treat it as missing.
-  const hasData = breakdown && Object.keys(breakdown).length > 0 && breakdown.public !== undefined;
-
-  // If NO data, render the beautiful placeholder
-  if (!hasData) {
-      return (
-          <PlaceholderContainer>
-              <PlaceholderIcon>
-                  <FaChartPie />
-              </PlaceholderIcon>
-              <PlaceholderTitle>Data Coming Soon</PlaceholderTitle>
-              <DisclaimerText>
-                  Detailed shareholding patterns for this specific region are currently being integrated into our system. 
-                  <br />
-                  This section is a placeholder and will be updated automatically once the data source is live.
-              </DisclaimerText>
-          </PlaceholderContainer>
-      );
-  }
-
-  // --- Data Processing (Only runs if we have data) ---
-  const chartData = [
-    { name: 'Promoter', value: breakdown.promoter, color: COLORS.Promoter },
-    { name: 'FII', value: breakdown.fii, color: COLORS.FII },
-    { name: 'DII', value: breakdown.dii, color: COLORS.DII },
-    { name: 'Public', value: breakdown.public, color: COLORS.Public },
-  ].filter(entry => entry.value > 0.01);
-
-  const renderCustomizedLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name }) => {
-    const RADIAN = Math.PI / 180;
-    const radius = outerRadius * 1.4; 
-    const x = cx + radius * Math.cos(-midAngle * RADIAN);
-    const y = cy + radius * Math.sin(-midAngle * RADIAN);
-
-    return (
-      <text
-        x={x}
-        y={y}
-        fill="var(--color-text-primary)"
-        textAnchor={x > cx ? 'start' : 'end'}
-        dominantBaseline="central"
-        fontSize="14px"
-        fontWeight="600"
-      >
-        {`${name} ${(percent * 100).toFixed(1)}%`}
-      </text>
-    );
-  };
-
-  return (
-    <ChartWrapper>
-      <ResponsiveContainer>
-        <PieChart margin={{ top: 40, right: 40, bottom: 40, left: 40 }}>
-          <Pie
-            data={chartData}
-            cx="50%"
-            cy="50%"
-            innerRadius={80}
-            outerRadius={120}
-            fill="#8884d8"
-            paddingAngle={5}
-            dataKey="value"
-            nameKey="name"
-            labelLine={false}
-            label={renderCustomizedLabel}
-          >
-            {chartData.map((entry) => (
-              <Cell key={`cell-${entry.name}`} fill={entry.color} stroke={entry.color} />
-            ))}
-          </Pie>
-        </PieChart>
-      </ResponsiveContainer>
-    </ChartWrapper>
-  );
-};
-
-export default DonutChart;
-```
-
-## File: frontend/src/pages/IndexDetailPage.js
-```javascript
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import styled, { keyframes } from 'styled-components';
-import axios from 'axios';
-import { FaArrowLeft, FaGlobeAmericas, FaChartLine, FaExclamationTriangle } from 'react-icons/fa';
-
-// --- COMPONENTS ---
-import StockHeader from '../components/Header/StockHeader';
-import CustomChart from '../components/Chart/CustomChart';
-import IndexChartAnalysis from '../components/IndexDetailPage/IndexChartAnalysis';
-import Technicals from '../components/Technicals/Technicals';
-import Card from '../components/common/Card';
-
-// --- CONFIGURATION ---
-// Critical for Vercel deployment to find the Railway backend
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
-
-// --- ANIMATIONS ---
-const fadeIn = keyframes`
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-`;
-
-const spin = keyframes`
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-`;
-
-// --- STYLED COMPONENTS ---
-
-const PageContainer = styled.div`
-  padding: 2rem 3rem;
-  max-width: 1800px;
-  margin: 0 auto;
-  animation: ${fadeIn} 0.5s ease-in;
-  
-  @media (max-width: 768px) {
-    padding: 1rem;
-  }
-`;
-
-const BackButton = styled.button`
-  background: none;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-secondary);
-  padding: 8px 16px;
-  border-radius: 20px;
-  cursor: pointer;
-  font-size: 0.9rem;
-  margin-bottom: 2rem;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-
-  &:hover {
-    background-color: var(--color-secondary);
-    color: var(--color-text-primary);
-    border-color: #EBCB8B; /* Gold Accent for Indices */
-  }
-`;
-
-const DashboardGrid = styled.div`
-  display: grid;
-  /* If AI data exists (upload), split 50/50. Otherwise full width. */
-  grid-template-columns: ${({ hasUpload }) => hasUpload ? '1fr 1fr' : '1fr'};
-  gap: 2rem;
-  
-  @media (max-width: 1200px) {
-    grid-template-columns: 1fr; /* Stack on smaller screens */
-  }
-`;
-
-const LeftPanel = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
-`;
-
-const RightPanel = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
-`;
-
-const SectionHeader = styled.h2`
-  font-size: 1.5rem;
-  color: #EBCB8B; /* Gold Theme */
-  margin-bottom: 1rem;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border-bottom: 1px solid rgba(235, 203, 139, 0.2);
-  padding-bottom: 0.5rem;
-`;
-
-const LoadingContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 80vh;
-  color: #EBCB8B;
-  font-size: 1.5rem;
-  gap: 1rem;
-`;
-
-const Spinner = styled.div`
-  border: 3px solid rgba(235, 203, 139, 0.3);
-  border-top: 3px solid #EBCB8B;
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
-  animation: ${spin} 1s linear infinite;
-`;
-
-const ErrorContainer = styled(LoadingContainer)`
-  color: #F85149;
-`;
-
-// --- MAIN COMPONENT ---
-
-const IndexDetailPage = () => {
-  const { encodedSymbol } = useParams();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const symbol = decodeURIComponent(encodedSymbol);
-  
-  // Data State
-  const aiAnalysisData = location.state?.chartAnalysis;
-  const [indexData, setIndexData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  // --- FETCH LIVE DATA ---
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        // Use the configured API URL
-        const response = await axios.get(`${API_URL}/api/indices/${encodedSymbol}/details`);
+        return "\n".join(lines)
         
-        if (!response.data || !response.data.profile) {
-            throw new Error("Incomplete data received");
-        }
-        
-        setIndexData(response.data);
-      } catch (err) {
-        console.error("Index fetch error:", err);
-        setError("Could not retrieve Global Market Data.");
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchData();
-  }, [encodedSymbol]);
-
-  // --- RENDER STATES ---
-
-  if (loading) {
-    return (
-        <LoadingContainer>
-            <Spinner />
-            <span>Loading Macro Data for {symbol}...</span>
-        </LoadingContainer>
-    );
-  }
-
-  if (error || !indexData) {
-      return (
-        <ErrorContainer>
-            <FaExclamationTriangle size={50} />
-            <p>{error || "Index Data Unavailable."}</p>
-            <BackButton onClick={() => navigate('/')}>Return Home</BackButton>
-        </ErrorContainer>
-      );
-  }
-
-  // Destructure Data from Backend
-  const { profile, quote, technical_indicators, moving_averages, pivot_points, analyst_ratings } = indexData;
-
-  return (
-    <PageContainer>
-      <BackButton onClick={() => navigate('/')}>
-        <FaArrowLeft /> Back to Command Center
-      </BackButton>
-
-      {/* 1. Header (Price, Name, Logo) */}
-      <StockHeader profile={profile} quote={quote} />
-
-      <DashboardGrid hasUpload={!!aiAnalysisData}>
-        
-        {/* --- LEFT PANEL: AI ANALYSIS (Only if uploaded) --- */}
-        {aiAnalysisData && (
-          <LeftPanel>
-            <SectionHeader><FaGlobeAmericas /> Macro Analysis</SectionHeader>
-            
-            {/* The Gold-Themed AI Card */}
-            <IndexChartAnalysis analysisData={aiAnalysisData} />
-            
-            <Card title="Context">
-                 <p style={{color:'var(--color-text-secondary)', lineHeight: '1.6'}}>
-                    This analysis is based on the technical structure provided in your uploaded chart. 
-                    Compare this with the live market data on the right for maximum confluence.
-                 </p>
-            </Card>
-          </LeftPanel>
-        )}
-
-        {/* --- RIGHT PANEL: LIVE MARKET DATA --- */}
-        <RightPanel>
-          <SectionHeader><FaChartLine /> Live Market Data</SectionHeader>
-          
-          {/* A. Live Interactive Chart */}
-          <CustomChart symbol={symbol} />
-
-          {/* B. Technical Dashboard */}
-          {/* CRITICAL: Passing snake_case backend data to camelCase props */}
-          <Technicals 
-             technicalIndicators={technical_indicators}
-             movingAverages={moving_averages} 
-             pivotPoints={pivot_points}
-             analystRatings={analyst_ratings}
-             quote={quote}
-          />
-        </RightPanel>
-
-      </DashboardGrid>
-
-    </PageContainer>
-  );
-};
-
-export default IndexDetailPage;
-```
-
-## File: frontend/package.json
-```json
-{
-  "name": "frontend",
-  "version": "0.1.0",
-  "private": true,
-  "proxy": "http://localhost:8000",
-  "dependencies": {
-    "@testing-library/jest-dom": "^5.17.0",
-    "@testing-library/react": "^13.4.0",
-    "@testing-library/user-event": "^13.5.0",
-    "axios": "^1.13.2",
-    "lightweight-charts": "^5.1.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-gauge-chart": "^0.5.1",
-    "react-icons": "^5.5.0",
-    "react-router-dom": "^7.9.5",
-    "react-scripts": "5.0.1",
-    "recharts": "^3.3.0",
-    "styled-components": "^6.1.19",
-    "technicalindicators": "^3.1.0",
-    "web-vitals": "^2.1.4"
-  },
-  "scripts": {
-    "start": "react-scripts start",
-    "build": "CI=false react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
-  }
-}
+    except Exception as e:
+        return f"TREND: Error\nACTION: WAIT\nRATIONALE: Quant Engine Failed: {e}"
 ```
 
 ## File: frontend/src/components/Fundamentals/FundamentalConclusion.js
@@ -6654,6 +6793,323 @@ const FundamentalConclusion = ({ conclusionData }) => {
 export default FundamentalConclusion;
 ```
 
+## File: frontend/src/components/Indices/IndicesBanner.js
+```javascript
+import React, { useState, useEffect, useRef } from 'react';
+import styled, { keyframes, css } from 'styled-components';
+import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
+
+// ==========================================
+// 1. HIGH-END ANIMATIONS
+// ==========================================
+
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+const flashGreen = keyframes`
+  0% { color: var(--color-text-primary); transform: scale(1); }
+  10% { color: #3FB950; text-shadow: 0 0 15px rgba(63, 185, 80, 0.6); transform: scale(1.05); }
+  100% { color: var(--color-text-primary); transform: scale(1); }
+`;
+
+const flashRed = keyframes`
+  0% { color: var(--color-text-primary); transform: scale(1); }
+  10% { color: #F85149; text-shadow: 0 0 15px rgba(248, 81, 73, 0.6); transform: scale(1.05); }
+  100% { color: var(--color-text-primary); transform: scale(1); }
+`;
+
+// ==========================================
+// 2. STYLED COMPONENTS
+// ==========================================
+
+const BannerContainer = styled.div`
+  width: 100%;
+  padding: 1rem 0;
+  margin-bottom: 2rem;
+  overflow: hidden;
+`;
+
+const CardScroller = styled.div`
+  display: flex;
+  gap: 1rem;
+  overflow-x: auto;
+  padding: 0.5rem;
+  
+  /* Hide scrollbar for sleek look */
+  &::-webkit-scrollbar { display: none; }
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+`;
+
+const IndexCard = styled.div`
+  flex-shrink: 0;
+  width: 220px;
+  padding: 1.2rem;
+  background-color: var(--color-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  animation: ${fadeIn} 0.5s ease-out;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+
+  &:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+    border-color: var(--color-primary);
+  }
+`;
+
+const IndexHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.8rem;
+`;
+
+const IndexName = styled.h3`
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  margin: 0;
+  letter-spacing: 0.5px;
+`;
+
+const CurrencyBadge = styled.span`
+  font-size: 0.65rem;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  font-weight: 700;
+`;
+
+const IndexPrice = styled.div`
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 0.4rem;
+  font-family: 'Roboto Mono', monospace;
+  
+  /* Dynamic Flashing Logic */
+  ${({ flash }) => flash === 'up' && css`animation: ${flashGreen} 0.5s ease-out;`}
+  ${({ flash }) => flash === 'down' && css`animation: ${flashRed} 0.5s ease-out;`}
+`;
+
+const IndexChange = styled.div`
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: ${({ isPositive }) => (isPositive ? 'var(--color-success)' : 'var(--color-danger)')};
+`;
+
+const ConnectionDot = styled.div`
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: ${({ active }) => active ? '#3FB950' : 'transparent'};
+  box-shadow: ${({ active }) => active ? '0 0 5px #3FB950' : 'none'};
+  transition: background-color 0.3s ease;
+`;
+
+// ==========================================
+// 3. LOGIC & COMPONENT
+// ==========================================
+
+const getCurrencySymbol = (code) => {
+    switch (code) { 
+        case 'INR': return '₹'; 
+        case 'USD': return '$'; 
+        case 'JPY': return '¥'; 
+        case 'EUR': return '€'; 
+        default: return '$'; 
+    }
+};
+
+const IndicesBanner = () => {
+  const [indices, setIndices] = useState([]);
+  const [flashStates, setFlashStates] = useState({});
+  const [isConnected, setIsConnected] = useState(false);
+  const wsRef = useRef(null);
+  const navigate = useNavigate();
+  const isMounted = useRef(true);
+
+  // --- 1. INITIAL LOAD (REST API) ---
+  useEffect(() => {
+    isMounted.current = true;
+    const loadInitial = async () => {
+        try {
+            // Use Environment Variable for Flexibility (Vercel vs Local)
+            const baseUrl = '';
+            const res = await axios.get(`${baseUrl}/api/indices/summary`);
+            
+            if (res.data && Array.isArray(res.data) && isMounted.current) {
+                setIndices(res.data);
+            }
+        } catch(e) {
+            console.error("Initial load failed", e);
+        }
+    };
+    loadInitial();
+    
+    return () => { isMounted.current = false; };
+  }, []);
+
+  // --- 2. LIVE WEBSOCKET ENGINE ---
+  useEffect(() => {
+    // Dynamic URL Construction (Works on Vercel & Localhost)
+    const getWsUrl = () => {
+        const apiUrl = window.location.origin;
+        const wsProtocol = apiUrl.includes('https') ? 'wss://' : 'ws://';
+        const host = apiUrl.replace(/^https?:\/\//, '');
+        // Connect to the specific channel for homepage ticker
+        return `${wsProtocol}${host}/ws/live/MARKET_OVERVIEW`;
+    };
+
+    const wsUrl = getWsUrl();
+    let pingInterval = null;
+
+    const connect = () => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+            if (!isMounted.current) return;
+            setIsConnected(true);
+            
+            // Heartbeat: Keep connection alive on Railway
+            pingInterval = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send("ping");
+                }
+            }, 10000); 
+        };
+
+        ws.onmessage = (event) => {
+            if (!isMounted.current) return;
+            try {
+                const update = JSON.parse(event.data);
+                const symbol = update.symbol; 
+                
+                if (!symbol) return;
+
+                setIndices(prevIndices => {
+                    return prevIndices.map(idx => {
+                        // Match incoming update to existing card
+                        if (idx.symbol === symbol) {
+                            
+                            // Visual Flash Logic
+                            if (update.price !== idx.price) {
+                                const dir = update.price > idx.price ? 'up' : 'down';
+                                
+                                setFlashStates(prev => ({ ...prev, [symbol]: dir }));
+                                
+                                // Clear flash after animation
+                                setTimeout(() => {
+                                    if (isMounted.current) {
+                                        setFlashStates(prev => {
+                                            const next = { ...prev };
+                                            delete next[symbol];
+                                            return next;
+                                        });
+                                    }
+                                }, 600);
+                            }
+                            
+                            // Return Updated Card Data
+                            return {
+                                ...idx,
+                                price: update.price,
+                                change: update.change,
+                                percent_change: update.percent_change
+                            };
+                        }
+                        return idx; // No change for this card
+                    });
+                });
+            } catch(e) {
+                // Silent fail for keep-alive packets
+            }
+        };
+        
+        ws.onclose = () => {
+            if (isMounted.current) setIsConnected(false);
+            if (pingInterval) clearInterval(pingInterval);
+            // Auto-Reconnect after 3 seconds if connection drops
+            if (isMounted.current) setTimeout(connect, 3000);
+        };
+    };
+
+    connect();
+
+    // Cleanup on Unmount
+    return () => { 
+        if (pingInterval) clearInterval(pingInterval);
+        if(wsRef.current) wsRef.current.close(); 
+    };
+  }, []);
+
+  const handleCardClick = (symbol) => {
+    navigate(`/index/${encodeURIComponent(symbol)}`);
+  };
+
+  // Render nothing until data loads (prevents empty flashes)
+  if (indices.length === 0) return null;
+
+  return (
+    <BannerContainer>
+      <CardScroller>
+        {indices.map(index => {
+          // Safe Number Conversion (Fixes .toFixed crash)
+          const safePrice = Number(index.price) || 0;
+          const safeChange = Number(index.change) || 0;
+          const safePct = Number(index.percent_change) || 0;
+          
+          const isPositive = safeChange >= 0;
+          const symbol = getCurrencySymbol(index.currency);
+          const flash = flashStates[index.symbol];
+          
+          return (
+            <IndexCard key={index.symbol} onClick={() => handleCardClick(index.symbol)}>
+              <ConnectionDot active={isConnected} />
+              <IndexHeader>
+                <IndexName>{index.name}</IndexName>
+                <CurrencyBadge>{index.currency}</CurrencyBadge>
+              </IndexHeader>
+              
+              <IndexPrice flash={flash}>
+                {symbol}{safePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </IndexPrice>
+              
+              <IndexChange isPositive={isPositive}>
+                {isPositive ? '▲' : '▼'} 
+                {Math.abs(safeChange).toFixed(2)} ({safePct.toFixed(2)}%)
+              </IndexChange>
+            </IndexCard>
+          );
+        })}
+      </CardScroller>
+    </BannerContainer>
+  );
+};
+
+export default IndicesBanner;
+```
+
 ## File: frontend/src/components/Technicals/Technicals.js
 ```javascript
 import React, { useState, useMemo } from 'react';
@@ -6665,7 +7121,7 @@ import { useParams } from 'react-router-dom';
 import { FaArrowUp, FaArrowDown, FaExchangeAlt, FaLayerGroup, FaSync } from 'react-icons/fa';
 
 // --- CONFIGURATION ---
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_URL = '';
 
 // --- STYLED COMPONENTS ---
 
@@ -7196,6 +7652,245 @@ const Technicals = ({
 export default Technicals;
 ```
 
+## File: frontend/src/pages/IndexDetailPage.js
+```javascript
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import styled, { keyframes } from 'styled-components';
+import axios from 'axios';
+import { FaArrowLeft, FaGlobeAmericas, FaChartLine, FaExclamationTriangle } from 'react-icons/fa';
+
+// --- COMPONENTS ---
+import StockHeader from '../components/Header/StockHeader';
+import CustomChart from '../components/Chart/CustomChart';
+import IndexChartAnalysis from '../components/IndexDetailPage/IndexChartAnalysis';
+import Technicals from '../components/Technicals/Technicals';
+import Card from '../components/common/Card';
+
+// --- CONFIGURATION ---
+// Critical for Vercel deployment to find the Railway backend
+const API_URL = '';
+
+// --- ANIMATIONS ---
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+const spin = keyframes`
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+`;
+
+// --- STYLED COMPONENTS ---
+
+const PageContainer = styled.div`
+  padding: 2rem 3rem;
+  max-width: 1800px;
+  margin: 0 auto;
+  animation: ${fadeIn} 0.5s ease-in;
+  
+  @media (max-width: 768px) {
+    padding: 1rem;
+  }
+`;
+
+const BackButton = styled.button`
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  padding: 8px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  margin-bottom: 2rem;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+
+  &:hover {
+    background-color: var(--color-secondary);
+    color: var(--color-text-primary);
+    border-color: #EBCB8B; /* Gold Accent for Indices */
+  }
+`;
+
+const DashboardGrid = styled.div`
+  display: grid;
+  /* If AI data exists (upload), split 50/50. Otherwise full width. */
+  grid-template-columns: ${({ hasUpload }) => hasUpload ? '1fr 1fr' : '1fr'};
+  gap: 2rem;
+  
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr; /* Stack on smaller screens */
+  }
+`;
+
+const LeftPanel = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+`;
+
+const RightPanel = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+`;
+
+const SectionHeader = styled.h2`
+  font-size: 1.5rem;
+  color: #EBCB8B; /* Gold Theme */
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid rgba(235, 203, 139, 0.2);
+  padding-bottom: 0.5rem;
+`;
+
+const LoadingContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 80vh;
+  color: #EBCB8B;
+  font-size: 1.5rem;
+  gap: 1rem;
+`;
+
+const Spinner = styled.div`
+  border: 3px solid rgba(235, 203, 139, 0.3);
+  border-top: 3px solid #EBCB8B;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: ${spin} 1s linear infinite;
+`;
+
+const ErrorContainer = styled(LoadingContainer)`
+  color: #F85149;
+`;
+
+// --- MAIN COMPONENT ---
+
+const IndexDetailPage = () => {
+  const { encodedSymbol } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const symbol = decodeURIComponent(encodedSymbol);
+  
+  // Data State
+  const aiAnalysisData = location.state?.chartAnalysis;
+  const [indexData, setIndexData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // --- FETCH LIVE DATA ---
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        // Use the configured API URL
+        const response = await axios.get(`${API_URL}/api/indices/${encodedSymbol}/details`);
+        
+        if (!response.data || !response.data.profile) {
+            throw new Error("Incomplete data received");
+        }
+        
+        setIndexData(response.data);
+      } catch (err) {
+        console.error("Index fetch error:", err);
+        setError("Could not retrieve Global Market Data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, [encodedSymbol]);
+
+  // --- RENDER STATES ---
+
+  if (loading) {
+    return (
+        <LoadingContainer>
+            <Spinner />
+            <span>Loading Macro Data for {symbol}...</span>
+        </LoadingContainer>
+    );
+  }
+
+  if (error || !indexData) {
+      return (
+        <ErrorContainer>
+            <FaExclamationTriangle size={50} />
+            <p>{error || "Index Data Unavailable."}</p>
+            <BackButton onClick={() => navigate('/')}>Return Home</BackButton>
+        </ErrorContainer>
+      );
+  }
+
+  // Destructure Data from Backend
+  const { profile, quote, technical_indicators, moving_averages, pivot_points, analyst_ratings } = indexData;
+
+  return (
+    <PageContainer>
+      <BackButton onClick={() => navigate('/')}>
+        <FaArrowLeft /> Back to Command Center
+      </BackButton>
+
+      {/* 1. Header (Price, Name, Logo) */}
+      <StockHeader profile={profile} quote={quote} />
+
+      <DashboardGrid hasUpload={!!aiAnalysisData}>
+        
+        {/* --- LEFT PANEL: AI ANALYSIS (Only if uploaded) --- */}
+        {aiAnalysisData && (
+          <LeftPanel>
+            <SectionHeader><FaGlobeAmericas /> Macro Analysis</SectionHeader>
+            
+            {/* The Gold-Themed AI Card */}
+            <IndexChartAnalysis analysisData={aiAnalysisData} />
+            
+            <Card title="Context">
+                 <p style={{color:'var(--color-text-secondary)', lineHeight: '1.6'}}>
+                    This analysis is based on the technical structure provided in your uploaded chart. 
+                    Compare this with the live market data on the right for maximum confluence.
+                 </p>
+            </Card>
+          </LeftPanel>
+        )}
+
+        {/* --- RIGHT PANEL: LIVE MARKET DATA --- */}
+        <RightPanel>
+          <SectionHeader><FaChartLine /> Live Market Data</SectionHeader>
+          
+          {/* A. Live Interactive Chart */}
+          <CustomChart symbol={symbol} />
+
+          {/* B. Technical Dashboard */}
+          {/* CRITICAL: Passing snake_case backend data to camelCase props */}
+          <Technicals 
+             technicalIndicators={technical_indicators}
+             movingAverages={moving_averages} 
+             pivotPoints={pivot_points}
+             analystRatings={analyst_ratings}
+             quote={quote}
+          />
+        </RightPanel>
+
+      </DashboardGrid>
+
+    </PageContainer>
+  );
+};
+
+export default IndexDetailPage;
+```
+
 ## File: backend/app/routers/indices.py
 ```python
 import asyncio
@@ -7457,988 +8152,6 @@ async def startup_event():
     asyncio.create_task(producer.start())
 ```
 
-## File: frontend/src/components/Forecasts/Forecasts.js
-```javascript
-import React, { useState, useEffect, useCallback } from 'react';
-import styled, { keyframes, css } from 'styled-components';
-import axios from 'axios';
-import Card from '../common/Card';
-import PriceTarget from './PriceTarget';
-import AnalystRating from './AnalystRating';
-import { FaRedo, FaRobot } from 'react-icons/fa';
-
-// ==========================================
-// 1. CONFIGURATION
-// ==========================================
-// This ensures the frontend talks to Railway in production
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
-
-// ==========================================
-// 2. STYLED COMPONENTS & ANIMATIONS
-// ==========================================
-
-const fadeIn = keyframes`
-  from { opacity: 0; }
-  to { opacity: 1; }
-`;
-
-const spin = keyframes`
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-`;
-
-const ForecastGrid = styled.div`
-  display: grid;
-  grid-template-columns: 1.5fr 1fr;
-  gap: 3rem;
-
-  @media (max-width: 1200px) {
-    grid-template-columns: 1fr;
-  }
-`;
-
-const LeftColumn = styled.div``;
-const RightColumn = styled.div``;
-
-const AiAnalysisContainer = styled.div`
-  margin-top: 3rem;
-  padding-top: 2rem;
-  border-top: 1px solid var(--color-border);
-  animation: ${fadeIn} 0.5s ease-in;
-`;
-
-const AnalysisHeader = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
-`;
-
-const SectionTitle = styled.h3`
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0;
-`;
-
-const RegenerateButton = styled.button`
-  background: transparent;
-  border: 1px solid var(--color-primary);
-  color: var(--color-primary);
-  padding: 6px 12px;
-  border-radius: 6px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  transition: all 0.2s ease;
-
-  &:hover {
-    background: var(--color-primary);
-    color: white;
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  svg {
-    ${({ isLoading }) => isLoading && css`
-      animation: ${spin} 1s linear infinite;
-    `}
-  }
-`;
-
-const AiSummaryText = styled.div`
-  font-size: 1rem;
-  color: var(--color-text-secondary);
-  line-height: 1.8;
-  white-space: pre-wrap; 
-  background: rgba(255, 255, 255, 0.02);
-  padding: 1.5rem;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
-`;
-
-const Loader = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 150px;
-  color: var(--color-primary);
-  gap: 10px;
-  font-weight: 500;
-`;
-
-// ==========================================
-// 3. MAIN COMPONENT
-// ==========================================
-
-const Forecasts = ({ symbol, quote, analystRatings, priceTarget, keyStats, news, currency, delay }) => {
-  const [aiAnalysis, setAiAnalysis] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasError, setHasError] = useState(false);
-
-  // --- AI FETCH ENGINE ---
-  const fetchAiAnalysis = useCallback(async () => {
-    // Guard clause: Ensure essential data exists before asking AI
-    if (!symbol || !analystRatings || !priceTarget || !keyStats || !news || !quote) {
-      setIsLoading(false);
-      return;
-    }
-    
-    setIsLoading(true);
-    setHasError(false);
-    
-    try {
-      const payload = {
-        companyName: quote.name || symbol,
-        analystRatings: analystRatings,
-        priceTarget: priceTarget,
-        keyStats: keyStats,
-        newsHeadlines: news.map(n => n.title).slice(0, 10),
-        currency: currency || 'USD'
-      };
-
-      // --- CRITICAL FIX: Use API_URL variable ---
-      const response = await axios.post(`${API_URL}/api/stocks/${symbol}/forecast-analysis`, payload);
-      
-      if (response.data.analysis && !response.data.analysis.includes("Could not generate")) {
-          setAiAnalysis(response.data.analysis);
-      } else {
-          setAiAnalysis("Analysis temporarily unavailable. Please try regenerating.");
-          setHasError(true);
-      }
-
-    } catch (error) {
-      console.error("Failed to fetch AI forecast analysis:", error);
-      setAiAnalysis("Connection error. Could not retrieve AI analysis.");
-      setHasError(true);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [symbol, quote, analystRatings, priceTarget, keyStats, news, currency]);
-
-  // --- INITIAL LOAD ---
-  useEffect(() => {
-    const timer = setTimeout(() => {
-        fetchAiAnalysis();
-    }, delay || 0);
-
-    return () => clearTimeout(timer);
-  }, [fetchAiAnalysis, delay]);
-
-
-  // --- RENDER CHECKS ---
-  if (!priceTarget || !analystRatings || Object.keys(priceTarget).length === 0) {
-    return (
-      <Card>
-        <p style={{color: 'var(--color-text-secondary)'}}>Forecast data is not available for this stock.</p>
-      </Card>
-    );
-  }
-
-  return (
-    <Card>
-      <ForecastGrid>
-        <LeftColumn>
-          <PriceTarget consensus={priceTarget} quote={quote} currency={currency} />
-        </LeftColumn>
-        <RightColumn>
-          <AnalystRating ratingsData={analystRatings} />
-        </RightColumn>
-      </ForecastGrid>
-
-      <AiAnalysisContainer>
-        <AnalysisHeader>
-            <SectionTitle><FaRobot /> Smart Analysis</SectionTitle>
-            <RegenerateButton onClick={fetchAiAnalysis} disabled={isLoading} isLoading={isLoading}>
-                <FaRedo /> {isLoading ? 'Analyzing...' : 'Regenerate'}
-            </RegenerateButton>
-        </AnalysisHeader>
-
-        {isLoading ? (
-          <Loader>
-             <FaRedo className="fa-spin" /> Generating financial forecast...
-          </Loader>
-        ) : (
-          <AiSummaryText style={{ borderColor: hasError ? 'var(--color-danger)' : 'var(--color-border)' }}>
-              {aiAnalysis}
-          </AiSummaryText>
-        )}
-      </AiAnalysisContainer>
-    </Card>
-  );
-};
-
-export default Forecasts;
-```
-
-## File: frontend/src/components/HomePage/ChartUploader.js
-```javascript
-import React, { useState, useCallback, useRef, useEffect } from 'react';
-import styled, { keyframes, css } from 'styled-components';
-import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
-import { FaCloudUploadAlt, FaChartLine, FaGlobe } from 'react-icons/fa';
-
-// --- CONFIG ---
-// This ensures we hit Railway, not Vercel
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
-
-// --- ANIMATIONS ---
-const pulse = (color) => keyframes`
-  0% { transform: scale(1); box-shadow: 0 0 0 0 ${color}66; }
-  70% { transform: scale(1.02); box-shadow: 0 0 20px 10px ${color}00; }
-  100% { transform: scale(1); box-shadow: 0 0 0 0 ${color}00; }
-`;
-
-const fadeIn = keyframes`
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-`;
-
-// --- STYLED COMPONENTS ---
-
-const Wrapper = styled.div`
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 100%;
-  animation: ${fadeIn} 0.6s ease-out;
-`;
-
-const UploaderCard = styled.div`
-  width: 100%;
-  height: 100%;
-  min-height: 250px;
-  padding: 2rem;
-  
-  background: linear-gradient(145deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.95));
-  backdrop-filter: blur(12px);
-  border: 1px solid ${({ color }) => color}33;
-  border-radius: 20px;
-  
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
-  position: relative;
-  overflow: hidden;
-
-  &:hover {
-    border-color: ${({ color }) => color};
-    transform: translateY(-5px);
-    box-shadow: 0 15px 40px -10px ${({ color }) => color}44;
-    
-    .icon-wrapper {
-      transform: scale(1.1) rotate(5deg);
-      color: ${({ color }) => color};
-    }
-  }
-
-  ${({ isDragActive, color }) => isDragActive && css`
-    border-color: ${color};
-    background: ${color}11;
-    transform: scale(1.02);
-  `}
-`;
-
-const IconWrapper = styled.div`
-  font-size: 3rem;
-  color: ${({ color }) => color}99;
-  margin-bottom: 1.5rem;
-  transition: all 0.4s ease;
-  filter: drop-shadow(0 0 10px ${({ color }) => color}33);
-`;
-
-const Title = styled.h3`
-  font-size: 1.4rem;
-  font-weight: 700;
-  color: var(--color-text-primary);
-  margin-bottom: 0.5rem;
-`;
-
-const Description = styled.p`
-  font-size: 0.95rem;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-  margin-bottom: 1.5rem;
-  max-width: 80%;
-`;
-
-const UploadButton = styled.div`
-  padding: 10px 24px;
-  border-radius: 50px;
-  background: ${({ color }) => color}22;
-  color: ${({ color }) => color};
-  border: 1px solid ${({ color }) => color};
-  font-weight: 600;
-  font-size: 0.9rem;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  transition: all 0.3s ease;
-
-  ${UploaderCard}:hover & {
-    background: ${({ color }) => color};
-    color: #000;
-    box-shadow: 0 0 20px ${({ color }) => color}66;
-  }
-`;
-
-const LoaderText = styled.p`
-  color: ${({ color }) => color};
-  font-size: 1.1rem;
-  font-weight: 700;
-  animation: ${({ color }) => pulse(color)} 2s infinite;
-  margin-top: 1rem;
-`;
-
-const ErrorText = styled.div`
-  margin-top: 1rem;
-  color: #F85149;
-  font-size: 0.9rem;
-  background: rgba(248, 81, 73, 0.1);
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1px solid rgba(248, 81, 73, 0.3);
-`;
-
-// --- COMPONENT ---
-
-const ChartUploader = ({ 
-    type = 'stock', 
-    title = "Analyze Stock Chart",
-    description = "Upload a screenshot of any stock candle chart.",
-    color = "#58A6FF",
-    icon = <FaChartLine />
-}) => {
-  const [isUploading, setIsUploading] = useState(false);
-  const [error, setError] = useState('');
-  const [isDragActive, setIsDragActive] = useState(false);
-  const navigate = useNavigate();
-  const fileInputRef = useRef(null);
-
-  const handleUpload = useCallback(async (file) => {
-    if (!file) return;
-
-    setIsUploading(true);
-    setError('');
-
-    const formData = new FormData();
-    formData.append('chart_image', file);
-    formData.append('analysis_type', type); 
-
-    try {
-      // --- CRITICAL FIX: Use API_URL ---
-      const response = await axios.post(`${API_URL}/api/charts/analyze`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      
-      let { identified_symbol, analysis_data, technical_data } = response.data;
-
-      if (!identified_symbol || identified_symbol === 'NOT_FOUND') {
-        setError('System could not identify the symbol. Please ensure the ticker name is visible.');
-        setIsUploading(false);
-        return;
-      }
-
-      // Routing Logic
-      const isIndexSymbol = identified_symbol.includes('^') || 
-                            ['NIFTY', 'BANKNIFTY', 'SENSEX', 'SPX', 'NDX'].some(i => identified_symbol.includes(i));
-      
-      const encodedSymbol = encodeURIComponent(identified_symbol);
-
-      if (isIndexSymbol) {
-        navigate(`/index/${encodedSymbol}`, { state: { chartAnalysis: analysis_data, technicalData: technical_data } });
-      } else {
-        navigate(`/stock/${encodedSymbol}`, { state: { chartAnalysis: analysis_data, technicalData: technical_data } });
-      }
-
-    } catch (err) {
-      console.error("Upload error:", err);
-      setError('Analysis failed. Please try a clearer image.');
-      setIsUploading(false);
-    }
-  }, [navigate, type]);
-
-  const onFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) handleUpload(e.target.files[0]);
-  };
-
-  return (
-    <Wrapper>
-      <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={onFileChange} accept="image/*" />
-      
-      <UploaderCard 
-        color={color}
-        isDragActive={isDragActive}
-        onClick={() => fileInputRef.current.click()}
-        onDragEnter={(e) => { e.preventDefault(); setIsDragActive(true); }}
-        onDragLeave={(e) => { e.preventDefault(); setIsDragActive(false); }}
-        onDragOver={(e) => { e.preventDefault(); }}
-        onDrop={(e) => { 
-            e.preventDefault(); 
-            setIsDragActive(false); 
-            if (e.dataTransfer.files[0]) handleUpload(e.dataTransfer.files[0]); 
-        }}
-      >
-        {isUploading ? (
-          <>
-            <IconWrapper color={color} className="icon-wrapper" style={{animation: 'spin 2s linear infinite'}}>
-                <FaGlobe /> 
-            </IconWrapper>
-            <LoaderText color={color}>Processing Market Data...</LoaderText>
-          </>
-        ) : (
-          <>
-            <IconWrapper color={color} className="icon-wrapper">
-                {icon}
-            </IconWrapper>
-            <Title>{title}</Title>
-            <Description>{description}</Description>
-            <UploadButton color={color}>
-                <FaCloudUploadAlt /> Upload / Paste
-            </UploadButton>
-          </>
-        )}
-      </UploaderCard>
-      
-      {error && <ErrorText>{error}</ErrorText>}
-    </Wrapper>
-  );
-};
-
-export default ChartUploader;
-```
-
-## File: frontend/src/components/StockDetailPage/ChartAnalysis.js
-```javascript
-import React, { useState, useMemo, useEffect } from 'react';
-import styled, { keyframes, css } from 'styled-components';
-import { useParams } from 'react-router-dom';
-import axios from 'axios';
-import Card from '../common/Card';
-import { 
-  FaArrowUp, FaArrowDown, FaExchangeAlt, FaGem, FaExclamationTriangle, 
-  FaChartLine, FaCrosshairs, FaStopCircle, FaMoneyBillWave, FaLayerGroup, FaRobot, FaTachometerAlt, FaSync
-} from 'react-icons/fa';
-
-// --- CONFIGURATION ---
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
-
-// ==========================================
-// 1. HIGH-END STYLES & ANIMATIONS
-// ==========================================
-
-const fadeIn = keyframes`
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
-`;
-
-const scanAnimation = keyframes`
-  0% { top: 0%; opacity: 0; }
-  15% { opacity: 1; }
-  85% { opacity: 1; }
-  100% { top: 100%; opacity: 0; }
-`;
-
-const pulseGlow = keyframes`
-  0% { box-shadow: 0 0 5px rgba(88, 166, 255, 0.2); }
-  50% { box-shadow: 0 0 20px rgba(88, 166, 255, 0.6); }
-  100% { box-shadow: 0 0 5px rgba(88, 166, 255, 0.2); }
-`;
-
-const AnalysisContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  width: 100%;
-`;
-
-const TimeframeBar = styled.div`
-  display: flex;
-  justify-content: center;
-  gap: 0.75rem;
-  margin-bottom: 1.5rem;
-  padding: 0.75rem;
-  background: #161B22;
-  border-radius: 16px;
-  border: 1px solid var(--color-border);
-  width: fit-content;
-  margin-left: auto;
-  margin-right: auto;
-  box-shadow: 0 8px 20px rgba(0,0,0,0.2);
-  flex-wrap: wrap;
-
-  @media (max-width: 768px) {
-    width: 100%;
-    gap: 0.5rem;
-  }
-`;
-
-const TimeframeButton = styled.button`
-  background: ${({ active }) => (active ? 'linear-gradient(135deg, #58A6FF, #238636)' : 'transparent')};
-  color: ${({ active }) => (active ? '#ffffff' : '#8B949E')};
-  border: 1px solid ${({ active }) => (active ? 'transparent' : 'rgba(255,255,255,0.1)')};
-  padding: 0.6rem 1.2rem;
-  border-radius: 10px;
-  font-weight: 700;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  position: relative;
-  overflow: hidden;
-
-  &:hover {
-    transform: translateY(-2px);
-    color: #ffffff;
-    border-color: #58A6FF;
-    box-shadow: 0 4px 12px rgba(88, 166, 255, 0.2);
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
-  }
-
-  ${({ active }) => active && css`
-    box-shadow: 0 0 15px rgba(35, 134, 54, 0.4);
-  `}
-`;
-
-const AnalysisGrid = styled.div`
-  display: grid;
-  gap: 2rem;
-  animation: ${fadeIn} 0.5s ease-out;
-`;
-
-const VerdictCard = styled(Card)`
-  text-align: center;
-  border-left: 5px solid ${({ color }) => color};
-  background: linear-gradient(180deg, rgba(22, 27, 34, 0.8) 0%, rgba(13, 17, 23, 1) 100%);
-  padding: 2.5rem;
-  position: relative;
-  overflow: hidden;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0; height: 100%;
-    background: ${({ color }) => color};
-    opacity: 0.03;
-    pointer-events: none;
-  }
-`;
-
-const TrendDisplay = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  font-size: 2.2rem;
-  font-weight: 900;
-  margin-bottom: 1rem;
-  color: ${({ color }) => color};
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  text-shadow: 0 0 30px ${({ color }) => color}44;
-
-  svg {
-    filter: drop-shadow(0 0 10px ${({ color }) => color});
-  }
-`;
-
-const ConclusionText = styled.p`
-  font-size: 1.1rem;
-  color: #C9D1D9;
-  max-width: 800px;
-  margin: 0 auto;
-  line-height: 1.8;
-  font-style: italic;
-  font-weight: 500;
-  border-top: 1px solid rgba(255,255,255,0.1);
-  padding-top: 1.5rem;
-`;
-
-const TradeTicket = styled.div`
-  background: linear-gradient(135deg, #161B22 0%, #0D1117 100%);
-  border: 1px solid ${({ action }) => (action === 'BUY' ? '#238636' : action === 'SELL' ? '#DA3633' : '#8B949E')};
-  border-radius: 16px;
-  padding: 0;
-  position: relative;
-  overflow: hidden;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
-`;
-
-const TicketHeader = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1.5rem 2rem;
-  background: rgba(255,255,255,0.02);
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-`;
-
-const ActionBadge = styled.span`
-  background: ${({ action }) => (action === 'BUY' ? 'rgba(57, 211, 83, 0.15)' : action === 'SELL' ? 'rgba(248, 81, 73, 0.15)' : 'rgba(139, 148, 158, 0.15)')};
-  color: ${({ action }) => (action === 'BUY' ? '#3FB950' : action === 'SELL' ? '#F85149' : '#8B949E')};
-  border: 1px solid ${({ action }) => (action === 'BUY' ? '#3FB950' : action === 'SELL' ? '#F85149' : '#8B949E')};
-  padding: 0.5rem 1.5rem;
-  border-radius: 8px;
-  font-weight: 800;
-  font-size: 1.1rem;
-  letter-spacing: 1.5px;
-  box-shadow: 0 0 15px ${({ action }) => (action === 'BUY' ? 'rgba(57, 211, 83, 0.1)' : action === 'SELL' ? 'rgba(248, 81, 73, 0.1)' : 'transparent')};
-`;
-
-const MetricGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 1px;
-  background: rgba(255,255,255,0.05);
-  
-  @media (max-width: 768px) {
-    grid-template-columns: 1fr 1fr;
-  }
-`;
-
-const MetricBox = styled.div`
-  background: #0D1117;
-  padding: 1.5rem;
-  text-align: center;
-  transition: background 0.2s;
-  
-  &:hover {
-    background: #161B22;
-  }
-`;
-
-const MetricLabel = styled.div`
-  font-size: 0.7rem;
-  color: #8B949E;
-  margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-`;
-
-const MetricVal = styled.div`
-  font-size: 1.25rem;
-  font-weight: 700;
-  font-family: 'Roboto Mono', monospace;
-  color: ${({ color }) => color || '#C9D1D9'};
-`;
-
-const RationaleBox = styled.div`
-  padding: 2rem;
-  background: rgba(88, 166, 255, 0.05);
-  border-top: 1px solid rgba(88, 166, 255, 0.1);
-  
-  strong {
-    color: #58A6FF;
-    display: block;
-    margin-bottom: 0.5rem;
-    font-size: 0.9rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-  
-  p {
-    color: #C9D1D9;
-    line-height: 1.6;
-    margin: 0;
-    font-size: 1rem;
-  }
-`;
-
-const ScannerBox = styled.div`
-  position: relative;
-  width: 100%;
-  height: 400px;
-  background: rgba(22, 27, 34, 0.4);
-  border: 1px dashed var(--color-border);
-  border-radius: 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  animation: ${fadeIn} 0.3s ease-out;
-`;
-
-const ScanLine = styled.div`
-  position: absolute;
-  left: 0;
-  width: 100%;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, #58A6FF, transparent);
-  box-shadow: 0 0 20px #58A6FF;
-  animation: ${scanAnimation} 2s linear infinite;
-`;
-
-const ProcessingIcon = styled(FaRobot)`
-  font-size: 4rem;
-  color: #58A6FF;
-  margin-bottom: 1.5rem;
-  animation: ${pulseGlow} 2s infinite;
-`;
-
-const DetailGrid = styled.div`
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
-  margin-top: 1.5rem;
-
-  @media (max-width: 768px) {
-    grid-template-columns: 1fr;
-  }
-`;
-
-const InfoList = styled.ul`
-  list-style: none;
-  padding: 0;
-  margin: 0;
-`;
-
-const InfoItem = styled.li`
-  display: flex;
-  align-items: start;
-  gap: 10px;
-  margin-bottom: 0.8rem;
-  color: #8B949E;
-  font-size: 0.95rem;
-  line-height: 1.5;
-
-  svg {
-    margin-top: 4px;
-    color: #EBCB8B;
-  }
-`;
-
-const RetryButton = styled.button`
-  margin-top: 1rem;
-  padding: 0.5rem 1rem;
-  border: 1px solid #58A6FF;
-  background: transparent;
-  color: #58A6FF;
-  border-radius: 8px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  margin-right: auto;
-  transition: all 0.2s;
-  
-  &:hover {
-    background: rgba(88,166,255,0.1);
-  }
-`;
-
-// ==========================================
-// 2. MAIN COMPONENT
-// ==========================================
-
-const ChartAnalysis = ({ analysisData }) => {
-  const { symbol } = useParams();
-  
-  // Cache stores all analyses
-  const [cache, setCache] = useState({ 'Image': analysisData });
-  const [activeTab, setActiveTab] = useState('Image');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isOmniLoaded, setIsOmniLoaded] = useState(false);
-
-  // --- OMNI-FETCH ENGINE ---
-  useEffect(() => {
-      const fetchAllTimeframes = async () => {
-          if (isOmniLoaded) return;
-          setIsLoading(true);
-          try {
-              // FIX: Use API_URL for Vercel/Railway connection
-              const res = await axios.post(`${API_URL}/api/stocks/${symbol}/all-timeframe-analysis`);
-              if (res.data && !res.data.error) {
-                  setCache(prev => ({ ...prev, ...res.data }));
-                  setIsOmniLoaded(true);
-              }
-          } catch (e) {
-              console.error("Omni-Analysis Failed:", e);
-          } finally {
-              setIsLoading(false);
-          }
-      };
-      
-      const timer = setTimeout(fetchAllTimeframes, 500);
-      return () => clearTimeout(timer);
-  }, [symbol, isOmniLoaded]);
-
-  // --- SINGLE FETCH BACKUP ---
-  const fetchSingleTimeframe = async (tf) => {
-      setIsLoading(true);
-      try {
-          // FIX: Use API_URL
-          const res = await axios.post(`${API_URL}/api/stocks/${symbol}/timeframe-analysis`, { timeframe: tf });
-          if (res.data && res.data.analysis) {
-              setCache(prev => ({ ...prev, [tf.toLowerCase()]: res.data.analysis }));
-          }
-      } catch (e) {
-          console.error("Single Fetch Error", e);
-      } finally {
-          setIsLoading(false);
-      }
-  };
-
-  const handleTabChange = (tf) => {
-      setActiveTab(tf);
-      // If data missing, try fetching it individually
-      if (tf !== 'Image' && !cache[tf.toLowerCase()] && !cache[tf]) {
-          fetchSingleTimeframe(tf);
-      }
-  };
-
-  const currentText = cache[activeTab] || cache[activeTab.toLowerCase()] || cache[activeTab.toUpperCase()];
-
-  // --- PARSER ENGINE ---
-  const parsed = useMemo(() => {
-    if (!currentText || typeof currentText !== 'string') return null;
-    const rawKeys = ['TREND', 'PATTERNS', 'LEVELS', 'VOLUME', 'MOMENTUM', 'INDICATORS', 'CONCLUSION', 'ACTION', 'ENTRY_ZONE', 'STOP_LOSS', 'TARGET_1', 'TARGET_2', 'RISK_REWARD', 'CONFIDENCE', 'RATIONALE'];
-    const sections = {};
-    let text = "\n" + currentText.replace(/\*\*/g, '').replace(/-- TRADE TICKET --/g, '');
-    rawKeys.forEach(key => {
-      const regex = new RegExp(`(?:^|\\n)\\s*${key}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*[A-Z_]{3,}\\s*:|$)`, 'i');
-      const match = text.match(regex);
-      if (match) sections[key] = match[1].trim();
-    });
-    return sections;
-  }, [currentText]);
-
-  // --- VISUAL HELPERS ---
-  const getTrendInfo = () => {
-    const t = parsed?.TREND?.toLowerCase() || '';
-    if (t.includes('uptrend') || t.includes('bullish')) return { icon: FaArrowUp, color: '#3FB950', text: 'Bullish Structure' };
-    if (t.includes('downtrend') || t.includes('bearish')) return { icon: FaArrowDown, color: '#F85149', text: 'Bearish Structure' };
-    return { icon: FaExchangeAlt, color: '#EBCB8B', text: 'Consolidation / Range' };
-  };
-
-  const { icon: TrendIcon, color: trendColor, text: trendText } = getTrendInfo();
-  const action = parsed?.ACTION?.toUpperCase() || 'WAIT';
-
-  // ==========================================
-  // 3. RENDER
-  // ==========================================
-  
-  return (
-    <AnalysisContainer>
-      <TimeframeBar>
-        <TimeframeButton active={activeTab === 'Image'} onClick={() => handleTabChange('Image')}>
-            <FaGem /> Original Image
-        </TimeframeButton>
-        {['5m', '15m', '1h', '4h', '1d'].map(tf => (
-            <TimeframeButton 
-                key={tf} 
-                active={activeTab === tf} 
-                onClick={() => handleTabChange(tf)}
-                disabled={isLoading && !cache[tf.toLowerCase()] && !cache[tf]}
-            >
-               {tf.toUpperCase()}
-            </TimeframeButton>
-        ))}
-      </TimeframeBar>
-
-      {isLoading && !currentText ? (
-          <ScannerBox>
-              <ScanLine />
-              <ProcessingIcon />
-              <h3 style={{color:'#C9D1D9', letterSpacing:'2px'}}>QUANT ENGINE RUNNING</h3>
-              <p style={{color:'#8B949E'}}>Calculating Math Models for All Timeframes...</p>
-          </ScannerBox>
-      ) : parsed ? (
-          <AnalysisGrid>
-              {/* Verdict */}
-              <VerdictCard color={trendColor}>
-                  <div style={{color: trendColor, fontSize:'0.9rem', textTransform:'uppercase', letterSpacing:'1px', marginBottom:'0.5rem'}}>
-                      MARKET STRUCTURE ({activeTab.toUpperCase()})
-                  </div>
-                  <TrendDisplay color={trendColor}>
-                      <TrendIcon /> {trendText}
-                  </TrendDisplay>
-                  <ConclusionText>"{parsed.CONCLUSION || parsed.RATIONALE}"</ConclusionText>
-              </VerdictCard>
-
-              {/* Trade Ticket */}
-              {parsed.ENTRY_ZONE && (
-                  <TradeTicket action={action}>
-                      <TicketHeader>
-                          <div>
-                              <div style={{fontSize:'0.75rem', color:'#8B949E', letterSpacing:'1px', marginBottom:'5px'}}>STRATEGY SIGNAL</div>
-                              <ActionBadge action={action}>{action}</ActionBadge>
-                          </div>
-                          <div style={{textAlign:'right'}}>
-                              <div style={{fontSize:'0.75rem', color:'#8B949E', letterSpacing:'1px', marginBottom:'5px'}}>AI CONFIDENCE</div>
-                              <div style={{fontSize:'1.5rem', fontWeight:'bold', color:'#C9D1D9'}}>{parsed.CONFIDENCE || 'Medium'}</div>
-                          </div>
-                      </TicketHeader>
-                      <MetricGrid>
-                          <MetricBox><MetricLabel><FaCrosshairs /> Entry Zone</MetricLabel><MetricVal color="#58A6FF">{parsed.ENTRY_ZONE}</MetricVal></MetricBox>
-                          <MetricBox><MetricLabel><FaStopCircle /> Invalidation</MetricLabel><MetricVal color="#F85149">{parsed.STOP_LOSS}</MetricVal></MetricBox>
-                          <MetricBox><MetricLabel><FaMoneyBillWave /> Target 1</MetricLabel><MetricVal color="#3FB950">{parsed.TARGET_1}</MetricVal></MetricBox>
-                          <MetricBox><MetricLabel><FaChartLine /> R:R Ratio</MetricLabel><MetricVal color="#EBCB8B">{parsed.RISK_REWARD}</MetricVal></MetricBox>
-                      </MetricGrid>
-                      <RationaleBox>
-                          <strong><FaRobot style={{marginRight:'8px'}}/> Mathematical Rationale</strong>
-                          <p>{parsed.RATIONALE}</p>
-                      </RationaleBox>
-                  </TradeTicket>
-              )}
-
-              {/* Deep Dive Grid */}
-              <DetailGrid>
-                  <Card title="Key Levels">
-                      <InfoList>
-                         <InfoItem><FaLayerGroup /> {parsed.LEVELS || 'Analyzing key levels...'}</InfoItem>
-                         <InfoItem><FaTachometerAlt /> {parsed.MOMENTUM || 'Analyzing momentum...'}</InfoItem>
-                      </InfoList>
-                  </Card>
-                  <Card title="Patterns & Indicators">
-                      <InfoList>
-                         <InfoItem><FaChartLine /> {parsed.PATTERNS || 'No specific patterns detected.'}</InfoItem>
-                         <InfoItem><FaExclamationTriangle /> {parsed.INDICATORS || 'Calculating indicators...'}</InfoItem>
-                      </InfoList>
-                  </Card>
-              </DetailGrid>
-          </AnalysisGrid>
-      ) : (
-          <div style={{textAlign:'center', padding:'3rem', color:'#8B949E', border:'1px dashed #30363D', borderRadius:'16px'}}>
-              <FaExclamationTriangle size={30} style={{marginBottom:'1rem'}} />
-              <p>Analysis unavailable for this timeframe.</p>
-              <RetryButton onClick={() => fetchSingleTimeframe(activeTab)}><FaSync /> Retry Analysis</RetryButton>
-          </div>
-      )}
-    </AnalysisContainer>
-  );
-};
-
-export default ChartAnalysis;
-```
-
 ## File: frontend/src/components/SWOT/SwotAnalysis.js
 ```javascript
 import React, { useMemo } from 'react';
@@ -8672,6 +8385,229 @@ const SwotAnalysis = ({ analysisText, isLoading, onRegenerate }) => {
 };
 
 export default SwotAnalysis;
+```
+
+## File: frontend/src/components/Forecasts/Forecasts.js
+```javascript
+import React, { useState, useEffect, useCallback } from 'react';
+import styled, { keyframes, css } from 'styled-components';
+import axios from 'axios';
+import Card from '../common/Card';
+import PriceTarget from './PriceTarget';
+import AnalystRating from './AnalystRating';
+import { FaRedo, FaRobot } from 'react-icons/fa';
+
+// ==========================================
+// 1. CONFIGURATION
+// ==========================================
+// This ensures the frontend talks to Railway in production
+const API_URL = '';
+
+// ==========================================
+// 2. STYLED COMPONENTS & ANIMATIONS
+// ==========================================
+
+const fadeIn = keyframes`
+  from { opacity: 0; }
+  to { opacity: 1; }
+`;
+
+const spin = keyframes`
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+`;
+
+const ForecastGrid = styled.div`
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 3rem;
+
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const LeftColumn = styled.div``;
+const RightColumn = styled.div``;
+
+const AiAnalysisContainer = styled.div`
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--color-border);
+  animation: ${fadeIn} 0.5s ease-in;
+`;
+
+const AnalysisHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+`;
+
+const SectionTitle = styled.h3`
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+`;
+
+const RegenerateButton = styled.button`
+  background: transparent;
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: var(--color-primary);
+    color: white;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  svg {
+    ${({ isLoading }) => isLoading && css`
+      animation: ${spin} 1s linear infinite;
+    `}
+  }
+`;
+
+const AiSummaryText = styled.div`
+  font-size: 1rem;
+  color: var(--color-text-secondary);
+  line-height: 1.8;
+  white-space: pre-wrap; 
+  background: rgba(255, 255, 255, 0.02);
+  padding: 1.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+`;
+
+const Loader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 150px;
+  color: var(--color-primary);
+  gap: 10px;
+  font-weight: 500;
+`;
+
+// ==========================================
+// 3. MAIN COMPONENT
+// ==========================================
+
+const Forecasts = ({ symbol, quote, analystRatings, priceTarget, keyStats, news, currency, delay }) => {
+  const [aiAnalysis, setAiAnalysis] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
+
+  // --- AI FETCH ENGINE ---
+  const fetchAiAnalysis = useCallback(async () => {
+    // Guard clause: Ensure essential data exists before asking AI
+    if (!symbol || !analystRatings || !priceTarget || !keyStats || !news || !quote) {
+      setIsLoading(false);
+      return;
+    }
+    
+    setIsLoading(true);
+    setHasError(false);
+    
+    try {
+      const payload = {
+        companyName: quote.name || symbol,
+        analystRatings: analystRatings,
+        priceTarget: priceTarget,
+        keyStats: keyStats,
+        newsHeadlines: news.map(n => n.title).slice(0, 10),
+        currency: currency || 'USD'
+      };
+
+      // --- CRITICAL FIX: Use API_URL variable ---
+      const response = await axios.post(`${API_URL}/api/stocks/${symbol}/forecast-analysis`, payload);
+      
+      if (response.data.analysis && !response.data.analysis.includes("Could not generate")) {
+          setAiAnalysis(response.data.analysis);
+      } else {
+          setAiAnalysis("Analysis temporarily unavailable. Please try regenerating.");
+          setHasError(true);
+      }
+
+    } catch (error) {
+      console.error("Failed to fetch AI forecast analysis:", error);
+      setAiAnalysis("Connection error. Could not retrieve AI analysis.");
+      setHasError(true);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [symbol, quote, analystRatings, priceTarget, keyStats, news, currency]);
+
+  // --- INITIAL LOAD ---
+  useEffect(() => {
+    const timer = setTimeout(() => {
+        fetchAiAnalysis();
+    }, delay || 0);
+
+    return () => clearTimeout(timer);
+  }, [fetchAiAnalysis, delay]);
+
+
+  // --- RENDER CHECKS ---
+  if (!priceTarget || !analystRatings || Object.keys(priceTarget).length === 0) {
+    return (
+      <Card>
+        <p style={{color: 'var(--color-text-secondary)'}}>Forecast data is not available for this stock.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <ForecastGrid>
+        <LeftColumn>
+          <PriceTarget consensus={priceTarget} quote={quote} currency={currency} />
+        </LeftColumn>
+        <RightColumn>
+          <AnalystRating ratingsData={analystRatings} />
+        </RightColumn>
+      </ForecastGrid>
+
+      <AiAnalysisContainer>
+        <AnalysisHeader>
+            <SectionTitle><FaRobot /> Smart Analysis</SectionTitle>
+            <RegenerateButton onClick={fetchAiAnalysis} disabled={isLoading} isLoading={isLoading}>
+                <FaRedo /> {isLoading ? 'Analyzing...' : 'Regenerate'}
+            </RegenerateButton>
+        </AnalysisHeader>
+
+        {isLoading ? (
+          <Loader>
+             <FaRedo className="fa-spin" /> Generating financial forecast...
+          </Loader>
+        ) : (
+          <AiSummaryText style={{ borderColor: hasError ? 'var(--color-danger)' : 'var(--color-border)' }}>
+              {aiAnalysis}
+          </AiSummaryText>
+        )}
+      </AiAnalysisContainer>
+    </Card>
+  );
+};
+
+export default Forecasts;
 ```
 
 ## File: backend/app/services/eodhd_service.py
@@ -9090,335 +9026,432 @@ def parse_holders(fund_data: dict):
         return [{"holder": "Data Aggregated", "shares": 0}]
 ```
 
+## File: Dockerfile
+```dockerfile
+# --- Stage 1: Build React Frontend ---
+FROM node:18-alpine AS builder
+WORKDIR /app/frontend
+
+COPY frontend/package*.json ./
+RUN npm install
+
+COPY frontend/ ./
+RUN npm run build
+
+# --- Stage 2: Build Python Backend ---
+# UPGRADE: Changed from 3.11 to 3.12 to fix pandas_ta error
+FROM python:3.12-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT=8000
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy Backend Code
+COPY backend ./backend
+
+# Copy Frontend Build
+COPY --from=builder /app/frontend/build ./frontend/build
+
+# Expose the port
+EXPOSE 8000
+
+# Start Command
+CMD ["sh", "-c", "gunicorn backend.app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120"]
+```
+
+## File: frontend/src/components/HomePage/ChartUploader.js
+```javascript
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import styled, { keyframes, css } from 'styled-components';
+import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
+import { FaCloudUploadAlt, FaChartLine, FaGlobe } from 'react-icons/fa';
+
+// --- CONFIG ---
+// This ensures we hit Railway, not Vercel
+const API_URL = '';
+
+// --- ANIMATIONS ---
+const pulse = (color) => keyframes`
+  0% { transform: scale(1); box-shadow: 0 0 0 0 ${color}66; }
+  70% { transform: scale(1.02); box-shadow: 0 0 20px 10px ${color}00; }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 ${color}00; }
+`;
+
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+// --- STYLED COMPONENTS ---
+
+const Wrapper = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  animation: ${fadeIn} 0.6s ease-out;
+`;
+
+const UploaderCard = styled.div`
+  width: 100%;
+  height: 100%;
+  min-height: 250px;
+  padding: 2rem;
+  
+  background: linear-gradient(145deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.95));
+  backdrop-filter: blur(12px);
+  border: 1px solid ${({ color }) => color}33;
+  border-radius: 20px;
+  
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+  position: relative;
+  overflow: hidden;
+
+  &:hover {
+    border-color: ${({ color }) => color};
+    transform: translateY(-5px);
+    box-shadow: 0 15px 40px -10px ${({ color }) => color}44;
+    
+    .icon-wrapper {
+      transform: scale(1.1) rotate(5deg);
+      color: ${({ color }) => color};
+    }
+  }
+
+  ${({ isDragActive, color }) => isDragActive && css`
+    border-color: ${color};
+    background: ${color}11;
+    transform: scale(1.02);
+  `}
+`;
+
+const IconWrapper = styled.div`
+  font-size: 3rem;
+  color: ${({ color }) => color}99;
+  margin-bottom: 1.5rem;
+  transition: all 0.4s ease;
+  filter: drop-shadow(0 0 10px ${({ color }) => color}33);
+`;
+
+const Title = styled.h3`
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 0.5rem;
+`;
+
+const Description = styled.p`
+  font-size: 0.95rem;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin-bottom: 1.5rem;
+  max-width: 80%;
+`;
+
+const UploadButton = styled.div`
+  padding: 10px 24px;
+  border-radius: 50px;
+  background: ${({ color }) => color}22;
+  color: ${({ color }) => color};
+  border: 1px solid ${({ color }) => color};
+  font-weight: 600;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.3s ease;
+
+  ${UploaderCard}:hover & {
+    background: ${({ color }) => color};
+    color: #000;
+    box-shadow: 0 0 20px ${({ color }) => color}66;
+  }
+`;
+
+const LoaderText = styled.p`
+  color: ${({ color }) => color};
+  font-size: 1.1rem;
+  font-weight: 700;
+  animation: ${({ color }) => pulse(color)} 2s infinite;
+  margin-top: 1rem;
+`;
+
+const ErrorText = styled.div`
+  margin-top: 1rem;
+  color: #F85149;
+  font-size: 0.9rem;
+  background: rgba(248, 81, 73, 0.1);
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(248, 81, 73, 0.3);
+`;
+
+// --- COMPONENT ---
+
+const ChartUploader = ({ 
+    type = 'stock', 
+    title = "Analyze Stock Chart",
+    description = "Upload a screenshot of any stock candle chart.",
+    color = "#58A6FF",
+    icon = <FaChartLine />
+}) => {
+  const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState('');
+  const [isDragActive, setIsDragActive] = useState(false);
+  const navigate = useNavigate();
+  const fileInputRef = useRef(null);
+
+  const handleUpload = useCallback(async (file) => {
+    if (!file) return;
+
+    setIsUploading(true);
+    setError('');
+
+    const formData = new FormData();
+    formData.append('chart_image', file);
+    formData.append('analysis_type', type); 
+
+    try {
+      // --- CRITICAL FIX: Use API_URL ---
+      const response = await axios.post(`${API_URL}/api/charts/analyze`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      
+      let { identified_symbol, analysis_data, technical_data } = response.data;
+
+      if (!identified_symbol || identified_symbol === 'NOT_FOUND') {
+        setError('System could not identify the symbol. Please ensure the ticker name is visible.');
+        setIsUploading(false);
+        return;
+      }
+
+      // Routing Logic
+      const isIndexSymbol = identified_symbol.includes('^') || 
+                            ['NIFTY', 'BANKNIFTY', 'SENSEX', 'SPX', 'NDX', 'NSEI', 'BSESN', '.INDX'].some(i => identified_symbol.includes(i));
+      
+      const encodedSymbol = encodeURIComponent(identified_symbol);
+
+      if (isIndexSymbol) {
+        navigate(`/index/${encodedSymbol}`, { state: { chartAnalysis: analysis_data, technicalData: technical_data } });
+      } else {
+        navigate(`/stock/${encodedSymbol}`, { state: { chartAnalysis: analysis_data, technicalData: technical_data } });
+      }
+
+    } catch (err) {
+      console.error("Upload error:", err);
+      setError('Analysis failed. Please try a clearer image.');
+      setIsUploading(false);
+    }
+  }, [navigate, type]);
+
+  const onFileChange = (e) => {
+    if (e.target.files && e.target.files[0]) handleUpload(e.target.files[0]);
+  };
+
+  return (
+    <Wrapper>
+      <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={onFileChange} accept="image/*" />
+      
+      <UploaderCard 
+        color={color}
+        isDragActive={isDragActive}
+        onClick={() => fileInputRef.current.click()}
+        onDragEnter={(e) => { e.preventDefault(); setIsDragActive(true); }}
+        onDragLeave={(e) => { e.preventDefault(); setIsDragActive(false); }}
+        onDragOver={(e) => { e.preventDefault(); }}
+        onDrop={(e) => { 
+            e.preventDefault(); 
+            setIsDragActive(false); 
+            if (e.dataTransfer.files[0]) handleUpload(e.dataTransfer.files[0]); 
+        }}
+      >
+        {isUploading ? (
+          <>
+            <IconWrapper color={color} className="icon-wrapper" style={{animation: 'spin 2s linear infinite'}}>
+                <FaGlobe /> 
+            </IconWrapper>
+            <LoaderText color={color}>Processing Market Data...</LoaderText>
+          </>
+        ) : (
+          <>
+            <IconWrapper color={color} className="icon-wrapper">
+                {icon}
+            </IconWrapper>
+            <Title>{title}</Title>
+            <Description>{description}</Description>
+            <UploadButton color={color}>
+                <FaCloudUploadAlt /> Upload / Paste
+            </UploadButton>
+          </>
+        )}
+      </UploaderCard>
+      
+      {error && <ErrorText>{error}</ErrorText>}
+    </Wrapper>
+  );
+};
+
+export default ChartUploader;
+```
+
 ## File: frontend/src/components/Fundamentals/Fundamentals.js
 ```javascript
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
 import Card from '../common/Card';
-import axios from 'axios';
 import { NestedTabs, NestedTabPanel } from '../common/Tabs/NestedTabs';
 import DarvasScan from './DarvasScan';
 import BenjaminGrahamScan from './BenjaminGrahamScan';
 import FundamentalConclusion from './FundamentalConclusion';
 
-// --- Styled Components & Animations ---
+const fadeIn = keyframes`from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); }`;
 
-const fadeIn = keyframes`
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+const SectionContainer = styled.div`animation: ${fadeIn} 0.5s ease-out; padding: 0.5rem;`;
+const SectionTitle = styled.h3`font-size: 1.4rem; font-weight: 600; margin-bottom: 1.5rem; color: var(--color-text-primary);`;
+const Loader = styled.div`color: var(--color-primary); height: 200px; display: flex; align-items: center; justify-content: center; font-weight: 500;`;
+
+// --- THE NEW FLAWLESS TABLE UI ---
+const TableContainer = styled.div`width: 100%; overflow-x: auto; border-radius: 12px; border: 1px solid var(--color-border); background: var(--color-secondary); box-shadow: 0 4px 20px rgba(0,0,0,0.2);`;
+const StyledTable = styled.table`width: 100%; border-collapse: collapse; min-width: 600px;`;
+const Th = styled.th`text-align: left; padding: 16px; background: rgba(255, 255, 255, 0.03); color: var(--color-text-secondary); font-weight: 700; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 1px; border-bottom: 1px solid var(--color-border); &:last-child { text-align: right; }`;
+const Tr = styled.tr`border-bottom: 1px solid rgba(255, 255, 255, 0.05); transition: background 0.2s; &:last-child { border-bottom: none; } &:hover { background: rgba(255, 255, 255, 0.02); }`;
+const Td = styled.td`padding: 16px; font-size: 0.95rem; color: #C9D1D9; vertical-align: top; line-height: 1.6;`;
+
+const StatusTag = styled.span`
+  display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;
+  background: ${({ status }) => status.includes('PASS') || status.includes('BUY') || status.includes('WIDE') ? 'rgba(57, 211, 83, 0.1)' : status.includes('FAIL') || status.includes('SELL') || status.includes('NO') || status.includes('OVER') ? 'rgba(248, 81, 73, 0.1)' : 'rgba(235, 203, 139, 0.1)'};
+  color: ${({ status }) => status.includes('PASS') || status.includes('BUY') || status.includes('WIDE') ? '#3FB950' : status.includes('FAIL') || status.includes('SELL') || status.includes('NO') || status.includes('OVER') ? '#F85149' : '#EBCB8B'};
+  border: 1px solid ${({ status }) => status.includes('PASS') || status.includes('BUY') || status.includes('WIDE') ? '#3FB950' : status.includes('FAIL') || status.includes('SELL') || status.includes('NO') || status.includes('OVER') ? '#F85149' : '#EBCB8B'};
 `;
 
-const SectionContainer = styled.div`
-  animation: ${fadeIn} 0.5s ease-out;
-`;
+const PiotroskiGrid = styled.div`display: grid; grid-template-columns: 1fr 2fr; gap: 2rem; align-items: center; @media (max-width: 768px) { grid-template-columns: 1fr; }`;
+const ScoreCard = styled.div`display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem; background: rgba(255,255,255,0.02); border-radius: 50%; width: 180px; height: 180px; margin: 0 auto; border: 4px solid ${({ color }) => color}; box-shadow: 0 0 30px ${({ color }) => color}22;`;
+const CriteriaList = styled.ul`list-style: none; padding: 0; li { margin-bottom: 0.8rem; display: flex; align-items: center; color: var(--color-text-secondary); &::before { content: '✓'; color: #3FB950; margin-right: 10px; font-weight: bold; } }`;
 
-const SectionTitle = styled.h3`
-  font-size: 1.5rem;
-  font-weight: 600;
-  margin-bottom: 1.5rem;
-  color: var(--color-text-primary);
-`;
-
-const PiotroskiGrid = styled.div`
-  display: grid;
-  grid-template-columns: 1fr 2fr;
-  gap: 2rem;
-  align-items: center;
-  @media (max-width: 768px) {
-    grid-template-columns: 1fr;
-  }
-`;
-
-const ScoreCard = styled.div`
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  background-color: var(--color-background);
-  border-radius: 50%;
-  width: 180px;
-  height: 180px;
-  border: 4px solid ${({ scoreColor }) => scoreColor};
-  margin: 0 auto;
-`;
-
-const ScoreValue = styled.span`
-  font-size: 4rem;
-  font-weight: 800;
-  color: ${({ scoreColor }) => scoreColor};
-`;
-
-const ScoreLabel = styled.span`
-  font-size: 1rem;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-`;
-
-const CriteriaList = styled.ul`
-  list-style-type: none;
-  padding-left: 0;
-`;
-
-const CriteriaListItem = styled.li`
-  margin-bottom: 0.75rem;
-  color: var(--color-text-primary);
-  display: flex;
-  align-items: center;
-  &::before {
-    content: '✓';
-    color: var(--color-success);
-    margin-right: 12px;
-    font-size: 1.2rem;
-    font-weight: bold;
-  }
-`;
-
-// --- Generic Table/Grid Styles ---
-const AssessmentTable = styled.div`
-  display: grid;
-  gap: 1px;
-  background-color: var(--color-border);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  overflow: hidden;
-
-  /* Mobile: Stack vertically (1 column) */
-  grid-template-columns: 100%;
-
-  /* Desktop: Side-by-side (2 columns) */
-  @media (min-width: 768px) {
-    grid-template-columns: 1fr 3fr;
-  }
-
-  & > div {
-    background-color: var(--color-secondary);
-    padding: 1rem;
-    line-height: 1.5;
-  }
-
-  /* Special styling for headers to look good when stacked */
-  & > .header {
-    font-weight: 600;
-    color: var(--color-primary); /* Make headers pop on mobile */
-    background-color: var(--color-background);
-    
-    /* On mobile, headers might look odd in the grid flow, 
-       but we'll keep them for context or you can hide them with: 
-       @media (max-width: 768px) { display: none; } 
-       if you prefer a cleaner look. For now, color distinction is enough. */
-  }
-`;
-
-// --- NEW RESPONSIVE STYLES ---
-
-// 1. The Container for the rows
-const CanslimContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid var(--color-border);
-
-  /* On Mobile: Remove border and add gap for card look */
-  @media (max-width: 768px) {
-    border: none;
-    gap: 1rem;
-    overflow: visible;
-    border-radius: 0;
-  }
-`;
-
-// 2. The Header Row (Visible on Desktop, Hidden on Mobile)
-const DesktopHeader = styled.div`
-  display: grid;
-  grid-template-columns: 1fr 3fr 1fr;
-  background-color: var(--color-background);
-  padding: 1rem;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  border-bottom: 1px solid var(--color-border);
-
-  @media (max-width: 768px) {
-    display: none; /* Hide on mobile */
-  }
-`;
-
-// 3. The Data Row (Table Row on Desktop, Card on Mobile)
-const CanslimRow = styled.div`
-  display: grid;
-  grid-template-columns: 1fr 3fr 1fr;
-  background-color: var(--color-secondary);
-  
-  /* Desktop: Align items center */
-  & > div {
-    padding: 1rem;
-    display: flex;
-    align-items: center;
-  }
-
-  /* --- MOBILE TRANSFORMATION --- */
-  @media (max-width: 768px) {
-    display: flex;
-    flex-direction: column;
-    background-color: var(--color-secondary);
-    border: 1px solid var(--color-border);
-    border-radius: 12px;
-    padding: 0; /* Reset padding for internal layout */
-    position: relative;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-
-    /* Criteria (Header of the Card) */
-    & > div:nth-child(1) {
-      font-weight: 700;
-      color: var(--color-primary);
-      border-bottom: 1px solid var(--color-border);
-      background-color: rgba(88, 166, 255, 0.05);
-      padding: 1rem;
-    }
-
-    /* Assessment (Body of the Card) */
-    & > div:nth-child(2) {
-      color: var(--color-text-secondary);
-      line-height: 1.6;
-      padding: 1rem;
-    }
-
-    /* Result (Footer Badge of the Card) */
-    & > div:nth-child(3) {
-      position: absolute;
-      top: 1rem;
-      right: 1rem;
-      padding: 0;
-      font-size: 0.9rem;
-      background: none;
-    }
-  }
-`;
-
-// 4. The Result Text Colorer
-const ResultText = styled.span`
-  font-weight: 800;
-  text-transform: uppercase;
-  color: ${({ result }) => {
-    if (!result) return 'var(--color-text-secondary)';
-    const res = result.toLowerCase();
-    if (res.includes('pass') || res.includes('yes')) return 'var(--color-success)';
-    if (res.includes('fail') || res.includes('no')) return 'var(--color-danger)';
-    return 'var(--color-text-secondary)';
-  }};
-`;
-
-
-const Loader = styled.div`
-  color: var(--color-primary);
-  animation: ${fadeIn} 0.5s ease-in;
-  height: 150px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-`;
-
-// --- Helper to parse "key: value" or "bullet point" formats if table parsing fails ---
-const parseTextFallback = (text) => {
-    if (!text) return [];
-    const lines = text.split('\n');
-    const items = [];
-    lines.forEach(line => {
-        const clean = line.trim();
-        // Look for "Key: Value" pattern or "- Value"
-        if (clean.includes(':')) {
-            const parts = clean.split(':');
-            items.push([parts[0].replace(/^[*-]\s*/, '').trim(), parts.slice(1).join(':').trim(), '']);
-        } else if (clean.startsWith('-') || clean.startsWith('*')) {
-             items.push(['Point', clean.replace(/^[*-]\s*/, '').trim(), '']);
-        }
+// Deep parsing logic ensures strings are chopped exactly at the | line
+const parseTableData = (text) => {
+    if (!text) return[];
+    const normalized = text.replace(/\\\\n/g, '\n');
+    return normalized.split('\n').filter(line => line.includes('|')).map(line => {
+        const parts = line.split('|');
+        const clean = (str) => str ? str.replace(/\*/g, '').trim() : '';
+        return { col1: clean(parts[0]), col2: clean(parts[1]), col3: clean(parts[2]) };
     });
-    return items;
 };
 
-
-// --- The Final Master Fundamentals Component ---
-
-const Fundamentals = ({
-  symbol,
-  profile,
-  quote,
-  keyMetrics,
-  piotroskiData,
-  darvasScanData,
-  grahamScanData,
-  quarterlyEarnings,
-  annualEarnings,
-  shareholding,
-  delay,
-  philosophyAssessment,
-  canslimAssessment,
-  conclusion,
-  isLoadingPhilosophy,
-  isLoadingCanslim,
-  isLoadingConclusion
-}) => {
-
-  // --- Data Processing for Piotroski Score ---
-  const { score, criteria } = piotroskiData || {};
-  const getScoreColor = () => {
-    if (score >= 7) return 'var(--color-success)';
-    if (score >= 4) return '#EDBB5A';
-    return 'var(--color-danger)';
-  };
-  const scoreColor = getScoreColor();
-  
-  // --- ROBUST PARSER FOR VALUE INVESTING ---
-  const parsedPhilosophy = useMemo(() => {
-    if (!philosophyAssessment || typeof philosophyAssessment !== 'string') return [];
-    
-    // 1. Try Table Parsing
-    const tableRows = philosophyAssessment.split('\n')
-      .filter(line => line.includes('|'))
-      .map(row => row.split('|').map(c => c.trim()))
-      .filter(r => r.length > 2 && !r[1].includes('---') && !r[1].toLowerCase().includes('formula'));
-    
-    if (tableRows.length > 0) return tableRows;
-
-    // 2. Fallback to Text Parsing
-    return parseTextFallback(philosophyAssessment);
-  }, [philosophyAssessment]);
-  
-  // --- ROBUST PARSER FOR CANSLIM ---
-  const parsedCanslim = useMemo(() => {
-    if (!canslimAssessment || typeof canslimAssessment !== 'string') return [];
-    
-    // 1. Try Table Parsing
-    const tableRows = canslimAssessment.split('\n')
-      .filter(line => line.includes('|'))
-      .map(row => row.split('|').map(c => c.trim()))
-      .filter(r => r.length > 3 && !r[1].includes('---') && !r[1].toLowerCase().includes('criteria'));
-      
-    if (tableRows.length > 0) return tableRows;
-
-    // 2. Fallback to Text Parsing
-    return parseTextFallback(canslimAssessment);
-  }, [canslimAssessment]);
+const Fundamentals = ({ symbol, profile, quote, keyMetrics, piotroskiData, darvasScanData, grahamScanData, quarterlyEarnings, annualEarnings, shareholding, philosophyAssessment, canslimAssessment, conclusion, isLoadingPhilosophy, isLoadingCanslim, isLoadingConclusion }) => {
+  const canslimRows = useMemo(() => parseTableData(canslimAssessment),[canslimAssessment]);
+  const valueRows = useMemo(() => parseTableData(philosophyAssessment),[philosophyAssessment]);
+  const { score = 0, criteria =[] } = piotroskiData || {};
+  const scoreColor = score >= 7 ? '#3FB950' : score >= 4 ? '#EDBB5A' : '#F85149';
 
   return (
     <Card>
       <NestedTabs>
-        
         <NestedTabPanel label="Conclusion">
           <SectionContainer>
-            {isLoadingConclusion ? (
-              <Loader>Synthesizing all fundamental data...</Loader>
-            ) : (
-              <FundamentalConclusion conclusionData={conclusion} />
+            {isLoadingConclusion ? <Loader>Calculating Final Verdict...</Loader> : <FundamentalConclusion conclusionData={conclusion} />}
+          </SectionContainer>
+        </NestedTabPanel>
+
+        <NestedTabPanel label="CANSLIM">
+          <SectionContainer>
+            <SectionTitle>CANSLIM Checklist</SectionTitle>
+            {isLoadingCanslim ? <Loader>Running Quantitative Strategy...</Loader> : (
+              <TableContainer>
+                <StyledTable>
+                  <thead>
+                    <tr>
+                      <Th style={{width: '25%'}}>Criteria</Th>
+                      <Th style={{width: '55%'}}>Quantitative Assessment</Th>
+                      <Th style={{width: '20%', textAlign: 'right'}}>Verdict</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {canslimRows.map((row, i) => (
+                      <Tr key={i}>
+                        <Td style={{fontWeight: '600', color: 'var(--color-primary)', borderRight: '1px solid rgba(255,255,255,0.05)'}}>
+                            {row.col1}
+                        </Td>
+                        <Td>{row.col2}</Td>
+                        <Td style={{textAlign: 'right'}}>
+                            {/* Renders the perfect Green/Red pill and strips out emojis for cleanliness */}
+                            {row.col3 && <StatusTag status={row.col3}>{row.col3.replace(/[❌✅⚠️]/g, '').trim()}</StatusTag>}
+                        </Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </StyledTable>
+              </TableContainer>
             )}
+          </SectionContainer>
+        </NestedTabPanel>
+
+        <NestedTabPanel label="Value Investing">
+          <SectionContainer>
+            <SectionTitle>Valuation Models</SectionTitle>
+            {isLoadingPhilosophy ? <Loader>Computing Intrinsic Value...</Loader> : (
+              <TableContainer>
+                <StyledTable>
+                  <thead>
+                    <tr>
+                      <Th style={{width: '35%'}}>Formula / Strategy</Th>
+                      <Th>Mathematical Analysis</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {valueRows.map((row, i) => (
+                      <Tr key={i}>
+                        <Td style={{fontWeight: '600', color: 'var(--color-primary)', borderRight: '1px solid rgba(255,255,255,0.05)'}}>
+                            {row.col1}
+                        </Td>
+                        <Td>
+                            <span style={{fontWeight: '500'}}>{row.col2}</span>
+                        </Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </StyledTable>
+              </TableContainer>
+            )}
+          </SectionContainer>
+        </NestedTabPanel>
+
+        <NestedTabPanel label="Piotroski Score">
+          <SectionContainer>
+            <SectionTitle>Piotroski F-Score (Financial Health)</SectionTitle>
+            <PiotroskiGrid>
+              <ScoreCard color={scoreColor}>
+                <span style={{fontSize: '4rem', fontWeight: 800, color: scoreColor}}>{score}</span>
+                <span style={{color: '#8B949E'}}>/ 9</span>
+              </ScoreCard>
+              <div>
+                <p style={{marginBottom: '1rem', color: '#C9D1D9'}}>Scores based on 9 points of Profitability, Leverage, and Operating Efficiency.</p>
+                <CriteriaList>
+                  {criteria.map((item, i) => <li key={i}>{item}</li>)}
+                </CriteriaList>
+              </div>
+            </PiotroskiGrid>
           </SectionContainer>
         </NestedTabPanel>
 
@@ -9427,97 +9460,13 @@ const Fundamentals = ({
             <BenjaminGrahamScan scanData={grahamScanData} />
           </SectionContainer>
         </NestedTabPanel>
-        
-        <NestedTabPanel label="Piotroski Scan">
-          <SectionContainer>
-            <SectionTitle>Piotroski F-Score</SectionTitle>
-            {piotroskiData && piotroskiData.score !== undefined ? (
-              <PiotroskiGrid>
-                <ScoreCard scoreColor={scoreColor}>
-                  <ScoreValue scoreColor={scoreColor}>{score}</ScoreValue>
-                  <ScoreLabel>/ 9</ScoreLabel>
-                </ScoreCard>
-                <div>
-                  <p style={{ color: 'var(--color-text-secondary)', marginBottom: '1.5rem', lineHeight: 1.6 }}>
-                    The F-Score reflects financial strength based on 9 criteria. A high score (7-9) suggests a healthy company.
-                  </p>
-                  <CriteriaList>
-                    {criteria && criteria.map((item, index) => ( <CriteriaListItem key={index}>{item}</CriteriaListItem> ))}
-                  </CriteriaList>
-                </div>
-              </PiotroskiGrid>
-            ) : <p>Piotroski F-Score data not available for this stock.</p>}
-          </SectionContainer>
-        </NestedTabPanel>
-
-        <NestedTabPanel label="CANSLIM">
-          <SectionContainer>
-            <SectionTitle>CANSLIM Analysis (William J. O'Neil)</SectionTitle>
-            {isLoadingCanslim ? ( 
-              <Loader>Generating CANSLIM assessment...</Loader> 
-            ) : (
-              parsedCanslim.length > 0 ? (
-                <CanslimContainer>
-                  {/* Header only shows on Desktop */}
-                  <DesktopHeader>
-                    <div>Criteria</div>
-                    <div>Assessment</div>
-                    <div>Result</div>
-                  </DesktopHeader>
-                  
-                  {/* Rows map to Cards on Mobile */}
-                  {parsedCanslim.map((row, rowIndex) => (
-                    <CanslimRow key={rowIndex}>
-                      {/* Criteria Name */}
-                      <div>{row[0] === 'Point' ? '' : row[1]}</div>
-                      
-                      {/* Assessment Text */}
-                      <div>{row[0] === 'Point' ? row[1] : row[2]}</div>
-                      
-                      {/* Result (Pass/Fail) */}
-                      <div>
-                        <ResultText result={row[3] || row[2]}>
-                            {row[3] || ''}
-                        </ResultText>
-                      </div>
-                    </CanslimRow>
-                  ))}
-                </CanslimContainer>
-              ) : <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{canslimAssessment || "Data insufficient for CANSLIM analysis."}</p>
-            )}
-          </SectionContainer>
-        </NestedTabPanel>
 
         <NestedTabPanel label="Darvas Scan">
-            <SectionContainer>
-                <SectionTitle>Darvas Box Scan</SectionTitle>
-                <p style={{ color: 'var(--color-text-secondary)', lineHeight: 1.6, marginTop: '-1rem', marginBottom: '1.5rem' }}>
-                  A momentum strategy that identifies stocks consolidating in a narrow price range ("box") near their 52-week high.
-                </p>
-                <DarvasScan scanData={darvasScanData} currency={profile?.currency} />
-            </SectionContainer>
+          <SectionContainer>
+            <SectionTitle>Darvas Box Momentum</SectionTitle>
+            <DarvasScan scanData={darvasScanData} currency={profile?.currency} />
+          </SectionContainer>
         </NestedTabPanel>
-
-        <NestedTabPanel label="Value Investing">
-            <SectionContainer>
-                <SectionTitle>Investment Philosophy Summary</SectionTitle>
-                {isLoadingPhilosophy ? ( <Loader>Generating AI analysis summary...</Loader> ) : (
-                  parsedPhilosophy.length > 0 ? (
-                    <AssessmentTable>
-                      <div className="header">Formula</div>
-                      <div className="header">Assessment</div>
-                      {parsedPhilosophy.map((row, rowIndex) => (
-                        <React.Fragment key={rowIndex}>
-                          <div>{row[0] === 'Point' ? '' : row[1]}</div>
-                          <div>{row[0] === 'Point' ? row[1] : row[2]}</div>
-                        </React.Fragment>
-                      ))}
-                    </AssessmentTable>
-                  ) : <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{philosophyAssessment || "Data insufficient for Investment Philosophy analysis."}</p>
-                )}
-            </SectionContainer>
-        </NestedTabPanel>
-        
       </NestedTabs>
     </Card>
   );
@@ -9526,23 +9475,543 @@ const Fundamentals = ({
 export default Fundamentals;
 ```
 
-## File: nixpacks.toml
-```toml
-# Tell Railway to install both Python and Node
-providers = ["python", "nodejs"]
+## File: frontend/src/components/StockDetailPage/ChartAnalysis.js
+```javascript
+import React, { useState, useMemo, useEffect } from 'react';
+import styled, { keyframes, css } from 'styled-components';
+import { useParams } from 'react-router-dom';
+import axios from 'axios';
+import Card from '../common/Card';
+import { 
+  FaArrowUp, FaArrowDown, FaExchangeAlt, FaGem, FaExclamationTriangle, 
+  FaChartLine, FaCrosshairs, FaStopCircle, FaMoneyBillWave, FaLayerGroup, FaRobot, FaTachometerAlt, FaSync
+} from 'react-icons/fa';
 
-[phases.install]
-# Install dependencies
-cmds = ["npm --prefix frontend install", "pip install -r backend/requirements.txt"]
+// --- CONFIGURATION ---
+const API_URL = '';
 
-[phases.build]
-# Build React
-cmds = ["npm --prefix frontend run build"]
+// ==========================================
+// 1. HIGH-END STYLES & ANIMATIONS
+// ==========================================
 
-[start]
-# STANDARD PRODUCTION LAUNCH
-# We run 4 workers. They will coordinate via Redis to pick 1 Data Fetcher.
-cmd = "gunicorn backend.app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120"
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+const scanAnimation = keyframes`
+  0% { top: 0%; opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+`;
+
+const pulseGlow = keyframes`
+  0% { box-shadow: 0 0 5px rgba(88, 166, 255, 0.2); }
+  50% { box-shadow: 0 0 20px rgba(88, 166, 255, 0.6); }
+  100% { box-shadow: 0 0 5px rgba(88, 166, 255, 0.2); }
+`;
+
+const AnalysisContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+`;
+
+const TimeframeBar = styled.div`
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem;
+  background: #161B22;
+  border-radius: 16px;
+  border: 1px solid var(--color-border);
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+  flex-wrap: wrap;
+
+  @media (max-width: 768px) {
+    width: 100%;
+    gap: 0.5rem;
+  }
+`;
+
+const TimeframeButton = styled.button`
+  background: ${({ active }) => (active ? 'linear-gradient(135deg, #58A6FF, #238636)' : 'transparent')};
+  color: ${({ active }) => (active ? '#ffffff' : '#8B949E')};
+  border: 1px solid ${({ active }) => (active ? 'transparent' : 'rgba(255,255,255,0.1)')};
+  padding: 0.6rem 1.2rem;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  overflow: hidden;
+
+  &:hover {
+    transform: translateY(-2px);
+    color: #ffffff;
+    border-color: #58A6FF;
+    box-shadow: 0 4px 12px rgba(88, 166, 255, 0.2);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  ${({ active }) => active && css`
+    box-shadow: 0 0 15px rgba(35, 134, 54, 0.4);
+  `}
+`;
+
+const AnalysisGrid = styled.div`
+  display: grid;
+  gap: 2rem;
+  animation: ${fadeIn} 0.5s ease-out;
+`;
+
+const VerdictCard = styled(Card)`
+  text-align: center;
+  border-left: 5px solid ${({ color }) => color};
+  background: linear-gradient(180deg, rgba(22, 27, 34, 0.8) 0%, rgba(13, 17, 23, 1) 100%);
+  padding: 2.5rem;
+  position: relative;
+  overflow: hidden;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 100%;
+    background: ${({ color }) => color};
+    opacity: 0.03;
+    pointer-events: none;
+  }
+`;
+
+const TrendDisplay = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  font-size: 2.2rem;
+  font-weight: 900;
+  margin-bottom: 1rem;
+  color: ${({ color }) => color};
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  text-shadow: 0 0 30px ${({ color }) => color}44;
+
+  svg {
+    filter: drop-shadow(0 0 10px ${({ color }) => color});
+  }
+`;
+
+const ConclusionText = styled.p`
+  font-size: 1.1rem;
+  color: #C9D1D9;
+  max-width: 800px;
+  margin: 0 auto;
+  line-height: 1.8;
+  font-style: italic;
+  font-weight: 500;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  padding-top: 1.5rem;
+`;
+
+const TradeTicket = styled.div`
+  background: linear-gradient(135deg, #161B22 0%, #0D1117 100%);
+  border: 1px solid ${({ action }) => (action === 'BUY' ? '#238636' : action === 'SELL' ? '#DA3633' : '#8B949E')};
+  border-radius: 16px;
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+`;
+
+const TicketHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem 2rem;
+  background: rgba(255,255,255,0.02);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+`;
+
+const ActionBadge = styled.span`
+  background: ${({ action }) => (action === 'BUY' ? 'rgba(57, 211, 83, 0.15)' : action === 'SELL' ? 'rgba(248, 81, 73, 0.15)' : 'rgba(139, 148, 158, 0.15)')};
+  color: ${({ action }) => (action === 'BUY' ? '#3FB950' : action === 'SELL' ? '#F85149' : '#8B949E')};
+  border: 1px solid ${({ action }) => (action === 'BUY' ? '#3FB950' : action === 'SELL' ? '#F85149' : '#8B949E')};
+  padding: 0.5rem 1.5rem;
+  border-radius: 8px;
+  font-weight: 800;
+  font-size: 1.1rem;
+  letter-spacing: 1.5px;
+  box-shadow: 0 0 15px ${({ action }) => (action === 'BUY' ? 'rgba(57, 211, 83, 0.1)' : action === 'SELL' ? 'rgba(248, 81, 73, 0.1)' : 'transparent')};
+`;
+
+const MetricGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: rgba(255,255,255,0.05);
+  
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr 1fr;
+  }
+`;
+
+const MetricBox = styled.div`
+  background: #0D1117;
+  padding: 1.5rem;
+  text-align: center;
+  transition: background 0.2s;
+  
+  &:hover {
+    background: #161B22;
+  }
+`;
+
+const MetricLabel = styled.div`
+  font-size: 0.7rem;
+  color: #8B949E;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+`;
+
+const MetricVal = styled.div`
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-family: 'Roboto Mono', monospace;
+  color: ${({ color }) => color || '#C9D1D9'};
+`;
+
+const RationaleBox = styled.div`
+  padding: 2rem;
+  background: rgba(88, 166, 255, 0.05);
+  border-top: 1px solid rgba(88, 166, 255, 0.1);
+  
+  strong {
+    color: #58A6FF;
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  
+  p {
+    color: #C9D1D9;
+    line-height: 1.6;
+    margin: 0;
+    font-size: 1rem;
+  }
+`;
+
+const ScannerBox = styled.div`
+  position: relative;
+  width: 100%;
+  height: 400px;
+  background: rgba(22, 27, 34, 0.4);
+  border: 1px dashed var(--color-border);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  animation: ${fadeIn} 0.3s ease-out;
+`;
+
+const ScanLine = styled.div`
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #58A6FF, transparent);
+  box-shadow: 0 0 20px #58A6FF;
+  animation: ${scanAnimation} 2s linear infinite;
+`;
+
+const ProcessingIcon = styled(FaRobot)`
+  font-size: 4rem;
+  color: #58A6FF;
+  margin-bottom: 1.5rem;
+  animation: ${pulseGlow} 2s infinite;
+`;
+
+const DetailGrid = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const InfoList = styled.ul`
+  list-style: none;
+  padding: 0;
+  margin: 0;
+`;
+
+const InfoItem = styled.li`
+  display: flex;
+  align-items: start;
+  gap: 10px;
+  margin-bottom: 0.8rem;
+  color: #8B949E;
+  font-size: 0.95rem;
+  line-height: 1.5;
+
+  svg {
+    margin-top: 4px;
+    color: #EBCB8B;
+  }
+`;
+
+const RetryButton = styled.button`
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid #58A6FF;
+  background: transparent;
+  color: #58A6FF;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  margin-right: auto;
+  transition: all 0.2s;
+  
+  &:hover {
+    background: rgba(88,166,255,0.1);
+  }
+`;
+
+// ==========================================
+// 2. MAIN COMPONENT
+// ==========================================
+
+const ChartAnalysis = ({ analysisData }) => {
+  const { symbol } = useParams();
+  
+  // Cache stores all analyses
+  const [cache, setCache] = useState({ 'Image': analysisData });
+  const [activeTab, setActiveTab] = useState('Image');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isOmniLoaded, setIsOmniLoaded] = useState(false);
+
+  // --- OMNI-FETCH ENGINE ---
+  useEffect(() => {
+      const fetchAllTimeframes = async () => {
+          if (isOmniLoaded) return;
+          setIsLoading(true);
+          try {
+              // FIX: Use API_URL for Vercel/Railway connection
+              const res = await axios.post(`${API_URL}/api/stocks/${symbol}/all-timeframe-analysis`);
+              if (res.data && !res.data.error) {
+                  setCache(prev => ({ ...prev, ...res.data }));
+                  setIsOmniLoaded(true);
+              }
+          } catch (e) {
+              console.error("Omni-Analysis Failed:", e);
+          } finally {
+              setIsLoading(false);
+          }
+      };
+      
+      const timer = setTimeout(fetchAllTimeframes, 500);
+      return () => clearTimeout(timer);
+  }, [symbol, isOmniLoaded]);
+
+  // --- SINGLE FETCH BACKUP ---
+  const fetchSingleTimeframe = async (tf) => {
+      setIsLoading(true);
+      try {
+          // FIX: Use API_URL
+          const res = await axios.post(`${API_URL}/api/stocks/${symbol}/timeframe-analysis`, { timeframe: tf });
+          if (res.data && res.data.analysis) {
+              setCache(prev => ({ ...prev, [tf.toLowerCase()]: res.data.analysis }));
+          }
+      } catch (e) {
+          console.error("Single Fetch Error", e);
+      } finally {
+          setIsLoading(false);
+      }
+  };
+
+  const handleTabChange = (tf) => {
+      setActiveTab(tf);
+      // If data missing, try fetching it individually
+      if (tf !== 'Image' && !cache[tf.toLowerCase()] && !cache[tf]) {
+          fetchSingleTimeframe(tf);
+      }
+  };
+
+  const currentText = cache[activeTab] || cache[activeTab.toLowerCase()] || cache[activeTab.toUpperCase()];
+
+  // --- PARSER ENGINE ---
+  const parsed = useMemo(() => {
+    if (!currentText || typeof currentText !== 'string') return null;
+    const rawKeys = ['TREND', 'PATTERNS', 'LEVELS', 'VOLUME', 'MOMENTUM', 'INDICATORS', 'CONCLUSION', 'ACTION', 'ENTRY_ZONE', 'STOP_LOSS', 'TARGET_1', 'TARGET_2', 'RISK_REWARD', 'CONFIDENCE', 'RATIONALE'];
+    const sections = {};
+    let text = "\n" + currentText.replace(/\\n/g, '\n').replace(/\*\*/g, '').replace(/-- TRADE TICKET --/g, '');
+    rawKeys.forEach(key => {
+      const regex = new RegExp(`(?:^|\\n)\\s*${key}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*[A-Z0-9_]{3,}\\s*:|$)`, 'i');
+      const match = text.match(regex);
+      if (match) sections[key] = match[1].trim();
+    });
+    return sections;
+  }, [currentText]);
+
+  // --- VISUAL HELPERS ---
+  const getTrendInfo = () => {
+    const t = parsed?.TREND?.toLowerCase() || '';
+    if (t.includes('uptrend') || t.includes('bullish')) return { icon: FaArrowUp, color: '#3FB950', text: 'Bullish Structure' };
+    if (t.includes('downtrend') || t.includes('bearish')) return { icon: FaArrowDown, color: '#F85149', text: 'Bearish Structure' };
+    return { icon: FaExchangeAlt, color: '#EBCB8B', text: 'Consolidation / Range' };
+  };
+
+  const { icon: TrendIcon, color: trendColor, text: trendText } = getTrendInfo();
+  const action = parsed?.ACTION?.toUpperCase() || 'WAIT';
+
+  // ==========================================
+  // 3. RENDER
+  // ==========================================
+  
+  return (
+    <AnalysisContainer>
+      <TimeframeBar>
+        <TimeframeButton active={activeTab === 'Image'} onClick={() => handleTabChange('Image')}>
+            <FaGem /> Original Image
+        </TimeframeButton>
+        {['5m', '15m', '1h', '4h', '1d'].map(tf => (
+            <TimeframeButton 
+                key={tf} 
+                active={activeTab === tf} 
+                onClick={() => handleTabChange(tf)}
+                disabled={isLoading && !cache[tf.toLowerCase()] && !cache[tf]}
+            >
+               {tf.toUpperCase()}
+            </TimeframeButton>
+        ))}
+      </TimeframeBar>
+
+      {isLoading && !currentText ? (
+          <ScannerBox>
+              <ScanLine />
+              <ProcessingIcon />
+              <h3 style={{color:'#C9D1D9', letterSpacing:'2px'}}>QUANT ENGINE RUNNING</h3>
+              <p style={{color:'#8B949E'}}>Calculating Math Models for All Timeframes...</p>
+          </ScannerBox>
+      ) : parsed ? (
+          <AnalysisGrid>
+              {/* Verdict */}
+              <VerdictCard color={trendColor}>
+                  <div style={{color: trendColor, fontSize:'0.9rem', textTransform:'uppercase', letterSpacing:'1px', marginBottom:'0.5rem'}}>
+                      MARKET STRUCTURE ({activeTab.toUpperCase()})
+                  </div>
+                  <TrendDisplay color={trendColor}>
+                      <TrendIcon /> {trendText}
+                  </TrendDisplay>
+                  <ConclusionText>"{parsed.CONCLUSION || parsed.RATIONALE}"</ConclusionText>
+              </VerdictCard>
+
+              {/* Trade Ticket */}
+              {parsed.ENTRY_ZONE && (
+                  <TradeTicket action={action}>
+                      <TicketHeader>
+                          <div>
+                              <div style={{fontSize:'0.75rem', color:'#8B949E', letterSpacing:'1px', marginBottom:'5px'}}>STRATEGY SIGNAL</div>
+                              <ActionBadge action={action}>{action}</ActionBadge>
+                          </div>
+                          <div style={{textAlign:'right'}}>
+                              <div style={{fontSize:'0.75rem', color:'#8B949E', letterSpacing:'1px', marginBottom:'5px'}}>AI CONFIDENCE</div>
+                              <div style={{fontSize:'1.5rem', fontWeight:'bold', color:'#C9D1D9'}}>{parsed.CONFIDENCE || 'Medium'}</div>
+                          </div>
+                      </TicketHeader>
+                      <MetricGrid>
+                          <MetricBox>
+                              <MetricLabel><FaCrosshairs /> Entry Zone</MetricLabel>
+                              <MetricVal color="#58A6FF">{parsed.ENTRY_ZONE}</MetricVal>
+                          </MetricBox>
+                          <MetricBox>
+                              <MetricLabel><FaStopCircle /> Stop Loss (SL)</MetricLabel>
+                              <MetricVal color="#F85149">{parsed.STOP_LOSS}</MetricVal>
+                          </MetricBox>
+                          <MetricBox style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <MetricLabel><FaMoneyBillWave /> Take Profit Targets</MetricLabel>
+                              <div style={{display:'flex', justifyContent:'space-around', width: '100%', marginTop: '4px'}}>
+                                  <div style={{display:'flex', flexDirection:'column', alignItems:'center'}}>
+                                      <span style={{fontSize:'0.65rem', color:'#8B949E', fontWeight:'bold', letterSpacing:'1px'}}>T1 (1:1.5)</span>
+                                      <span style={{color:'#3FB950', fontWeight:'700', fontSize:'1.15rem', fontFamily:'Roboto Mono'}}>{parsed.TARGET_1}</span>
+                                  </div>
+                                  <div style={{width: '1px', backgroundColor: 'rgba(255,255,255,0.1)', height: '100%'}}></div>
+                                  <div style={{display:'flex', flexDirection:'column', alignItems:'center'}}>
+                                      <span style={{fontSize:'0.65rem', color:'#8B949E', fontWeight:'bold', letterSpacing:'1px'}}>T2 (1:3.0)</span>
+                                      <span style={{color:'#17C3B2', fontWeight:'700', fontSize:'1.15rem', fontFamily:'Roboto Mono'}}>{parsed.TARGET_2}</span>
+                                  </div>
+                              </div>
+                          </MetricBox>
+                          <MetricBox>
+                              <MetricLabel><FaChartLine /> Risk / Reward</MetricLabel>
+                              <MetricVal color="#EBCB8B" style={{fontSize: '1.05rem'}}>{parsed.RISK_REWARD}</MetricVal>
+                          </MetricBox>
+                      </MetricGrid>
+                      <RationaleBox>
+                          <strong><FaRobot style={{marginRight:'8px'}}/> Mathematical Rationale</strong>
+                          <p>{parsed.RATIONALE}</p>
+                      </RationaleBox>
+                  </TradeTicket>
+              )}
+
+              {/* Deep Dive Grid */}
+              <DetailGrid>
+                  <Card title="Key Levels">
+                      <InfoList>
+                         <InfoItem><FaLayerGroup /> {parsed.LEVELS || 'Analyzing key levels...'}</InfoItem>
+                         <InfoItem><FaTachometerAlt /> {parsed.MOMENTUM || 'Analyzing momentum...'}</InfoItem>
+                      </InfoList>
+                  </Card>
+                  <Card title="Patterns & Indicators">
+                      <InfoList>
+                         <InfoItem><FaChartLine /> {parsed.PATTERNS || 'No specific patterns detected.'}</InfoItem>
+                         <InfoItem><FaExclamationTriangle /> {parsed.INDICATORS || 'Calculating indicators...'}</InfoItem>
+                      </InfoList>
+                  </Card>
+              </DetailGrid>
+          </AnalysisGrid>
+      ) : (
+          <div style={{textAlign:'center', padding:'3rem', color:'#8B949E', border:'1px dashed #30363D', borderRadius:'16px'}}>
+              <FaExclamationTriangle size={30} style={{marginBottom:'1rem'}} />
+              <p>Analysis unavailable for this timeframe.</p>
+              <RetryButton onClick={() => fetchSingleTimeframe(activeTab)}><FaSync /> Retry Analysis</RetryButton>
+          </div>
+      )}
+    </AnalysisContainer>
+  );
+};
+
+export default ChartAnalysis;
 ```
 
 ## File: backend/app/services/stream_hub.py
@@ -9550,7 +10019,6 @@ cmd = "gunicorn backend.app.main:app --workers 4 --worker-class uvicorn.workers.
 import asyncio
 import json
 import os
-import threading
 import logging
 from typing import List, Dict
 from fastapi import WebSocket
@@ -9558,40 +10026,18 @@ import yfinance as yf
 from ..services import eodhd_service, fmp_service
 from ..services.redis_service import redis_client
 
-# --- LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("StreamHub")
 
-# ==========================================
-# 1. ASSET CONFIGURATION
-# ==========================================
+# Fyers completely removed for stability
+FYERS_MAP = {}
+FMP_ASSETS =["BTC-USD.CC", "ETH-USD.CC", "SOL-USD.CC", "XRP-USD.CC", "DOGE-USD.CC", "ADA-USD.CC", "MATIC-USD.CC", "DOT-USD.CC", "LTC-USD.CC", "BNB-USD.CC"]
+YAHOO_MAP = {"CL=F": "USO.US", "GC=F": "XAU-USD.CC", "SI=F": "XAG-USD.CC", "NG=F": "UNG.US", "HG=F": "HGUSD", "BZ=F": "UKOIL"}
 
-FYERS_MAP = {
-    "NSEI.INDX": "NSE:NIFTY50-INDEX", "NSEBANK.INDX": "NSE:NIFTYBANK-INDEX",
-    "BSESN.INDX": "BSE:SENSEX-INDEX", "INDIAVIX.INDX": "NSE:INDIAVIX-INDEX",
-    "RELIANCE.NSE": "NSE:RELIANCE-EQ", "HDFCBANK.NSE": "NSE:HDFCBANK-EQ",
-    "TCS.NSE": "NSE:TCS-EQ", "INFY.NSE": "NSE:INFY-EQ",
-    "SBIN.NSE": "NSE:SBIN-EQ", "ICICIBANK.NSE": "NSE:ICICIBANK-EQ"
-}
-
-FMP_ASSETS = [
-    "BTC-USD.CC", "ETH-USD.CC", "SOL-USD.CC", "XRP-USD.CC", "DOGE-USD.CC",
-    "ADA-USD.CC", "MATIC-USD.CC", "DOT-USD.CC", "LTC-USD.CC", "BNB-USD.CC"
-]
-
-YAHOO_MAP = {
-    "CL=F": "USO.US", "GC=F": "XAU-USD.CC", "SI=F": "XAG-USD.CC",
-    "NG=F": "UNG.US", "HG=F": "HGUSD", "BZ=F": "UKOIL"
-}
-
-# ==========================================
-# 2. THE PRODUCER
-# ==========================================
 class StreamProducer:
     def __init__(self):
         self.is_running = False
         self.is_master = False
-        self.fyers_thread = None
         
     async def start(self):
         if self.is_running: return
@@ -9599,6 +10045,7 @@ class StreamProducer:
         logger.info("🚀 STREAM PRODUCER STARTING...")
 
         asyncio.create_task(self._manage_master_status())
+        asyncio.create_task(self._poll_bullish_screener())
         asyncio.create_task(self._poll_fmp_assets())   
         asyncio.create_task(self._poll_eodhd_assets()) 
         asyncio.create_task(self._poll_yahoo_assets())
@@ -9606,113 +10053,37 @@ class StreamProducer:
     async def _manage_master_status(self):
         LOCK_KEY = "stream_master_lock"
         LOCK_TTL = 15 
-        
         while self.is_running:
             try:
                 is_leader = await redis_client.acquire_lock(LOCK_KEY, ttl=LOCK_TTL)
                 if is_leader:
                     if not self.is_master:
-                        logger.info("👑 I am now the DATA MASTER. Starting Fyers...")
+                        logger.info("👑 I am now the DATA MASTER. Running pure API feeds...")
                         self.is_master = True
-                        self._start_fyers_thread()
                     else:
                         await redis_client.extend_lock(LOCK_KEY, ttl=LOCK_TTL)
                 else:
                     if self.is_master:
                         self.is_master = False
             except Exception as e:
-                logger.error(f"Leader Election Error: {e}")
-            
+                pass
             await asyncio.sleep(5)
 
-    def _start_fyers_thread(self):
-        if self.fyers_thread and self.fyers_thread.is_alive():
-            return
-        self.fyers_thread = threading.Thread(target=self._run_fyers_engine, daemon=True)
-        self.fyers_thread.start()
-
-    def _run_fyers_engine(self):
-        """LANE 1: Fyers WebSocket (Debug Mode)"""
-        
-        # 1. Clean Inputs
-        raw_token = os.getenv("FYERS_ACCESS_TOKEN", "").strip().replace('"', '').replace("'", "")
-        raw_client_id = os.getenv("FYERS_CLIENT_ID", "").strip().replace('"', '').replace("'", "")
-        
-        if not raw_token or not raw_client_id: 
-            logger.warning("⚠️ Fyers Config Missing.")
-            return
-
-        # 2. Extract Token (Handle "AppID:Token" case)
-        final_token = raw_token
-        if ":" in raw_token:
-            parts = raw_token.split(":")
-            if len(parts) > 1 and len(parts[1]) > 50:
-                final_token = parts[1]
-                logger.info("🔧 Extracted Token from 'AppID:Token' format")
-
-        # 3. Ensure AppID has suffix (Common Mistake Fix)
-        # Most Fyers App IDs are "XV12345-100". If user put "XV12345", we fix it.
-        final_client_id = raw_client_id
-        if not final_client_id.endswith("-100") and len(final_client_id) < 15:
-             # Heuristic: If it looks like a base ID, try appending -100
-             # Only apply if it doesn't look like a different type of ID
-             logger.info(f"🔧 AppID '{final_client_id}' might be missing '-100'. Attempting as-is first.")
-        
-        # 4. Construct Auth String
-        auth_string = f"{final_client_id}:{final_token}"
-        
-        # --- DEBUG LOGS (COMPARE THESE WITH YOUR LOCAL ENV) ---
-        logger.info(f"🔍 FYERS DEBUG INFO:")
-        logger.info(f"   -> App ID (Used): {final_client_id}")
-        logger.info(f"   -> Token Start:   {final_token[:6]}...")
-        logger.info(f"   -> Token End:     ...{final_token[-6:]}")
-        logger.info(f"   -> Token Length:  {len(final_token)}")
-        # -----------------------------------------------------
-
-        try:
-            from fyers_apiv3.FyersWebsocket import data_ws
-            
-            def on_message(msg):
-                if not self.is_master: return
-                if isinstance(msg, dict) and 'symbol' in msg and 'ltp' in msg:
-                    fyers_sym = msg['symbol']
-                    internal_sym = next((k for k, v in FYERS_MAP.items() if v == fyers_sym), None)
-                    if not internal_sym and fyers_sym.startswith("NSE:") and "-EQ" in fyers_sym:
-                        internal_sym = fyers_sym.replace("NSE:", "").replace("-EQ", "") + ".NSE"
-                    if internal_sym:
-                        payload = {"price": msg.get('ltp'), "change": msg.get('ch', 0), "percent_change": msg.get('chp', 0), "timestamp": msg.get('exch_feed_time')}
-                        asyncio.run(redis_client.publish_update(internal_sym, payload))
-            
-            def on_error(err):
-                logger.error(f"❌ Fyers Error: {err}")
-                # AUTO-HEAL: If token expired (-99), generate a new one immediately
-                if isinstance(err, dict) and err.get('code') in [-99, -300]:
-                    logger.info("♻️ Generating Fresh Token...")
-                    from ..utils import auth_helper
-                    new_token = auth_helper.get_fresh_fyers_token()
-                    if new_token:
-                        os.environ["FYERS_ACCESS_TOKEN"] = new_token
-                        # Recursively restart with new token
-                        self._run_fyers_engine()
-
-            def on_open():
-                logger.info("✅ Fyers WebSocket Connected! Subscribing...")
-                fyers.subscribe(symbols=list(FYERS_MAP.values()), data_type="SymbolUpdate")
-
-            fyers = data_ws.FyersDataSocket(
-                access_token=auth_string, 
-                log_path="", 
-                litemode=True, 
-                write_to_file=False, 
-                reconnect=True, 
-                on_connect=on_open, 
-                on_message=on_message,
-                on_error=on_error
-            )
-            fyers.connect()
-
-        except Exception as e: 
-            logger.error(f"Fyers Crash: {e}")
+    async def _poll_bullish_screener(self):
+        from .screener_bullish import fetch_bullish_reversal
+        while self.is_running:
+            if not self.is_master:
+                await asyncio.sleep(10)
+                continue
+            try:
+                data = await asyncio.to_thread(fetch_bullish_reversal)
+                # Cache for 24 HOURS. If market closes, the UI stays populated with the last scan!
+                if data and len(data) > 0:
+                    await redis_client.set_cache("live_screener_bullish", data, 86400)
+                    logger.info(f"✅ Auto-Scraped {len(data)} Bullish Reversal Stocks")
+            except Exception as e:
+                pass
+            await asyncio.sleep(120)
 
     async def _poll_yahoo_assets(self):
         yahoo_symbols = list(YAHOO_MAP.keys())
@@ -9761,7 +10132,7 @@ class StreamProducer:
                 continue
             try:
                 active_list = await redis_client.get_active_symbols()
-                targets = [s for s in active_list if s not in FMP_ASSETS and s not in FYERS_MAP and s not in YAHOO_MAP.values()]
+                targets =[s for s in active_list if s not in FMP_ASSETS and s not in YAHOO_MAP.values()]
                 if targets:
                     for i in range(0, len(targets), 50):
                         chunk = targets[i:i+50]
@@ -9775,11 +10146,8 @@ class StreamProducer:
                                         "price": item.get('close'), "change": item.get('change'), "percent_change": item.get('change_p'), "timestamp": item.get('timestamp')
                                     })
             except: pass
-            await asyncio.sleep(1.5) 
+            await asyncio.sleep(1.5)
 
-# ==========================================
-# 3. THE CONSUMER
-# ==========================================
 class StreamConsumer:
     def __init__(self):
         self.active_sockets: Dict[str, List[WebSocket]] = {}
@@ -9801,7 +10169,6 @@ class StreamConsumer:
         self.is_listening = True
         subscriber = redis_client.get_subscriber()
         if hasattr(subscriber, "subscribe"): await subscriber.subscribe("market_feed")
-        logger.info("🎧 Worker listening to Data Bus")
         
         try:
             async for message in subscriber.listen():
@@ -9811,7 +10178,7 @@ class StreamConsumer:
                         symbol = payload["symbol"]
                         data = payload["data"]
                         if symbol in self.active_sockets: await self._broadcast_to_list(symbol, data)
-                        is_banner = (symbol in FMP_ASSETS or symbol in FYERS_MAP or symbol in YAHOO_MAP.values())
+                        is_banner = (symbol in FMP_ASSETS or symbol in YAHOO_MAP.values())
                         if is_banner and "MARKET_OVERVIEW" in self.active_sockets:
                             await self._broadcast_to_list("MARKET_OVERVIEW", {**data, "symbol": symbol})
                     except: pass
@@ -9823,7 +10190,7 @@ class StreamConsumer:
     async def _broadcast_to_list(self, key: str, data: dict):
         if key not in self.active_sockets: return
         msg = json.dumps(data)
-        dead = []
+        dead =[]
         for ws in self.active_sockets[key]:
             try: await ws.send_text(msg)
             except: dead.append(ws)
@@ -9903,7 +10270,7 @@ def resample_chart_data(chart_data: list, target_interval: str):
         resampled.reset_index(inplace=True)
         
         # Convert timestamp back to Unix Seconds
-        resampled['time'] = resampled['datetime'].astype('int64') // 10**9
+        resampled['time'] = (resampled['datetime'] - pd.Timestamp('1970-01-01')) // pd.Timedelta('1s')
         
         # Select and order columns
         final_data = resampled[['time', 'open', 'high', 'low', 'close', 'volume']].to_dict('records')
@@ -10178,277 +10545,6 @@ def calculate_extended_technicals(df: pd.DataFrame):
         }
     except:
         return None
-```
-
-## File: Dockerfile
-```dockerfile
-# --- Stage 1: Build React Frontend ---
-FROM node:18-alpine AS builder
-WORKDIR /app/frontend
-
-COPY frontend/package*.json ./
-RUN npm install
-
-COPY frontend/ ./
-RUN npm run build
-
-# --- Stage 2: Build Python Backend ---
-# UPGRADE: Changed from 3.11 to 3.12 to fix pandas_ta error
-FROM python:3.12-slim
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PORT=8000
-
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# Copy Backend Code
-COPY backend ./backend
-
-# Copy Frontend Build
-COPY --from=builder /app/frontend/build ./frontend/build
-
-# Expose the port
-EXPOSE 8000
-
-# Start Command
-CMD ["sh", "-c", "gunicorn backend.app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120"]
-```
-
-## File: backend/requirements.txt
-```
-fastapi
-uvicorn[standard]
-python-dotenv
-requests
-google-generativeai
-pandas
-pandas_ta
-pydantic
-python-multipart
-redis>=5.0.0
-async-lru
-beautifulsoup4
-gunicorn
-msgpack
-fyers-apiv3
-websockets
-httpx
-yfinance
-# force rebuild
-```
-
-## File: backend/app/routers/charts.py
-```python
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
-# Import all services
-from ..services import gemini_service, eodhd_service, technical_service, fmp_service
-import asyncio
-import pandas as pd
-import json
-from urllib.parse import unquote
-
-router = APIRouter()
-
-# Timeframes to fetch for "Deep Dive" analysis
-TIMEFRAMES_TO_ANALYZE = ["5M", "1H", "4H", "1D"]
-
-# ==========================================
-# 1. SMART SYMBOL RESOLVER
-# ==========================================
-
-
-async def resolve_symbol_smart(ai_text: str, context_type: str):
-    """
-    Routes the AI-identified ticker to the Best Data Provider.
-    Returns: (resolved_ticker, source_api)
-    """
-    symbol = ai_text.strip().upper()
-    
-    # Clean up common artifacts
-    # Remove USD, USDT to isolate the coin symbol (e.g. BTCUSD -> BTC)
-    clean_sym = symbol.replace("/", "").replace("-", "").replace(" ", "").replace("USDT", "").replace("USD", "").replace("=F", "")
-    
-    # --- A. COMMODITIES (Prioritize FMP) ---
-    fmp_commodities = {
-        "GOLD": "XAUUSD", "XAU": "XAUUSD", "XAUUSD": "XAUUSD", "GC": "XAUUSD",
-        "SILVER": "XAGUSD", "XAG": "XAGUSD", "SI": "XAGUSD",
-        "CRUDE": "CLUSD", "CRUDEOIL": "CLUSD", "OIL": "CLUSD", "WTI": "CLUSD", "USOIL": "CLUSD", "CL": "CLUSD",
-        "BRENT": "UKOIL", "BRENTOIL": "UKOIL", "UKOIL": "UKOIL",
-        "NATURALGAS": "NGUSD", "GAS": "NGUSD", "NATGAS": "NGUSD", "NG": "NGUSD", "UNG": "NGUSD",
-        "COPPER": "HGUSD", "HG": "HGUSD",
-        "PLATINUM": "PLUSD", "PALLADIUM": "PAUSD"
-    }
-    
-    if clean_sym in fmp_commodities: return fmp_commodities[clean_sym], "FMP"
-    if symbol in fmp_commodities: return fmp_commodities[symbol], "FMP"
-
-    # --- B. CRYPTO (CRITICAL FIX) ---
-    # We must return the Internal Format (BTC-USD.CC) so stocks.py recognizes it correctly
-    crypto_shorts = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "BNB", "MATIC", "AVAX", "LTC", "DOT", "SHIB"]
-    
-    if clean_sym in crypto_shorts:
-        return f"{clean_sym}-USD.CC", "FMP"
-        
-    if "BTC" in symbol or "ETH" in symbol or "SOL" in symbol:
-        # Fallback if cleaning missed it
-        return f"{clean_sym}-USD.CC", "FMP"
-
-    # --- C. INDICES (Prioritize EODHD) ---
-    if context_type == 'index' or '^' in symbol or 'NIFTY' in symbol or 'SENSEX' in symbol or 'SPX' in symbol:
-        if "BANK" in symbol: return "NSEBANK.INDX", "EODHD"
-        if "NIFTY" in symbol: return "NSEI.INDX", "EODHD"
-        if "SENSEX" in symbol: return "BSESN.INDX", "EODHD"
-        if "SPX" in symbol or "S&P" in symbol: return "GSPC.INDX", "EODHD"
-        if "NDX" in symbol or "NASDAQ" in symbol: return "NDX.INDX", "EODHD"
-        if "DOW" in symbol or "DJI" in symbol: return "DJI.INDX", "EODHD"
-        if "VIX" in symbol: return "INDIAVIX.INDX", "EODHD"
-        if "DAX" in symbol: return "GDAXI.INDX", "EODHD"
-        if "NIKKEI" in symbol: return "N225.INDX", "EODHD"
-
-    # --- D. STOCKS (EODHD) ---
-    if ".NS" in symbol: return symbol.replace(".NS", ".NSE"), "EODHD"
-    if ".BO" in symbol: return symbol.replace(".BO", ".BSE"), "EODHD"
-    if ".US" in symbol: return symbol, "EODHD"
-
-    # Suffix Discovery Fallback
-    candidates = [f"{symbol}.NSE", f"{symbol}.US"]
-    for cand in candidates:
-        try:
-            check = await asyncio.to_thread(eodhd_service.get_live_price, cand)
-            if check and 'price' in check and check['price'] > 0:
-                return cand, "EODHD"
-        except: continue
-            
-    return f"{symbol}.NSE", "EODHD"
-
-# ==========================================
-# 2. ENDPOINT: ANALYZE CHART
-# ==========================================
-
-@router.post("/analyze")
-async def analyze_chart_image(
-    chart_image: UploadFile = File(...),
-    analysis_type: str = Form("stock")
-):
-    """
-    Master AI Chart Analyst.
-    1. AI Vision (Identify Ticker).
-    2. Hybrid Resolution (Route to FMP or EODHD).
-    3. Parallel Data Fetch (Vision + Math).
-    4. Technical Calculation (Pandas).
-    5. Synthesis & Response.
-    """
-    if not chart_image.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image.")
-
-    image_bytes = await chart_image.read()
-
-    # --- Step 1: AI Vision (Identify Ticker) ---
-    # We ask Gemini to just tell us WHAT is in the image first.
-    raw_symbol = await asyncio.to_thread(gemini_service.identify_ticker_from_image, image_bytes)
-
-    if not raw_symbol or raw_symbol == "NOT_FOUND":
-        return {
-            "identified_symbol": "NOT_FOUND", 
-            "analysis_data": "Could not identify symbol from image. Please ensure the ticker name is visible.", 
-            "technical_data": None
-        }
-    
-    # --- Step 2: Resolve & Normalize (Hybrid Engine) ---
-    final_symbol, data_source = await resolve_symbol_smart(raw_symbol, analysis_type)
-    print(f"Chart Upload: AI detected '{raw_symbol}' -> Resolved to '{final_symbol}' via {data_source}")
-
-    # --- Step 3: Parallel Execution ---
-    
-    # Task A: AI Visual Strategy (Generates the text report)
-    vision_task = asyncio.to_thread(gemini_service.analyze_chart_technicals_from_image, image_bytes)
-
-    # Task B: Fetch Data for Multiple Timeframes (Math Engine)
-    async def fetch_and_calc(tf):
-        try:
-            raw_data = []
-            
-            # --- HYBRID FETCHING LOGIC ---
-            if data_source == "FMP":
-                # Try Commodity First
-                raw_data = await asyncio.to_thread(fmp_service.get_commodity_history, final_symbol, range_type=tf)
-                # If Empty, Try Crypto
-                if not raw_data:
-                    raw_data = await asyncio.to_thread(fmp_service.get_crypto_history, final_symbol, range_type=tf)
-            else:
-                # Fetch Stocks/Indices from EODHD
-                raw_data = await asyncio.to_thread(eodhd_service.get_historical_data, final_symbol, range_type=tf)
-            
-            # Validation
-            if not raw_data or len(raw_data) < 20: 
-                return tf, None
-            
-            # Convert to Pandas for Math
-            df = pd.DataFrame(raw_data)
-            
-            # Calculate Indicators
-            technicals = await asyncio.to_thread(technical_service.calculate_extended_technicals, df)
-            
-            return tf, technicals
-        except Exception as e:
-            print(f"Error analyzing {tf} for {final_symbol}: {e}")
-            return tf, None
-
-    # Run all data tasks in parallel
-    data_tasks = [fetch_and_calc(tf) for tf in TIMEFRAMES_TO_ANALYZE]
-    
-    # Execute Vision + Data simultaneously
-    results = await asyncio.gather(vision_task, *data_tasks)
-
-    # Unpack Results
-    analysis_text = results[0] # The text report from Gemini
-    tech_results = results[1:] # The list of (tf, data) tuples
-
-    # Structure Technical Data for Frontend
-    technical_data = {tf: data for tf, data in tech_results if data is not None}
-
-    # --- Step 4: Final Response Formatting ---
-    frontend_symbol = final_symbol
-    
-    # Convert EODHD format back to Frontend format if it's a Stock
-    if final_symbol.endswith(".NSE"): 
-        frontend_symbol = final_symbol.replace(".NSE", ".NS")
-    elif final_symbol.endswith(".BSE"): 
-        frontend_symbol = final_symbol.replace(".BSE", ".BO")
-    
-    return {
-        "identified_symbol": frontend_symbol,
-        "analysis_data": analysis_text,
-        "technical_data": technical_data
-    }
-@router.post("/analyze-pure")
-async def analyze_pure_chart(chart_image: UploadFile = File(...)):
-    """
-    Pure AI Vision Endpoint. No APIs. No Data Feeds. Just Brains.
-    """
-    if not chart_image.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Invalid file type.")
-
-    image_bytes = await chart_image.read()
-    
-    # Direct call to the Vision Engine
-    analysis_text = await asyncio.to_thread(gemini_service.analyze_pure_vision, image_bytes)
-    
-    return {
-        "analysis": analysis_text
-    }
 ```
 
 ## File: backend/app/services/fmp_service.py
@@ -10743,6 +10839,244 @@ def get_crypto_real_time_bulk(symbols: list):
     return _fetch(endpoint) or []
 ```
 
+## File: backend/requirements.txt
+```
+fastapi
+uvicorn[standard]
+python-dotenv
+requests
+pandas
+pandas_ta
+pydantic
+python-multipart
+redis>=5.0.0
+async-lru
+beautifulsoup4
+gunicorn
+msgpack
+fyers-apiv3
+websockets
+httpx
+yfinance
+google-generativeai
+```
+
+## File: frontend/src/pages/HomePage.js
+```javascript
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import styled, { keyframes } from 'styled-components';
+import axios from 'axios';
+import { 
+  FaSearch, FaChartBar, FaGlobeAmericas, FaSpinner, 
+  FaBitcoin, FaBrain, FaMicrochip, FaFileUpload, FaArrowUp 
+} from 'react-icons/fa';
+import IndicesBanner from '../components/Indices/IndicesBanner';
+import ChartUploader from '../components/HomePage/ChartUploader';
+
+const API_URL = '';
+
+// --- ANIMATIONS ---
+const fadeIn = keyframes`from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); }`;
+const float = keyframes`0% { transform: translate(0px, 0px) scale(1); } 33% { transform: translate(30px, -50px) scale(1.1); } 66% { transform: translate(-20px, 20px) scale(0.9); } 100% { transform: translate(0px, 0px) scale(1); }`;
+const floatReverse = keyframes`0% { transform: translate(0px, 0px) scale(1); } 33% { transform: translate(-30px, 50px) scale(0.9); } 66% { transform: translate(20px, -20px) scale(1.1); } 100% { transform: translate(0px, 0px) scale(1); }`;
+const scanBeam = keyframes`0% { left: -100%; opacity: 0; } 50% { opacity: 1; } 100% { left: 100%; opacity: 0; }`;
+
+// --- STYLED COMPONENTS ---
+const HomePageContainer = styled.div`display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 1rem; width: 100%; position: relative; overflow-x: hidden; background-color: var(--color-background); @media (min-width: 768px) { padding: 2rem; }`;
+const BackgroundLayer = styled.div`position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; overflow: hidden;`;
+const GlowingBlob = styled.div`position: absolute; border-radius: 50%; filter: blur(100px); opacity: 0.25; animation: ${float} 15s ease-in-out infinite;`;
+const BlobOne = styled(GlowingBlob)`top: -10%; left: -10%; width: 60vw; height: 60vw; background: var(--color-primary);`;
+const BlobTwo = styled(GlowingBlob)`bottom: -10%; right: -10%; width: 70vw; height: 70vw; background: #7c3aed; animation: ${floatReverse} 18s ease-in-out infinite;`;
+
+const MainContent = styled.div`display: flex; flex-direction: column; align-items: center; text-align: center; width: 100%; margin-top: 5vh; z-index: 1; position: relative;`;
+const Title = styled.h1`font-size: 2.8rem; font-weight: 900; background: linear-gradient(to right, #fff, #a5b4fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 1rem; animation: ${fadeIn} 1s ease-out; letter-spacing: -1.5px; @media (min-width: 768px) { font-size: 4.5rem; }`;
+const Subtitle = styled.p`font-size: 1rem; color: var(--color-text-secondary); margin-bottom: 3.5rem; max-width: 650px; animation: ${fadeIn} 1.5s ease-out; line-height: 1.8;`;
+
+const SearchSection = styled.div`width: 100%; max-width: 700px; position: relative; animation: ${fadeIn} 1.8s ease-out; z-index: 50;`;
+const SearchWrapper = styled.div`position: relative; width: 100%; display: flex; align-items: center; transition: transform 0.3s ease; &:hover { transform: scale(1.01); }`;
+const SearchInput = styled.input`width: 100%; padding: 20px 30px; padding-right: 80px; font-size: 1.1rem; color: #fff; background: rgba(22, 27, 34, 0.6); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 60px; outline: none; box-shadow: 0 15px 40px rgba(0,0,0,0.4); &:focus { border-color: var(--color-primary); }`;
+const SearchButton = styled.button`position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: linear-gradient(135deg, var(--color-primary), #3b82f6); color: white; border: none; border-radius: 50%; width: 54px; height: 54px; cursor: pointer; display: flex; align-items: center; justify-content: center;`;
+
+const SuggestionsList = styled.ul`position: absolute; top: 110%; left: 15px; right: 15px; background: rgba(22, 27, 34, 0.95); backdrop-filter: blur(25px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; box-shadow: 0 25px 50px rgba(0,0,0,0.6); list-style: none; padding: 5px; max-height: 400px; overflow-y: auto; text-align: left;`;
+const SuggestionItem = styled.li`padding: 16px 20px; border-radius: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; &:hover { background-color: rgba(88, 166, 255, 0.15); }`;
+
+const SectionLabel = styled.div`display: flex; align-items: center; gap: 15px; color: var(--color-text-secondary); margin: 4rem 0 2rem 0; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 2px; width: 100%; max-width: 1200px; &::before, &::after { content: ''; height: 1px; flex-grow: 1; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent); }`;
+
+// --- NEW LIVE SCREENER UI ---
+const ScreenerContainer = styled.div`width: 100%; max-width: 1200px; margin-top: 4rem; animation: ${fadeIn} 2s ease-out;`;
+const StockCarousel = styled.div`
+  display: flex; gap: 1.5rem; overflow-x: auto; padding: 1rem 0.5rem; width: 100%;
+  &::-webkit-scrollbar { height: 6px; }
+  &::-webkit-scrollbar-thumb { background: #30363D; border-radius: 3px; }
+`;
+
+const ScreenerCard = styled.div`
+  min-width: 240px; background: linear-gradient(145deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.95));
+  border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 1.5rem; text-align: left;
+  cursor: pointer; transition: all 0.3s; position: relative; overflow: hidden;
+  &:hover { transform: translateY(-5px); border-color: var(--color-primary); box-shadow: 0 10px 25px rgba(88, 166, 255, 0.15); }
+`;
+const CardSymbol = styled.h3`font-size: 1.4rem; color: #fff; margin: 0 0 5px 0; font-family: 'Roboto Mono', monospace;`;
+const CardPrice = styled.div`font-size: 1.2rem; font-weight: 700; color: #C9D1D9; margin-bottom: 10px;`;
+const CardChange = styled.span`
+  background: ${({ $isPositive }) => $isPositive ? 'rgba(63, 185, 80, 0.15)' : 'rgba(248, 81, 73, 0.15)'}; 
+  color: ${({ $isPositive }) => $isPositive ? '#3FB950' : '#F85149'}; 
+  padding: 4px 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;
+`;
+const CardVol = styled.div`font-size: 0.75rem; color: #8B949E; margin-top: 15px; font-weight: 600; text-transform: uppercase;`;
+
+const UploadGrid = styled.div`display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; width: 100%; max-width: 1200px; padding: 0 1rem; @media (max-width: 1024px) { grid-template-columns: 1fr; }`;
+
+// --- VISION LABS STYLES ---
+const VisionContainer = styled.div`width: 100%; max-width: 1200px; margin-bottom: 4rem; padding: 0 1rem; animation: ${fadeIn} 2.2s ease-out;`;
+const VisionCard = styled.div`background: linear-gradient(165deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.95)); border: 1px solid rgba(88, 166, 255, 0.3); border-radius: 24px; padding: 4rem 2rem; text-align: center; position: relative; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: all 0.4s ease; &:hover { border-color: #58A6FF; box-shadow: 0 20px 60px rgba(88, 166, 255, 0.15); }`;
+const VisionGlow = styled.div`position: absolute; top: -50%; left: 50%; transform: translateX(-50%); width: 80%; height: 100%; background: radial-gradient(circle, rgba(88, 166, 255, 0.15) 0%, transparent 70%); pointer-events: none; z-index: 0;`;
+const ScanBeam = styled.div`position: absolute; top: 0; left: -100%; width: 50%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent); transform: skewX(-20deg); animation: ${scanBeam} 4s infinite linear; pointer-events: none;`;
+const VisionTitle = styled.h2`font-size: 2.2rem; margin-bottom: 1rem; color: #fff; position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 15px; svg { color: #58A6FF; }`;
+const VisionDesc = styled.p`color: #8B949E; font-size: 1.1rem; max-width: 700px; margin: 0 auto 3rem auto; line-height: 1.7; position: relative; z-index: 1;`;
+const DeepScanButton = styled.label`background: #58A6FF; color: #0D1117; padding: 16px 40px; border-radius: 50px; font-weight: 800; font-size: 1.1rem; cursor: pointer; display: inline-flex; align-items: center; gap: 12px; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); position: relative; z-index: 2; box-shadow: 0 0 25px rgba(88, 166, 255, 0.4); &:hover { transform: translateY(-3px) scale(1.05); background: #fff; box-shadow: 0 0 40px rgba(255, 255, 255, 0.6); }`;
+
+const HomePage = () => {
+  const [query, setQuery] = useState('');
+  const[suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const[isSearching, setIsSearching] = useState(false);
+  const navigate = useNavigate();
+  const searchRef = useRef(null);
+
+  // SINGLE SCREENER STATE
+  const [screenerData, setScreenerData] = useState([]);
+  const [loadingScreener, setLoadingScreener] = useState(true);
+  const[isVisionLoading, setIsVisionLoading] = useState(false);
+
+  useEffect(() => {
+    if (query.length < 2) { setSuggestions([]); setShowSuggestions(false); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await axios.get('/api/stocks/autocomplete?query=' + query);
+        if (res.data && res.data.length > 0) { setSuggestions(res.data); setShowSuggestions(true); }
+      } catch (e) {}
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    let isMounted = true;
+    setLoadingScreener(true);
+    axios.get('/api/stocks/screener/bullish')
+        .then(res => { if(isMounted) setScreenerData(res.data ||[]); })
+        .catch(() => { if(isMounted) setScreenerData([]); })
+        .finally(() => { if(isMounted) setLoadingScreener(false); });
+    return () => { isMounted = false; };
+  },[]);
+
+  const performSearch = async (searchQuery = query) => {
+    const target = searchQuery.trim();
+    if (!target) return;
+    setIsSearching(true); setShowSuggestions(false);
+    try {
+      const res = await axios.get('/api/stocks/search?query=' + target);
+      navigate('/stock/' + res.data.symbol);
+    } catch (err) { setIsSearching(false); }
+  };
+
+  const handleVisionUpload = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      setIsVisionLoading(true);
+      const formData = new FormData(); formData.append('chart_image', file);
+      try {
+          const res = await axios.post('/api/charts/analyze-pure', formData);
+          navigate('/vision-result', { state: { analysis: res.data.analysis, image: URL.createObjectURL(file) } });
+      } catch (err) { setIsVisionLoading(false); }
+  };
+
+  return (
+    <HomePageContainer>
+      <BackgroundLayer><BlobOne /><BlobTwo /></BackgroundLayer>
+      <IndicesBanner />
+      
+      <MainContent>
+        <Title>Stellar Stock Screener</Title>
+        <Subtitle>The Ultimate Financial Intelligence Platform. Leveraging Quantitative Models for Real-Time Trade Discovery.</Subtitle>
+        
+        <SearchSection ref={searchRef}>
+          <SearchWrapper>
+            <SearchInput type="text" placeholder="Search (e.g. Reliance, Bitcoin, Gold)..." value={query} onChange={(e) => setQuery(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && performSearch()} onFocus={() => query.length >= 2 && setShowSuggestions(true)} disabled={isSearching} />
+            <SearchButton onClick={() => performSearch()} disabled={isSearching}>
+              {isSearching ? <FaSpinner className="fa-spin" size={20} /> : <FaSearch size={20} />}
+            </SearchButton>
+          </SearchWrapper>
+          {showSuggestions && (
+            <SuggestionsList>
+              {suggestions.map((item) => (
+                <SuggestionItem key={item.symbol} onClick={() => { setQuery(item.symbol); performSearch(item.symbol); }}>
+                  <div style={{display:'flex', flexDirection:'column'}}><span style={{fontWeight: 700, color: 'var(--color-primary)'}}>{item.symbol}</span><span style={{fontSize: '0.8rem', color: '#8b949e'}}>{item.name}</span></div>
+                  <span style={{fontSize: '0.7rem', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '12px', color: '#8b949e'}}>{item.exchangeShortName || 'INTL'}</span>
+                </SuggestionItem>
+              ))}
+            </SuggestionsList>
+          )}
+        </SearchSection>
+
+        {/* 💥 DEDICATED LIVE SCREENER SECTION 💥 */}
+        <ScreenerContainer>
+            <SectionLabel>Live Radar: Bullish Reversals</SectionLabel>
+            
+            <p style={{color: 'var(--color-text-secondary)', fontSize: '0.9rem', marginBottom: '2rem'}}>
+                Real-time scanning based on RSI crossovers, Stochastic momentum shifts, and volume expansion.
+            </p>
+
+            {loadingScreener ? (
+                <div style={{color: 'var(--color-primary)', marginTop: '2rem'}}><FaSpinner className="fa-spin" size={24} /></div>
+            ) : screenerData && screenerData.length > 0 ? (
+                <StockCarousel>
+                    {screenerData.map((stock, i) => (
+                        <ScreenerCard key={i} onClick={() => navigate('/stock/' + encodeURIComponent(stock.nsecode + '.NS'))}>
+                            <CardSymbol>{stock.nsecode}</CardSymbol>
+                            <CardPrice>₹{stock.close}</CardPrice>
+                            <CardChange $isPositive={stock.per_chg >= 0}>
+                                {stock.per_chg >= 0 ? <FaArrowUp size={10}/> : null} {stock.per_chg}%
+                            </CardChange>
+                            <CardVol>Vol: {(stock.volume / 1000000).toFixed(2)}M</CardVol>
+                        </ScreenerCard>
+                    ))}
+                </StockCarousel>
+            ) : (
+                <div style={{color: '#8B949E', padding: '2rem', border: '1px dashed #30363D', borderRadius: '12px'}}>
+                    No stocks currently match the exact Bullish Reversal criteria.
+                </div>
+            )}
+        </ScreenerContainer>
+
+        <SectionLabel>AI Analyst Suite</SectionLabel>
+        <UploadGrid>
+            <ChartUploader type="stock" title="Stocks" description="Equities & ETFs (NSE, BSE, NASDAQ)." color="#58A6FF" icon={<FaChartBar />} />
+            <ChartUploader type="index" title="Indices" description="Macro Analysis (Nifty 50, SPX)." color="#EBCB8B" icon={<FaGlobeAmericas />} />
+            <ChartUploader type="crypto" title="Crypto / Commodities" description="Bitcoin, Gold, Oil & Global Assets." color="#D500F9" icon={<FaBitcoin />} />
+        </UploadGrid>
+
+        <SectionLabel>Pure Vision Labs</SectionLabel>
+        <VisionContainer>
+            <VisionCard>
+                <VisionGlow /><ScanBeam />
+                <VisionTitle><FaBrain /> Quantum Vision Engine<FaMicrochip style={{fontSize:'1.5rem', opacity:0.5}}/></VisionTitle>
+                <VisionDesc>Upload any financial chart image. Our proprietary Vision Model will perform a <strong>Geometric & Mathematical Breakdown</strong> of price action, identifying hidden liquidity zones and institutional footprints <strong>without needing any external data feed</strong>.</VisionDesc>
+                <DeepScanButton htmlFor="vision-upload">
+                    {isVisionLoading ? (<><FaSpinner className="fa-spin"/> PROCESSING PIXELS...</>) : (<><FaFileUpload /> PERFORM DEEP SCAN</>)}
+                </DeepScanButton>
+                <input id="vision-upload" type="file" style={{display: 'none'}} accept="image/*" onChange={handleVisionUpload} disabled={isVisionLoading}/>
+            </VisionCard>
+        </VisionContainer>
+
+      </MainContent>
+    </HomePageContainer>
+  );
+};
+export default HomePage;
+```
+
 ## File: frontend/src/components/Chart/CustomChart.js
 ```javascript
 import React, { useEffect, useRef, useState, useCallback } from 'react';
@@ -11035,7 +11369,7 @@ const CustomChart = ({ symbol }) => {
   // --- HELPER: Get Base API URL (Vercel Fix) ---
   const getBaseApiUrl = () => {
      // Use environment variable if set, otherwise default to localhost for dev
-     return process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+     return '';
   };
 
   const istFormatter = (timestamp) => {
@@ -11209,7 +11543,7 @@ const CustomChart = ({ symbol }) => {
     let ws = null;
     
     // A. DIRECT BROKER CONNECTION
-    if (userToken && isIndian && window.FyersSocket) {
+    if (false) { // FYERS TEMPORARILY DISABLED
         setConnectionType("Broker");
         const fyersSymbol = `NSE:${symbol.replace('.NS', '-EQ').replace('.BO', '-EQ')}`;
         try {
@@ -11237,7 +11571,7 @@ const CustomChart = ({ symbol }) => {
         
         // --- DYNAMIC WSS URL ---
         const getWsUrl = () => {
-             const apiUrl = getBaseApiUrl();
+             const apiUrl = window.location.origin;
              const wsProtocol = apiUrl.includes('https') ? 'wss://' : 'ws://';
              const host = apiUrl.replace(/^https?:\/\//, '').replace(/^http?:\/\//, '');
              return `${wsProtocol}${host}/ws/live/${symbol}`;
@@ -11456,1107 +11790,6 @@ const CustomChart = ({ symbol }) => {
 };
 
 export default CustomChart;
-```
-
-## File: frontend/src/pages/HomePage.js
-```javascript
-import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import styled, { keyframes, css } from 'styled-components';
-import axios from 'axios';
-import { 
-  FaSearch, FaChartBar, FaGlobeAmericas, FaSpinner, 
-  FaBitcoin, FaBrain, FaMicrochip, FaFileUpload 
-} from 'react-icons/fa';
-
-// --- COMPONENTS ---
-import IndicesBanner from '../components/Indices/IndicesBanner';
-import ChartUploader from '../components/HomePage/ChartUploader';
-
-// --- CONFIG ---
-// This connects Vercel Frontend to Railway Backend
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
-
-// ==========================================
-// 1. CINEMATIC ANIMATIONS
-// ==========================================
-
-const fadeIn = keyframes`
-  from { opacity: 0; transform: translateY(-20px); }
-  to { opacity: 1; transform: translateY(0); }
-`;
-
-const float = keyframes`
-  0% { transform: translate(0px, 0px) scale(1); }
-  33% { transform: translate(30px, -50px) scale(1.1); }
-  66% { transform: translate(-20px, 20px) scale(0.9); }
-  100% { transform: translate(0px, 0px) scale(1); }
-`;
-
-const floatReverse = keyframes`
-  0% { transform: translate(0px, 0px) scale(1); }
-  33% { transform: translate(-30px, 50px) scale(0.9); }
-  66% { transform: translate(20px, -20px) scale(1.1); } 
-  100% { transform: translate(0px, 0px) scale(1); }
-`;
-
-const scanBeam = keyframes`
-  0% { left: -100%; opacity: 0; }
-  50% { opacity: 1; }
-  100% { left: 100%; opacity: 0; }
-`;
-
-const pulseGlow = keyframes`
-  0% { box-shadow: 0 0 5px rgba(88, 166, 255, 0.4); }
-  50% { box-shadow: 0 0 20px rgba(88, 166, 255, 0.8); }
-  100% { box-shadow: 0 0 5px rgba(88, 166, 255, 0.4); }
-`;
-
-// ==========================================
-// 2. HIGH-END STYLED COMPONENTS
-// ==========================================
-
-const HomePageContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  min-height: 100vh;
-  padding: 1rem;
-  width: 100%;
-  position: relative;
-  overflow-x: hidden;
-  background-color: var(--color-background);
-  
-  @media (min-width: 768px) {
-    padding: 2rem;
-  }
-`;
-
-const BackgroundLayer = styled.div`
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-  pointer-events: none;
-  overflow: hidden;
-`;
-
-const GlowingBlob = styled.div`
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(100px);
-  opacity: 0.25;
-  animation: ${float} 15s ease-in-out infinite;
-`;
-
-const BlobOne = styled(GlowingBlob)`
-  top: -10%;
-  left: -10%;
-  width: 60vw;
-  height: 60vw;
-  background: var(--color-primary);
-`;
-
-const BlobTwo = styled(GlowingBlob)`
-  bottom: -10%;
-  right: -10%;
-  width: 70vw;
-  height: 70vw;
-  background: #7c3aed; /* Deep Purple */
-  animation: ${floatReverse} 18s ease-in-out infinite;
-`;
-
-const MainContent = styled.div`
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    width: 100%;
-    margin-top: 5vh;
-    z-index: 1;
-    position: relative;
-    
-    @media (min-width: 768px) {
-        margin-top: 8vh;
-    }
-`;
-
-const Title = styled.h1`
-  font-size: 2.8rem;
-  font-weight: 900;
-  background: linear-gradient(to right, #fff, #a5b4fc);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  margin-bottom: 1rem;
-  animation: ${fadeIn} 1s ease-out;
-  letter-spacing: -1.5px;
-  text-shadow: 0 10px 40px rgba(0,0,0,0.5);
-  
-  @media (min-width: 768px) {
-    font-size: 4.5rem;
-  }
-`;
-
-const Subtitle = styled.p`
-  font-size: 1rem;
-  color: var(--color-text-secondary);
-  margin-bottom: 3.5rem;
-  max-width: 650px;
-  animation: ${fadeIn} 1.5s ease-out;
-  padding: 0 1.5rem;
-  line-height: 1.8;
-  font-weight: 400;
-  
-  @media (min-width: 768px) {
-    font-size: 1.25rem;
-  }
-`;
-
-// --- SEARCH BAR (GLASS) ---
-
-const SearchSection = styled.div`
-  width: 100%;
-  max-width: 700px;
-  position: relative;
-  animation: ${fadeIn} 1.8s ease-out;
-  z-index: 50;
-`;
-
-const SearchWrapper = styled.div`
-  position: relative;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  transition: transform 0.3s ease;
-
-  &:hover {
-    transform: scale(1.01);
-  }
-`;
-
-const SearchInput = styled.input`
-  width: 100%;
-  padding: 20px 30px;
-  padding-right: 80px;
-  font-size: 1.1rem;
-  color: #fff;
-  background: rgba(22, 27, 34, 0.6); 
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 60px;
-  outline: none;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.4);
-
-  &::placeholder {
-    color: rgba(255, 255, 255, 0.4);
-  }
-
-  &:focus {
-    border-color: var(--color-primary);
-    box-shadow: 0 0 30px rgba(88, 166, 255, 0.3);
-    background: rgba(22, 27, 34, 0.9);
-  }
-`;
-
-const SearchButton = styled.button`
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: linear-gradient(135deg, var(--color-primary), #3b82f6);
-  color: white;
-  border: none;
-  border-radius: 50%;
-  width: 54px;
-  height: 54px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 5px 20px rgba(59, 130, 246, 0.5);
-
-  &:hover {
-    transform: translateY(-50%) scale(1.1);
-    box-shadow: 0 8px 25px rgba(59, 130, 246, 0.7);
-  }
-  
-  &:active {
-    transform: translateY(-50%) scale(0.95);
-  }
-
-  &:disabled {
-    filter: grayscale(1);
-    cursor: default;
-  }
-`;
-
-// --- AUTOCOMPLETE ---
-
-const SuggestionsList = styled.ul`
-  position: absolute;
-  top: 110%;
-  left: 15px;
-  right: 15px;
-  background: rgba(22, 27, 34, 0.95);
-  backdrop-filter: blur(25px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  box-shadow: 0 25px 50px rgba(0,0,0,0.6);
-  list-style: none;
-  padding: 5px;
-  max-height: 400px;
-  overflow-y: auto;
-  z-index: 100;
-  
-  &::-webkit-scrollbar { width: 6px; }
-  &::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
-`;
-
-const SuggestionItem = styled.li`
-  padding: 16px 20px;
-  border-radius: 12px;
-  cursor: pointer;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  transition: all 0.2s ease;
-  margin-bottom: 2px;
-
-  &:hover { 
-    background-color: rgba(88, 166, 255, 0.15); 
-  }
-`;
-
-const SuggestionSymbol = styled.span`
-  font-weight: 700;
-  font-size: 1rem;
-  color: var(--color-primary);
-  font-family: 'Roboto Mono', monospace;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-`;
-
-const SuggestionName = styled.span`
-  font-size: 0.9rem;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 250px;
-`;
-
-const SuggestionBadge = styled.span`
-  font-size: 0.7rem;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
-  padding: 4px 10px;
-  border-radius: 20px;
-  color: var(--color-text-secondary);
-  font-weight: 600;
-  text-transform: uppercase;
-`;
-
-const LoadingText = styled.p`
-  color: var(--color-primary); 
-  margin-top: 1.5rem; 
-  height: 24px; 
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  font-size: 0.9rem;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-`;
-
-// --- GRID & SECTIONS ---
-
-const SectionLabel = styled.div`
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  color: var(--color-text-secondary);
-  margin: 4rem 0 2rem 0;
-  font-weight: 600;
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  width: 100%;
-  max-width: 1200px;
-  
-  &::before, &::after {
-    content: '';
-    height: 1px;
-    flex-grow: 1;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
-  }
-`;
-
-const UploadGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 2rem;
-  width: 100%;
-  max-width: 1200px;
-  padding: 0 1rem;
-  animation: ${fadeIn} 2s ease-out;
-
-  @media (max-width: 1024px) {
-    grid-template-columns: 1fr;
-    gap: 1.5rem;
-    max-width: 500px;
-  }
-`;
-
-// --- QUANTUM VISION SECTION (NEW) ---
-
-const VisionContainer = styled.div`
-  width: 100%;
-  max-width: 1200px;
-  margin-bottom: 4rem;
-  padding: 0 1rem;
-  animation: ${fadeIn} 2.2s ease-out;
-`;
-
-const VisionCard = styled.div`
-  background: linear-gradient(165deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.95));
-  border: 1px solid rgba(88, 166, 255, 0.3);
-  border-radius: 24px;
-  padding: 4rem 2rem;
-  text-align: center;
-  position: relative;
-  overflow: hidden;
-  box-shadow: 0 20px 50px rgba(0,0,0,0.4);
-  transition: all 0.4s ease;
-
-  &:hover {
-    border-color: #58A6FF;
-    box-shadow: 0 20px 60px rgba(88, 166, 255, 0.15);
-  }
-`;
-
-const VisionGlow = styled.div`
-  position: absolute;
-  top: -50%;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 80%;
-  height: 100%;
-  background: radial-gradient(circle, rgba(88, 166, 255, 0.15) 0%, transparent 70%);
-  pointer-events: none;
-  z-index: 0;
-`;
-
-const ScanBeam = styled.div`
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 50%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
-  transform: skewX(-20deg);
-  animation: ${scanBeam} 4s infinite linear;
-  pointer-events: none;
-`;
-
-const VisionTitle = styled.h2`
-  font-size: 2.2rem;
-  margin-bottom: 1rem;
-  color: #fff;
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 15px;
-
-  svg { color: #58A6FF; }
-`;
-
-const VisionDesc = styled.p`
-  color: #8B949E;
-  font-size: 1.1rem;
-  max-width: 700px;
-  margin: 0 auto 3rem auto;
-  line-height: 1.7;
-  position: relative;
-  z-index: 1;
-`;
-
-const DeepScanButton = styled.label`
-  background: #58A6FF;
-  color: #0D1117;
-  padding: 16px 40px;
-  border-radius: 50px;
-  font-weight: 800;
-  font-size: 1.1rem;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-  position: relative;
-  z-index: 2;
-  box-shadow: 0 0 25px rgba(88, 166, 255, 0.4);
-
-  &:hover {
-    transform: translateY(-3px) scale(1.05);
-    background: #fff;
-    box-shadow: 0 0 40px rgba(255, 255, 255, 0.6);
-  }
-
-  &:active {
-    transform: translateY(0) scale(0.98);
-  }
-`;
-
-// ==========================================
-// 3. MAIN COMPONENT LOGIC
-// ==========================================
-
-const HomePage = () => {
-  const [query, setQuery] = useState('');
-  const [suggestions, setSuggestions] = useState([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const [isAutoCompleting, setIsAutoCompleting] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isVisionLoading, setIsVisionLoading] = useState(false);
-  const [error, setError] = useState('');
-  
-  const navigate = useNavigate();
-  const searchRef = useRef(null);
-
-  // --- AUTOCOMPLETE ENGINE ---
-  useEffect(() => {
-    if (query.length < 2) {
-      setSuggestions([]);
-      setShowSuggestions(false);
-      return;
-    }
-
-    setIsAutoCompleting(true);
-    const delayDebounceFn = setTimeout(async () => {
-      try {
-        // FIX: Use API_URL
-        const response = await axios.get(`${API_URL}/api/stocks/autocomplete?query=${query}`);
-        if (Array.isArray(response.data) && response.data.length > 0) {
-            setSuggestions(response.data);
-            setShowSuggestions(true);
-        } else {
-            setSuggestions([]);
-            setShowSuggestions(false);
-        }
-      } catch (error) {
-        console.warn("Autocomplete silent fail");
-      } finally {
-        setIsAutoCompleting(false);
-      }
-    }, 250); 
-
-    return () => clearTimeout(delayDebounceFn);
-  }, [query]);
-
-  // --- SEARCH HANDLER ---
-  const performSearch = async (searchQuery = query) => {
-    const target = searchQuery.trim();
-    if (!target) return;
-
-    setIsSearching(true);
-    setError('');
-    setShowSuggestions(false);
-    
-    try {
-      // FIX: Use API_URL
-      const response = await axios.get(`${API_URL}/api/stocks/search?query=${target}`);
-      navigate(`/stock/${response.data.symbol}`);
-    } catch (err) {
-      setError('Ticker not found. Please try a valid symbol.');
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  // --- QUANTUM VISION HANDLER ---
-  const handleVisionUpload = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-
-      setIsVisionLoading(true);
-      setError("");
-
-      const formData = new FormData();
-      formData.append('chart_image', file);
-
-      try {
-          // FIX: Use API_URL
-          const res = await axios.post(`${API_URL}/api/charts/analyze-pure`, formData);
-          
-          navigate('/vision-result', { 
-              state: { 
-                  analysis: res.data.analysis, 
-                  image: URL.createObjectURL(file) 
-              } 
-          });
-      } catch (err) {
-          console.error("Vision Error:", err);
-          setError("Vision Scan Failed. Please try a clearer image.");
-          setIsVisionLoading(false);
-      }
-  };
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (searchRef.current && !searchRef.current.contains(event.target)) {
-        setShowSuggestions(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [searchRef]);
-
-  return (
-    <HomePageContainer>
-      <BackgroundLayer><BlobOne /><BlobTwo /></BackgroundLayer>
-      <IndicesBanner />
-      
-      <MainContent>
-        <Title>Stellar Stock Screener</Title>
-        <Subtitle>The Ultimate Financial Intelligence Platform.<br />Leveraging Neural Networks & Quantitative Models for Real-Time Analysis.</Subtitle>
-        
-        <SearchSection ref={searchRef}>
-          <SearchWrapper>
-            <SearchInput
-              type="text"
-              placeholder="Search (e.g. Reliance, Bitcoin, Gold, Apple)..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && performSearch()}
-              onFocus={() => query.length >= 2 && setShowSuggestions(true)}
-              disabled={isSearching}
-              spellCheck={false}
-            />
-            <SearchButton onClick={() => performSearch()} disabled={isSearching || isAutoCompleting}>
-              {isSearching ? <FaSpinner className="fa-spin" size={20} /> : <FaSearch size={20} />}
-            </SearchButton>
-          </SearchWrapper>
-
-          {showSuggestions && (
-            <SuggestionsList>
-              {suggestions.map((item) => (
-                <SuggestionItem key={item.symbol} onClick={() => { setQuery(item.symbol); performSearch(item.symbol); }}>
-                  <div style={{display:'flex', flexDirection:'column'}}>
-                    <SuggestionSymbol>{item.symbol}</SuggestionSymbol>
-                    <SuggestionName>{item.name}</SuggestionName>
-                  </div>
-                  <SuggestionBadge>
-                     {item.exchangeShortName || (item.symbol.includes('.') ? 'INTL' : 'US')}
-                  </SuggestionBadge>
-                </SuggestionItem>
-              ))}
-            </SuggestionsList>
-          )}
-        </SearchSection>
-
-        <LoadingText>{isSearching && <><FaSpinner className="fa-spin"/> Establishing Data Uplink...</>}{error && <span style={{color:'#F85149'}}>{error}</span>}</LoadingText>
-        
-        <SectionLabel>AI Analyst Suite</SectionLabel>
-        <UploadGrid>
-            <ChartUploader type="stock" title="Stocks" description="Equities & ETFs (NSE, BSE, NASDAQ)." color="#58A6FF" icon={<FaChartBar />} />
-            <ChartUploader type="index" title="Indices" description="Macro Analysis (Nifty 50, SPX)." color="#EBCB8B" icon={<FaGlobeAmericas />} />
-            <ChartUploader type="crypto" title="Crypto / Commodities" description="Bitcoin, Gold, Oil & Global Assets." color="#D500F9" icon={<FaBitcoin />} />
-        </UploadGrid>
-
-        <SectionLabel>Pure Vision Labs</SectionLabel>
-        <VisionContainer>
-            <VisionCard>
-                <VisionGlow /><ScanBeam />
-                <VisionTitle><FaBrain /> Quantum Vision Engine<FaMicrochip style={{fontSize:'1.5rem', opacity:0.5}}/></VisionTitle>
-                <VisionDesc>Upload any financial chart image. Our proprietary Vision Model will perform a <strong>Geometric & Mathematical Breakdown</strong> of price action, identifying hidden liquidity zones and institutional footprints <strong>without needing any external data feed</strong>.</VisionDesc>
-                <DeepScanButton htmlFor="vision-upload">
-                    {isVisionLoading ? (<><FaSpinner className="fa-spin"/> PROCESSING PIXELS...</>) : (<><FaFileUpload /> PERFORM DEEP SCAN</>)}
-                </DeepScanButton>
-                <input id="vision-upload" type="file" style={{display: 'none'}} accept="image/*" onChange={handleVisionUpload} disabled={isVisionLoading}/>
-            </VisionCard>
-        </VisionContainer>
-      </MainContent>
-    </HomePageContainer>
-  );
-};
-
-export default HomePage;
-```
-
-## File: backend/app/services/gemini_service.py
-```python
-import os
-import google.generativeai as genai
-from dotenv import load_dotenv
-import itertools
-
-load_dotenv()
-
-# --- 1. API KEY ROTATOR (CRITICAL FOR STABILITY) ---
-try:
-    GEMINI_API_KEYS_STR = os.getenv("GEMINI_API_KEYS")
-    if not GEMINI_API_KEYS_STR:
-        # Fallback to single key if list is not found
-        single_key = os.getenv("GEMINI_API_KEY") 
-        if single_key:
-            GEMINI_API_KEYS = [single_key]
-        else:
-            raise ValueError("GEMINI_API_KEYS not found in .env file.")
-    else:
-        # Clean and split the keys
-        GEMINI_API_KEYS = [key.strip() for key in GEMINI_API_KEYS_STR.split(',')]
-    
-    # Create a cycle iterator that loops forever
-    key_cycler = itertools.cycle(GEMINI_API_KEYS)
-    print(f"Successfully loaded and initialized rotator for {len(GEMINI_API_KEYS)} Gemini API keys.")
-
-except Exception as e:
-    print(f"CRITICAL ERROR: Could not load Gemini API keys. AI features will fail. Error: {e}")
-    GEMINI_API_KEYS = []
-    key_cycler = None
-
-def configure_gemini_for_request():
-    """Configures the genai library with the next available key from the pool."""
-    if not key_cycler:
-        raise ValueError("No Gemini API keys are configured or available.")
-    
-    # Rotate to the next key
-    api_key = next(key_cycler)
-    genai.configure(api_key=api_key)
-
-
-# --- 2. TEXT ANALYSIS FUNCTIONS ---
-
-def get_ticker_from_query(query: str):
-    """Identifies the stock ticker from a natural language query."""
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        prompt = f"""Analyze the following user query: "{query}". Return ONLY the official stock ticker symbol (e.g., "AAPL" for Apple, "RELIANCE.NS" for Reliance Industries). If a clear ticker cannot be found, return the text "NOT_FOUND"."""
-        response = model.generate_content(prompt)
-        return response.text.strip().replace("`", "").upper()
-    except Exception as e:
-        print(f"Error in get_ticker_from_query: {e}")
-        return "ERROR"
-
-def generate_swot_analysis(company_name: str, description: str, news_headlines: list):
-    """Generates a SWOT analysis."""
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        news_string = "\n- ".join(news_headlines)
-        prompt = f"""Generate a 4-section SWOT analysis for {company_name}. Use the following data for context. Structure the output with clear headers for Strengths, Weaknesses, Opportunities, and Threats, each followed by bullet points.\n\n**Company Description:**\n{description}\n\n**Recent News Headlines:**\n- {news_string}"""
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"Error in generate_swot_analysis: {e}")
-        return "Could not generate SWOT analysis."
-
-def generate_forecast_analysis(company_name: str, analyst_ratings: list, price_target: dict, key_stats: dict, news_headlines: list, currency: str = "USD"):
-    """Generates a summary of analyst forecasts with correct currency."""
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        
-        ratings_summary = "\n".join([f"- {r.get('ratingStrongBuy', 0)} Strong Buy, {r.get('ratingBuy', 0)} Buy, {r.get('ratingHold', 0)} Hold, {r.get('ratingSell', 0)} Sell, {r.get('ratingStrongSell', 0)} Strong Sell" for r in analyst_ratings[:1]])
-        news_string = "\n- ".join(news_headlines)
-        
-        # Determine symbol for prompt context
-        curr_symbol = "₹" if currency == "INR" else "$" if currency == "USD" else currency
-
-        prompt = f"""Act as a professional financial analyst. For {company_name} (Currency: {currency}), write a two-paragraph summary of the analyst forecast.
-        
-        **Instructions:**
-        - STRICTLY use the currency symbol '{curr_symbol}' for ALL monetary values.
-        - Do not use '$' if the currency is INR.
-        
-        **Data:**
-        - **Analyst Ratings:** {ratings_summary}
-        - **Price Target:** High {curr_symbol}{price_target.get('targetHigh')}, Average {curr_symbol}{price_target.get('targetConsensus')}, Low {curr_symbol}{price_target.get('targetLow')}
-        - **Recent News:**\n- {news_string}"""
-        
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"Error in generate_forecast_analysis: {e}")
-        return "Could not generate AI forecast analysis."
-
-def generate_investment_philosophy_assessment(company_name: str, key_metrics: dict):
-    """
-    Generates assessment. 
-    HYBRID MODE: Tries AI first. If AI fails (429/Quota), falls back to Algorithmic Logic.
-    """
-    # 1. Prepare Data Safe Variables
-    pe = key_metrics.get('peRatioTTM')
-    ey = key_metrics.get('earningsYieldTTM')
-    roc = key_metrics.get('returnOnCapitalEmployedTTM')
-    
-    # Numeric values for math (Default to 0)
-    pe_val = float(pe) if pe is not None else 0.0
-    ey_val = float(ey) if ey is not None else 0.0
-    roc_val = float(roc) if roc is not None else 0.0
-    
-    # String formatting for display
-    pe_str = f"{pe_val:.2f}" if pe is not None else "N/A"
-    ey_str = f"{ey_val:.2%}" if ey is not None else "N/A"
-    roc_str = f"{roc_val:.2%}" if roc is not None else "N/A"
-
-    try:
-        # --- PLAN A: ASK AI ---
-        configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        
-        data_summary = (
-            f"- Price to Earnings (P/E): {pe_str}\n"
-            f"- Earnings Yield (Greenblatt): {ey_str}\n"
-            f"- Return on Capital (ROC/ROE): {roc_str}"
-        )
-        
-        prompt = f"""
-        Act as a Value Investor. Analyze {company_name} based on:
-        {data_summary}
-        
-        Evaluate against:
-        1. Greenblatt's Magic Formula (High Yield + High ROC)
-        2. Warren Buffett's Moat (High ROC)
-        3. Ben Graham Value (Low P/E)
-        
-        Output a 2-column Markdown table with headers "Formula" and "Assessment".
-        Assessment should be 1 short sentence.
-        """
-        
-        response = model.generate_content(prompt)
-        return response.text.strip()
-
-    except Exception as e:
-        print(f"Gemini 429/Error (Philosophy): {e}")
-        
-        # --- PLAN B: ALGORITHMIC FALLBACK (The Crash Fix) ---
-        # We calculate the verdict manually so the user NEVER sees an error text.
-        
-        # 1. Magic Formula Logic
-        if ey_val > 0.05 and roc_val > 0.15:
-            magic_text = f"**Pass**. Attractive Yield ({ey_str}) and High Efficiency ({roc_str})."
-        else:
-            magic_text = f"**Fail**. Requires Earnings Yield > 5% and ROC > 15%."
-            
-        # 2. Buffett Moat Logic
-        if roc_val > 0.15:
-            buffett_text = f"**Wide Moat**. Consistent high ROC ({roc_str}) suggests competitive advantage."
-        elif roc_val > 0.10:
-            buffett_text = "**Narrow Moat**. Decent returns, but not exceptional."
-        else:
-            buffett_text = "**No Moat**. Low capital efficiency ({roc_str})."
-            
-        # 3. Graham Value Logic
-        if pe_val > 0 and pe_val < 15:
-            graham_text = f"**Undervalued**. P/E of {pe_str} is below defensive target of 15."
-        elif pe_val < 25:
-            graham_text = f"**Fair Value**. P/E of {pe_str} is reasonable."
-        else:
-            graham_text = f"**Expensive**. P/E of {pe_str} implies high growth expectations."
-
-        # Return a perfectly formatted Markdown table that the Frontend can read
-        return f"""
-| Formula | Assessment |
-|---|---|
-| **Greenblatt Magic Formula** | {magic_text} |
-| **Buffett Moat Indicator** | {buffett_text} |
-| **Ben Graham Valuation** | {graham_text} |
-| *System Status* | *AI Quota Limit. Showing smart algorithmic analysis.* |
-"""       
-
-def generate_canslim_assessment(company_name: str, quote: dict, quarterly_earnings: list, annual_earnings: list, institutional_holders: int):
-    """Generates a CANSLIM checklist."""
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        
-        c_growth, a_growth, is_new_high, is_high_demand = "N/A", "N/A", "No", "No"
-        if len(quarterly_earnings) > 4:
-            latest_q_eps = quarterly_earnings[0].get('eps', 0)
-            previous_q_eps = quarterly_earnings[4].get('eps', 0)
-            if previous_q_eps not in [0, None]: c_growth = f"{((latest_q_eps - previous_q_eps) / abs(previous_q_eps)) * 100:.2f}% (YoY)"
-        if len(annual_earnings) >= 2:
-            latest_y_eps = annual_earnings[0].get('eps', 0)
-            previous_y_eps = annual_earnings[1].get('eps', 0)
-            if previous_y_eps not in [0, None]: a_growth = f"{((latest_y_eps - previous_y_eps) / abs(previous_y_eps)) * 100:.2f}%"
-        price = quote.get('price'); year_high = quote.get('yearHigh')
-        if price and year_high:
-            percent_from_high = ((price - year_high) / year_high) * 100
-            if percent_from_high >= -15: is_new_high = f"Yes, within {abs(percent_from_high):.2f}% of 52-week high"
-        volume = quote.get('volume'); avg_volume = quote.get('avgVolume')
-        if volume and avg_volume and volume > avg_volume:
-            is_high_demand = f"Yes, volume is {((volume - avg_volume) / avg_volume) * 100:.2f}% above average"
-        i_sponsorship = f"{institutional_holders} institutions hold this stock."
-
-        prompt = f"""Act as an analyst applying CANSLIM to {company_name}. Based *only* on the data, create a 7-point checklist. Output a 3-column Markdown table: "Criteria", "Assessment", "Result" (Pass/Fail/Neutral). DATA: C={c_growth}, A={a_growth}, N={is_new_high}, S={is_high_demand}, L=Infer leadership, I={i_sponsorship}, M=Infer market direction."""
-        
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"Error in generate_canslim_assessment: {e}")
-        return "Could not generate CANSLIM assessment."
-
-def generate_fundamental_conclusion(company_name: str, piotroski_data: dict, graham_data: dict, darvas_data: dict, key_stats: dict, news_headlines: list):
-    """Performs a meta-analysis summary."""
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        
-        p_score = piotroski_data.get('score', 'N/A') if piotroski_data else 'N/A'
-        g_score = graham_data.get('score', 'N/A') if graham_data else 'N/A'
-        d_status = darvas_data.get('status', 'N/A') if darvas_data else 'N/A'
-        pe = key_stats.get('peRatio', 'N/A')
-        
-        news_str = "- " + "\n- ".join(news_headlines[:3]) if news_headlines else "No recent news."
-
-        prompt = f"""Act as a Senior Portfolio Manager. Analyze {company_name}.
-        **Hard Numbers:** Piotroski: {p_score}/9, Graham Scan: {g_score}/7, Darvas Status: {d_status}, P/E: {pe}.
-        **News Context:** {news_str}
-        Synthesize into: GRADE: [A-F], THESIS: [Sentence], TAKEAWAYS: [3 bullets]."""
-        
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"Error in fundamental conclusion: {e}")
-        return "GRADE: N/A\nTHESIS: Analysis unavailable."
-
-def find_peer_tickers_by_industry(company_name: str, sector: str, industry: str, country: str):
-    """Uses Gemini AI to find competitor tickers."""
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        prompt = f"""Act as an expert financial data analyst. The company is {company_name}, in the "{industry}" industry within the "{sector}" sector in {country}. Identify top 5 publicly traded competitors. Return comma-separated tickers ONLY. US: AAPL, MSFT. India: RELIANCE.NS, TCS.NS."""
-        response = model.generate_content(prompt)
-        peers_str = response.text.strip().replace(" ", "").upper()
-        return peers_str.split(',')
-    except Exception as e:
-        print(f"Error finding peers: {e}")
-        return []
-
-
-# --- 3. CHART AI (IMAGE) ANALYSIS (OPTIMIZED) ---
-
-def identify_ticker_from_image(image_bytes: bytes):
-    """Identifies ticker from chart image, supports Stocks & Indices."""
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        
-        prompt = """
-        Analyze this financial chart image. Identify the symbol/ticker.
-        
-        RULES:
-        1. If it's a specific company, return the Yahoo symbol (e.g., "RELIANCE.NS", "AAPL").
-        2. If it's an INDEX, map it correctly:
-           - Nifty 50 -> "^NSEI"
-           - Bank Nifty -> "^NSEBANK"
-           - Sensex -> "^BSESN"
-           - S&P 500 -> "^GSPC"
-           - Nasdaq -> "^IXIC"
-           - Bitcoin -> "BTC-USD"
-           - Gold -> "GC=F"
-        3. If you are not 100% sure, return "NOT_FOUND".
-        4. Return ONLY the symbol string. No text.
-        """
-        
-        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
-        return response.text.strip().upper().replace("`", "")
-    except Exception as e:
-        print(f"Error identifying ticker: {e}")
-        return "NOT_FOUND"
-
-
-def analyze_chart_technicals_from_image(image_bytes: bytes):
-    """
-    Uses Gemini Vision to analyze chart images.
-    Updated with STRICT PROMPTS to prevent verbose output in the Trade Ticket.
-    """
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        image_part = {"mime_type": "image/jpeg", "data": image_bytes}
-        
-        prompt = """
-        Act as an expert Chartered Market Technician. Analyze this stock chart image.
-        Provide a professional technical analysis and a precision trade setup.
-
-        STRICT RESPONSE FORMAT (Do not deviate):
-
-        TREND: [Uptrend / Downtrend / Sideways]
-        PATTERNS: [List key patterns like Head & Shoulders, Flags, or "None"]
-        LEVELS: [List key Support and Resistance price levels]
-        VOLUME: [Describe volume behavior: "High volume breakout", "Low volume pullback", etc.]
-        INDICATORS: [Mention visible indicators like MA, RSI, MACD]
-        CONCLUSION: [A professional 2-sentence summary]
-        
-        -- TRADE TICKET --
-        ACTION: [BUY / SELL / WAIT]
-        ENTRY_ZONE: [Price range ONLY. e.g., "150.00 - 152.50"]
-        STOP_LOSS: [Price ONLY. e.g., "145.00"]
-        TARGET_1: [Price ONLY. e.g., "160.00"]
-        TARGET_2: [Price ONLY. e.g., "165.00"]
-        RISK_REWARD: [Ratio. e.g., "1:3"]
-        CONFIDENCE: [High / Medium / Low]
-        RATIONALE: [One clear sentence explaining the strategy.]
-        """
-        
-        response = model.generate_content([prompt, image_part])
-        return response.text.strip()
-        
-    except Exception as e:
-        print(f"AI Image Analysis Error: {e}")
-        return "TREND: Error\nACTION: WAIT\nRATIONALE: Server could not process image."
-
-
-# --- 4. CHART AI (TIMEFRAME) ANALYSIS (SAFE MATH & STRICT FORMAT) ---
-
-def generate_timeframe_analysis(symbol: str, timeframe: str, technicals: dict, pivots: dict, mas: dict):
-    """
-    Generates a trade setup based on Mathematical Indicators.
-    """
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-
-        # --- SAFE DATA EXTRACTION ---
-        def safe_get(d, keys, default='N/A'):
-            """Deep get for nested dictionaries."""
-            val = d
-            for key in keys:
-                if isinstance(val, dict):
-                    val = val.get(key)
-                else:
-                    return default
-            return f"{val:.2f}" if isinstance(val, (int, float)) else str(val)
-
-        # Extract values safely
-        price = safe_get(technicals, ['price_action', 'current_close'])
-        rsi = safe_get(technicals, ['rsi'])
-        macd = safe_get(technicals, ['macd'])
-        adx = safe_get(technicals, ['adx'])
-        
-        # Pivots
-        pp = safe_get(pivots, ['classic', 'pp'])
-        s1 = safe_get(pivots, ['classic', 's1'])
-        r1 = safe_get(pivots, ['classic', 'r1'])
-        
-        # MAs
-        ema20 = safe_get(mas, ['20'])
-        ema50 = safe_get(mas, ['50'])
-
-        # --- HEURISTIC TREND ---
-        trend_hint = "Neutral"
-        try:
-            p_val = float(price)
-            ma_val = float(ema50)
-            if p_val > ma_val: trend_hint = "Bullish"
-            elif p_val < ma_val: trend_hint = "Bearish"
-        except: pass
-
-        # --- PROMPT ---
-        prompt = f"""
-        Act as an Algorithmic Trader. Analyze {symbol} on {timeframe} timeframe.
-        
-        **HARD DATA (Computed):**
-        - Price: {price}
-        - Trend Bias: {trend_hint}
-        - Indicators: RSI={rsi}, ADX={adx}, MACD={macd}
-        - Key Levels: Pivot={pp}, Support={s1}, Resistance={r1}
-        - Averages: EMA20={ema20}, EMA50={ema50}
-
-        **Instructions:**
-        Based ONLY on these numbers, provide a trading strategy.
-        
-        **STRICT RESPONSE FORMAT:**
-        TREND: [Uptrend / Downtrend / Range]
-        PATTERNS: [Identify structure based on levels]
-        MOMENTUM: [Bullish / Bearish / Neutral]
-        LEVELS: [Key S/R from data]
-        INDICATORS: [Interpret the RSI/MACD values]
-        CONCLUSION: [Brief summary]
-
-        -- TRADE TICKET --
-        ACTION: [BUY / SELL / WAIT]
-        ENTRY_ZONE: [Price Range]
-        STOP_LOSS: [Price]
-        TARGET_1: [Price]
-        TARGET_2: [Price]
-        RISK_REWARD: [Ratio]
-        CONFIDENCE: [High / Medium / Low]
-        RATIONALE: [Explain why based on the math provided]
-        """
-
-        response = model.generate_content(prompt)
-        text = response.text.strip()
-        
-        if "ACTION:" not in text:
-             return f"TREND: {trend_hint}\nACTION: WAIT\nRATIONALE: Market data unclear ({text[:50]}...)"
-            
-        return text
-
-    except Exception as e:
-        print(f"AI Math Error: {e}")
-        # Return a fallback that looks like a valid response so frontend parses it
-        return f"TREND: {trend_hint if 'trend_hint' in locals() else 'Neutral'}\nACTION: WAIT\nRATIONALE: AI Analysis interrupted. Please retry."
-
-def analyze_pure_vision(image_bytes: bytes):
-    """
-    Performs 'Pure Vision' analysis without external data feeds.
-    Focuses on Geometry, Price Action Math, and Institutional Psychology.
-    """
-    try:
-        configure_gemini_for_request()
-        # Using 1.5 Pro or Flash for better vision reasoning
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        
-        prompt = """
-        Act as a Quantitative Technical Analyst with X-Ray Vision. 
-        Analyze this chart image strictly based on Price Action, Geometry, and Mathematics.
-        DO NOT generic stuff. Give me precision.
-
-        **MATHEMATICAL & GEOMETRIC ANALYSIS:**
-        1. **Trend Math:** Identify the slope and strength of the trend (e.g., "45-degree aggressive uptrend" or "Decaying momentum").
-        2. **Structure:** Identify Higher Highs/Lows or Lower Highs/Lows logic.
-        3. **Candlestick Math:** Analyze the ratio of wicks to bodies in the last 5 candles. Who is winning? Buyers or Sellers?
-        4. **Key Zones:** Identify exact price levels for Support/Resistance visible in the image.
-
-        **STRICT OUTPUT FORMAT:**
-        
-        **VERDICT:** [BULLISH / BEARISH / NEUTRAL]
-        
-        **MARKET STRUCTURE:**
-        [Explain the market phase: Accumulation, Markup, Distribution, or Decline]
-        
-        **GEOMETRIC SIGNALS:**
-        - [Pattern identified]
-        - [Trendline angle/slope observation]
-        - [Volatility contraction/expansion observation]
-
-        **INSTITUTIONAL FOOTPRINTS:**
-        [Where is the Smart Money entering/exiting based on candle size?]
-
-        -- TRADE SETUP (Visual Estimation) --
-        **DIRECTION:** [LONG / SHORT]
-        **ENTRY:** [Price Level]
-        **STOP LOSS:** [Price Level]
-        **TARGET:** [Price Level]
-        **WIN PROBABILITY:** [High/Medium]
-        """
-        
-        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
-        return response.text.strip()
-    except Exception as e:
-        return f"**VERDICT:** ERROR\n**ANALYSIS:** System blinded. Cause: {str(e)}"
 ```
 
 ## File: frontend/src/components/Header/StockHeader.js
@@ -12922,7 +12155,7 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
                 {profile.companyName}
             </CompanyName>
             {/* --- CONNECT BROKER BUTTON --- */}
-            {isIndian && <ConnectBroker />} 
+            {/* {isIndian && <ConnectBroker />} */} 
           </TopRow>
           
           <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
@@ -12952,6 +12185,258 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
 export default StockHeader;
 ```
 
+## File: backend/app/routers/charts.py
+```python
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from ..services import gemini_service, eodhd_service, technical_service, fmp_service, quant_engine, redis_service
+import asyncio
+import pandas as pd
+
+router = APIRouter()
+
+ERROR_TICKET = '''TREND: Data Unavailable
+PATTERNS: Insufficient historical data to calculate structure.
+MOMENTUM: N/A
+LEVELS: Key Support at 0.00, Key Resistance at 0.00.
+VOLUME: N/A
+INDICATORS: RSI (50.0) indicates Neutral.
+CONCLUSION: API Data Limit reached for this specific asset.
+ACTION: WAIT
+ENTRY_ZONE: 0.00
+STOP_LOSS: 0.00
+TARGET_1: 0.00
+TARGET_2: 0.00
+RISK_REWARD: N/A
+CONFIDENCE: Low (Missing Data)
+RATIONALE: The data provider does not supply enough candles for this asset.'''
+
+async def resolve_symbol_smart(ai_text: str):
+    s = ai_text.strip().upper()
+    crypto_map = {"BITCOIN": "BTC", "ETHEREUM": "ETH", "SOLANA": "SOL", "RIPPLE": "XRP", "DOGECOIN": "DOGE"}
+    for name, short in crypto_map.items():
+        if name in s: s = s.replace(name, short)
+    
+    clean_sym = s.replace("/", "").replace("-", "").replace(" ", "").replace("USDT", "").replace("USD", "")
+    
+    indices = {"NIFTY": "NSEI.INDX", "BANK": "NSEBANK.INDX", "SENSEX": "BSESN.INDX", "SPX": "GSPC.INDX", "NDX": "NDX.INDX", "DOW": "DJI.INDX"}
+    for k, v in indices.items():
+        if k in s: return v, "EODHD"
+
+    # 💥 STRICT GLOBAL COMMODITIES MAP (FMP)
+    commodities = {
+        "GOLD": "XAUUSD", "XAU": "XAUUSD", "XAUUSD": "XAUUSD", "GC=F": "XAUUSD",
+        "SILVER": "XAGUSD", "XAG": "XAGUSD", "XAGUSD": "XAGUSD", "SI=F": "XAGUSD",
+        "CRUDE": "CLUSD", "OIL": "CLUSD", "WTI": "CLUSD", "CLUSD": "CLUSD", "CL=F": "CLUSD",
+        "BRENT": "UKOIL", "UKOIL": "UKOIL",
+        "NATURALGAS": "NGUSD", "NGUSD": "NGUSD", "NG=F": "NGUSD"
+    }
+    if clean_sym in commodities: return commodities[clean_sym], "FMP"
+    if s in commodities: return commodities[s], "FMP"
+    
+    # 💥 CRYPTO ROUTING (EODHD)
+    crypto_list =["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "MATIC", "ADA", "AVAX", "DOT", "LTC", "SHIB"]
+    if clean_sym in crypto_list: return f"{clean_sym}-USD.CC", "EODHD"
+    for c in crypto_list:
+        if c in s: return f"{c}-USD.CC", "EODHD"
+
+    # 💥 INDIAN STOCKS FALLBACK
+    if "." not in s: return f"{s}.NSE", "EODHD"
+    if ".NS" in s: return s.replace(".NS", ".NSE"), "EODHD"
+    if ".BO" in s: return s.replace(".BO", ".BSE"), "EODHD"
+    return s, "EODHD"    
+
+@router.post("/analyze")
+async def analyze_chart_image(chart_image: UploadFile = File(...), analysis_type: str = Form("stock")):
+    if not chart_image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Invalid file.")
+
+    image_bytes = await chart_image.read()
+    
+    # 1. AI Tasks (Run concurrently for speed)
+    ticker_task = asyncio.to_thread(gemini_service.identify_ticker_from_image, image_bytes)
+    analysis_task = asyncio.to_thread(gemini_service.analyze_chart_technicals_from_image, image_bytes)
+    
+    raw_symbol, analysis_report = await asyncio.gather(ticker_task, analysis_task)
+    
+    if not raw_symbol or "NOT_FOUND" in raw_symbol:
+        return {"identified_symbol": "NOT_FOUND", "analysis_data": "Could not identify symbol text.", "technical_data": {}}
+
+    final_symbol, data_source = await resolve_symbol_smart(raw_symbol)
+
+    # 2. Background Data Warmup (Silently fetches data for timeframe tabs so they load instantly later)
+    async def warm_cache():
+        try:
+            cache_key_5m = f"chart_base_v16_{final_symbol}_5M"
+            chart_data = await redis_service.redis_client.get_cache(cache_key_5m)
+            if not chart_data:
+                if data_source == "FMP":
+                    chart_data = await asyncio.to_thread(fmp_service.get_commodity_history, final_symbol, "5M")
+                    if not chart_data: chart_data = await asyncio.to_thread(fmp_service.get_crypto_history, final_symbol, "5M")
+                else:
+                    chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, final_symbol, "5M")
+                if chart_data: await redis_service.redis_client.set_cache(cache_key_5m, chart_data, 300)
+        except: pass
+        
+    asyncio.create_task(warm_cache())
+
+    # 3. Format Symbol for Frontend
+    frontend_sym = final_symbol
+    if frontend_sym.endswith(".NSE"): frontend_sym = frontend_sym.replace(".NSE", ".NS")
+    elif frontend_sym.endswith(".BSE"): frontend_sym = frontend_sym.replace(".BSE", ".BO")
+    
+    # The Original Image Tab gets the Pure AI Vision Analysis!
+    return {
+        "identified_symbol": frontend_sym,
+        "analysis_data": analysis_report,
+        "technical_data": {} 
+    }
+
+@router.post("/analyze-pure")
+async def analyze_pure_chart(chart_image: UploadFile = File(...)):
+    return {"analysis": "Please use the main upload feature."}
+```
+
+## File: backend/app/services/gemini_service.py
+```python
+import os
+import google.generativeai as genai
+from dotenv import load_dotenv
+import itertools
+
+load_dotenv()
+
+# --- ROBUST KEY ROTATION ---
+try:
+    GEMINI_API_KEYS_STR = os.getenv("GEMINI_API_KEYS")
+    if not GEMINI_API_KEYS_STR:
+        single_key = os.getenv("GEMINI_API_KEY") 
+        if single_key: GEMINI_API_KEYS = [single_key]
+        else: GEMINI_API_KEYS = []
+    else:
+        GEMINI_API_KEYS =[key.strip() for key in GEMINI_API_KEYS_STR.split(',')]
+    key_cycler = itertools.cycle(GEMINI_API_KEYS)
+except:
+    GEMINI_API_KEYS =[]
+    key_cycler = None
+
+def configure_gemini_for_request():
+    if key_cycler:
+        try: genai.configure(api_key=next(key_cycler))
+        except: pass
+
+# *** DYNAMIC MODEL SELECTOR ***
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+print(f"🤖 AI Engine Initialized with Model: {MODEL_NAME}")
+
+# --- VISION AI (Chart Identification) ---
+def identify_ticker_from_image(image_bytes: bytes):
+    try:
+        configure_gemini_for_request()
+        model = genai.GenerativeModel(MODEL_NAME)
+        
+        # Safe string concatenation (No triple quotes to cause errors)
+        prompt = (
+            "Look at this stock chart. Read the main Ticker Symbol text (top left usually). "
+            "Return ONLY the ticker string. "
+            "Examples: "
+            "- If you see 'NIFTY 50', return 'NIFTY' "
+            "- If you see 'RELIANCE', return 'RELIANCE' "
+            "- If you see 'BTC/USD', return 'BTC' "
+            "Do not add suffixes like .NS or .INDX. Just the raw name."
+        )
+        
+        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
+        return response.text.strip().upper().replace("", "").replace(" ", "")
+    except Exception as e:
+        print(f"❌ VISION ERROR: {e}")
+        return "NOT_FOUND"
+
+def analyze_pure_vision(image_bytes: bytes):
+    try:
+        configure_gemini_for_request()
+        model = genai.GenerativeModel(MODEL_NAME)
+        prompt = "Act as a Quant Analyst. Analyze this chart based purely on geometry. Output VERDICT, MARKET STRUCTURE, GEOMETRIC SIGNALS, and TRADE SETUP."
+        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
+        return response.text.strip()
+    except Exception as e:
+        print(f"❌ PURE VISION ERROR: {e}")
+        return f"**VERDICT:** ERROR\n**ANALYSIS:** {str(e)}"
+
+# --- TEXT GENERATION ---
+def get_ticker_from_query(query: str):
+    try:
+        configure_gemini_for_request()
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(f"Identify stock ticker for: {query}. Return ONLY the ticker (e.g. RELIANCE.NS).")
+        return response.text.strip().replace("", "").upper()
+    except Exception as e:
+        print(f"❌ SEARCH ERROR: {e}")
+        return "ERROR"
+
+def generate_forecast_analysis(company_name: str, analyst_ratings: list, price_target: dict, key_stats: dict, news_headlines: list, currency: str = "USD"):
+    try:
+        configure_gemini_for_request()
+        model = genai.GenerativeModel(MODEL_NAME)
+        prompt = f"Write a 2-paragraph forecast summary for {company_name} using this data: Targets: {price_target}, Currency: {currency}."
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"❌ FORECAST ERROR: {e}")
+        return "Forecast analysis temporarily unavailable."
+
+def find_peer_tickers_by_industry(company_name: str, sector: str, industry: str, country: str):
+    try:
+        configure_gemini_for_request()
+        model = genai.GenerativeModel(MODEL_NAME)
+        prompt = f"List 5 major competitor tickers for {company_name} ({industry}, {country}). Comma separated only. Example: RELIANCE.NS, TCS.NS"
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"❌ PEER ERROR: {e}")
+        return ""
+
+# --- LEGACY PLACEHOLDERS (Handled by Math Engine now) ---
+def generate_swot_analysis(company_name, description, news): return "Use Local Math Engine"
+def generate_investment_philosophy_assessment(company_name, metrics): return "Use Local Math Engine"
+def generate_canslim_assessment(company_name, quote, q, y, i): return "Use Local Math Engine"
+def generate_fundamental_conclusion(company_name, p, g, d, k, n): return "Use Local Math Engine"
+def generate_timeframe_analysis(symbol, timeframe, technicals, pivots, mas): return "Use Local Quant Engine"
+
+
+def analyze_chart_technicals_from_image(image_bytes: bytes):
+    try:
+        configure_gemini_for_request()
+        model = genai.GenerativeModel(MODEL_NAME)
+        prompt = '''Act as an expert Chartered Market Technician. Analyze this stock chart image.
+        Provide a professional technical analysis and a precision trade setup based on the timeframe shown in the image.
+
+        STRICT RESPONSE FORMAT (Do not deviate):
+
+        TREND:[Uptrend / Downtrend / Sideways]
+        PATTERNS: [List key patterns or "None"]
+        MOMENTUM: [Bullish / Bearish / Neutral]
+        LEVELS:[List key Support and Resistance price levels visible]
+        VOLUME: [Describe volume behavior]
+        INDICATORS: [Mention visible indicators]
+        CONCLUSION: [A professional 2-sentence summary]
+        
+        -- TRADE TICKET --
+        ACTION:[BUY / SELL / WAIT]
+        ENTRY_ZONE:[Price ONLY. e.g., "150.00"]
+        STOP_LOSS:[Price ONLY. e.g., "145.00"]
+        TARGET_1: [Price ONLY. e.g., "160.00"]
+        TARGET_2: [Price ONLY. e.g., "165.00"]
+        RISK_REWARD: [Ratio. e.g., "1:3"]
+        CONFIDENCE:[High / Medium / Low]
+        RATIONALE: [One clear sentence explaining the strategy.]'''
+        
+        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
+        return response.text.strip()
+    except Exception as e:
+        print(f"❌ VISION CHART ANALYSIS ERROR: {e}")
+        return "TREND: Error\nACTION: WAIT\nRATIONALE: AI failed to process image."
+```
+
 ## File: frontend/src/pages/StockDetailPage.js
 ```javascript
 import React, { useState, useEffect, useCallback } from 'react';
@@ -12978,7 +12463,7 @@ import { FaArrowLeft } from 'react-icons/fa';
 
 // --- CONFIGURATION ---
 // This connects your Vercel Frontend to your Railway Backend
-const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_URL = '';
 
 // --- ANIMATIONS ---
 const fadeIn = keyframes`
@@ -13082,7 +12567,7 @@ const StockDetailPage = () => {
   // --- ASSET DETECTION ---
   const isCrypto = symbol.includes('.CC') || symbol.includes('BTC') || symbol.includes('ETH') || (symbol.includes('USD') && !symbol.includes('.'));
   const isIndex = symbol.includes('.INDX') || symbol.includes('^');
-  const isCommodity = symbol.includes('GOLD') || symbol.includes('OIL') || symbol.includes('XAU') || symbol.includes('USO') || symbol.includes('CLUSD');
+  const isCommodity = symbol.includes('GOLD') || symbol.includes('OIL') || symbol.includes('XAU') || symbol.includes('XAG') || symbol.includes('SILVER') || symbol.includes('USO') || symbol.includes('CLUSD') || symbol.includes('UKOIL') || symbol.includes('NGUSD');
   
   // Logic: Stocks have financials. Crypto/Indices/Commodities do not.
   const isStock = !isCrypto && !isIndex && !isCommodity;
@@ -13386,6 +12871,7 @@ async def serve_react_app(full_path: str):
 
 ## File: backend/app/routers/stocks.py
 ```python
+from ..services import quant_engine
 import asyncio
 import math
 import pandas as pd
@@ -13457,10 +12943,12 @@ TRADINGVIEW_OVERRIDE_MAP = {
     "SBIN.NS": "NSE:SBIN",
     "INFY.NS": "NSE:INFY",
     "TCS.NS": "NSE:TCS",
-    "BTC-USD": "BINANCE:BTCUSD",
-    "ETH-USD": "BINANCE:ETHUSD",
-    "XAU-USD.CC": "OANDA:XAUUSD",
-    "USO.US": "TVC:USOIL"
+    "BTC-USD.CC": "BINANCE:BTCUSD",
+    "ETH-USD.CC": "BINANCE:ETHUSD",
+    "XAUUSD": "OANDA:XAUUSD",
+    "XAGUSD": "OANDA:XAGUSD",
+    "CLUSD": "TVC:USOIL",
+    "UKOIL": "TVC:UKOIL"
 }
 
 # ==========================================
@@ -13468,28 +12956,69 @@ TRADINGVIEW_OVERRIDE_MAP = {
 # ==========================================
 
 def identify_asset_class(symbol: str):
-    """
-    Maps ANY ticker format (Yahoo, TradingView, Colloquial) to our Internal Data Sources.
-    Returns: (Source_System, Clean_Ticker)
-    """
+    from urllib.parse import unquote
     s = unquote(symbol).upper().strip()
     
-    # --- A. COMMODITIES (Yahoo/TV -> FMP) ---
-    if s in ["CL=F", "CL%3DF", "USOIL", "WTI", "CRUDE", "CRUDEOIL", "OIL", "CLUSD"]: return "FMP", "CLUSD"
-    if s in ["BZ=F", "BRENT", "UKOIL", "BRENTOIL"]: return "FMP", "UKOIL"
-    if s in ["GC=F", "GOLD", "XAU", "XAUUSD"]: return "FMP", "XAUUSD"
-    if s in ["SI=F", "SILVER", "XAG", "XAGUSD"]: return "FMP", "XAGUSD"
-    if s in ["NG=F", "GAS", "NATGAS", "NGUSD", "UNG", "UNG.US"]: return "FMP", "NGUSD"
-    if s in ["HG=F", "COPPER", "HGUSD"]: return "FMP", "HGUSD"
-    if s in ["PL=F", "PLATINUM", "PLUSD"]: return "FMP", "PLUSD"
+    crypto_map = {"BITCOIN": "BTC", "ETHEREUM": "ETH", "SOLANA": "SOL", "RIPPLE": "XRP", "DOGECOIN": "DOGE"}
+    for name, short in crypto_map.items():
+        if name in s: s = s.replace(name, short)
+        
+    commodities_map = {
+        "GOLD": "XAUUSD", "XAU": "XAUUSD", "XAUUSD": "XAUUSD", "GC=F": "XAUUSD",
+        "SILVER": "XAGUSD", "XAG": "XAGUSD", "XAGUSD": "XAGUSD", "SI=F": "XAGUSD",
+        "CRUDE": "CLUSD", "OIL": "CLUSD", "WTI": "CLUSD", "CLUSD": "CLUSD", "CL=F": "CLUSD",
+        "BRENT": "UKOIL", "UKOIL": "UKOIL",
+        "NATURALGAS": "NGUSD", "NGUSD": "NGUSD", "NG=F": "NGUSD"
+    }
+    if s in commodities_map: return "FMP", commodities_map[s]
+    
+    crypto_shorts =["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "MATIC", "BNB", "AVAX", "DOT", "LTC", "SHIB"]
+    base = s.replace("-USD.CC", "").replace("-USD", "").replace("USD", "")
+    if base in crypto_shorts: return "EODHD", f"{base}-USD.CC"
+        
+    if "NIFTY" in s or "NSEI" in s: return "EODHD", "NSEI.INDX"
+    if "SENSEX" in s or "BSESN" in s: return "EODHD", "BSESN.INDX"
+    if "BANK" in s: return "EODHD", "NSEBANK.INDX"
+    if ".INDX" in s: return "EODHD", s
 
-    # --- B. CRYPTO (Coinbase/Yahoo -> FMP) ---
-    if ".CC" in s or s in ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "MATIC", "DOT", "LTC"]:
-        clean = s.replace("-USD.CC", "USD").replace(".CC", "")
-        if not clean.endswith("USD"): clean += "USD"
-        return "FMP", clean
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    
+    return "EODHD", s
 
-    # --- C. STOCKS / INDICES (Default -> EODHD) ---
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    
+    return "EODHD", s
+
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    
+    return "EODHD", s
+
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    
+    return "EODHD", s
+
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    return "EODHD", s
+
+    if "." not in s: return "EODHD", f"{s}.NSE"
+    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
+    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
+    
+    return "EODHD", s 
+    crypto_shorts =["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "MATIC", "BNB", "AVAX", "DOT", "LTC", "SHIB"]
+    for c in crypto_shorts:
+        if s == c or s == f"{c}USD" or s == f"{c}-USD":
+            return "EODHD", f"{c}-USD.CC"
     return "EODHD", s
 
 # ==========================================
@@ -13530,9 +13059,7 @@ async def search_stock_ticker(query: str = Query(..., min_length=2)):
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
     
-    source, ticker = identify_asset_class(query)
-    if source == "FMP" and ticker in ["XAUUSD", "XAGUSD", "CLUSD", "NGUSD", "UKOIL"]:
-        return {"symbol": ticker} 
+    source, ticker = identify_asset_class(query) 
 
     results = fmp_service.search_ticker(query)
     if results: 
@@ -13551,12 +13078,18 @@ async def search_stock_ticker(query: str = Query(..., min_length=2)):
 
 @router.post("/{symbol}/swot")
 async def get_swot_analysis(symbol: str, request_data: SwotRequest = Body(...)):
-    cache_key = f"swot_v2_{symbol}"
+    cache_key = f"swot_v4_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
-    news_articles = await asyncio.to_thread(news_service.get_company_news, request_data.companyName)
-    news_headlines = [a.get('title', '') for a in news_articles[:10]]
-    swot_analysis = await asyncio.to_thread(gemini_service.generate_swot_analysis, request_data.companyName, request_data.description, news_headlines)
+    
+    # GRAB EXISTING DATA FROM CACHE (0 API Calls!)
+    master_data_key = f"all_data_v27_{symbol}"
+    master_data = await redis_service.redis_client.get_cache(master_data_key)
+    
+    # GENERATE SWOT VIA MATH ENGINE
+    from ..services import swot_engine
+    swot_analysis = swot_engine.generate_algorithmic_swot(request_data.companyName, master_data)
+    
     res = {"swot_analysis": swot_analysis}
     await redis_service.redis_client.set_cache(cache_key, res, 3600)
     return res
@@ -13571,27 +13104,58 @@ async def get_forecast_analysis(symbol: str, d: ForecastRequest = Body(...)):
 
 @router.post("/{symbol}/fundamental-analysis")
 async def get_fundamental_analysis(symbol: str, d: FundamentalRequest = Body(...)):
-    cache_key = f"fa_v2_{symbol}"
+    cache_key = f"fa_v4_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
-    analysis = await asyncio.to_thread(gemini_service.generate_investment_philosophy_assessment, d.companyName, d.keyMetrics)
-    res = {"assessment": analysis}; await redis_service.redis_client.set_cache(cache_key, res, 86400); return res
+    
+    # ZERO API CALLS - Use Cached Master Data
+    master_data_key = f"all_data_v27_{symbol}"
+    master_data = await redis_service.redis_client.get_cache(master_data_key)
+    
+    from ..services import strategy_engine
+    assessment = strategy_engine.generate_value_philosophy(master_data)
+    
+    res = {"assessment": assessment}
+    await redis_service.redis_client.set_cache(cache_key, res, 86400)
+    return res
 
 @router.post("/{symbol}/canslim-analysis")
 async def get_canslim_analysis(symbol: str, d: CanslimRequest = Body(...)):
-    cache_key = f"can_v2_{symbol}"
+    cache_key = f"can_v4_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
-    analysis = await asyncio.to_thread(gemini_service.generate_canslim_assessment, d.companyName, d.quote, d.quarterlyEarnings, d.annualEarnings, d.institutionalHolders)
-    res = {"assessment": analysis}; await redis_service.redis_client.set_cache(cache_key, res, 3600); return res
+    
+    # ZERO API CALLS - Use Cached Master Data
+    master_data_key = f"all_data_v27_{symbol}"
+    master_data = await redis_service.redis_client.get_cache(master_data_key)
+    
+    from ..services import strategy_engine
+    assessment = strategy_engine.generate_canslim_check(master_data)
+    
+    res = {"assessment": assessment}
+    await redis_service.redis_client.set_cache(cache_key, res, 3600)
+    return res
 
 @router.post("/{symbol}/conclusion-analysis")
 async def get_conclusion_analysis(symbol: str, d: ConclusionRequest = Body(...)):
-    cache_key = f"conc_v2_{symbol}"
+    cache_key = f"conc_v4_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
-    conclusion = await asyncio.to_thread(gemini_service.generate_fundamental_conclusion, d.companyName, d.piotroskiData, d.grahamData, d.darvasData, {k: v for k, v in d.keyStats.items() if v is not None}, d.newsHeadlines)
-    res = {"conclusion": conclusion}; await redis_service.redis_client.set_cache(cache_key, res, 3600); return res
+    
+    from ..services import conclusion_engine
+    
+    # Use Pure Math Engine (0ms latency, 0 API Calls)
+    conclusion = conclusion_engine.generate_algorithmic_conclusion(
+        d.companyName, 
+        d.piotroskiData, 
+        d.grahamData, 
+        d.darvasData, 
+        {k: v for k, v in d.keyStats.items() if v is not None}
+    )
+    
+    res = {"conclusion": conclusion}
+    await redis_service.redis_client.set_cache(cache_key, res, 3600)
+    return res
 
 # ==========================================
 # 4. TECHNICAL ANALYSIS & CHART ENGINE
@@ -13599,50 +13163,62 @@ async def get_conclusion_analysis(symbol: str, d: ConclusionRequest = Body(...))
 
 @router.post("/{symbol}/timeframe-analysis")
 async def get_timeframe_analysis(symbol: str, request_data: TimeframeRequest = Body(...)):
-    """
-    AI Chart Analysis with Mathematical Resampling.
-    Fetches 5M data ONCE, then computes 15M/1H/4H locally for the AI.
-    """
     source, ticker = identify_asset_class(symbol)
     
-    # 1. Determine "Master" Timeframe
-    # If user wants Intraday (15M, 1H, 4H), we fetch 5M Base Data
-    is_intraday_request = request_data.timeframe.upper() in ["5M", "15M", "30M", "1H", "4H"]
+    is_intraday_request = request_data.timeframe.upper() in["5M", "15M", "30M", "1H", "4H"]
     lookup_range = "5M" if is_intraday_request else request_data.timeframe
 
-    # 2. Check Cache for the MASTER Data (e.g., 5M)
-    # Note: Cache key matches get_stock_chart so they share the data pool
     cache_key = f"chart_base_v16_{symbol}_{lookup_range}" 
     chart_list = await redis_service.redis_client.get_cache(cache_key)
     
-    # 3. If Cache Miss, Fetch from API
     if not chart_list:
         if source == "FMP":
-            chart_list = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, range_type=lookup_range)
-            if not chart_list: chart_list = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, range_type=lookup_range)
+            chart_list = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, lookup_range)
+            if not chart_list: chart_list = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, lookup_range)
         else:
-            chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, range_type=lookup_range)
+            chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, lookup_range)
         
-        # Save Master Data
-        if chart_list:
-            await redis_service.redis_client.set_cache(cache_key, chart_list, 300)
+        if chart_list: await redis_service.redis_client.set_cache(cache_key, chart_list, 300)
 
-    if not chart_list: return {"analysis": f"Market data unavailable for {request_data.timeframe}."}
+    # THE INTELLIGENT FALLBACK
+    if not chart_list or len(chart_list) < 20:
+        if is_intraday_request:
+            # If 5M fails (Crypto Free Tier), instantly fetch Daily data instead!
+            print(f"⚠️ Intraday failed for {ticker}. Falling back to Daily Analysis.")
+            cache_key_1d = f"chart_base_v16_{symbol}_1D"
+            chart_list = await redis_service.redis_client.get_cache(cache_key_1d)
+            if not chart_list:
+                chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, "1D")
+                if chart_list: await redis_service.redis_client.set_cache(cache_key_1d, chart_list, 43200)
     
-    # 4. MATHEMATICAL RESAMPLING (The Optimization)
-    # If we have 5M data but the AI needs 1H, we compute it here.
+    # If it STILL fails after the fallback, send the perfect Error Ticket
+    if not chart_list or len(chart_list) < 20:
+         return {"analysis": """TREND: Data Unavailable
+PATTERNS: Insufficient historical data to calculate structure.
+MOMENTUM: N/A
+LEVELS: Key Support at 0.00, Key Resistance at 0.00.
+VOLUME: N/A
+INDICATORS: RSI (50.0) indicates Neutral.
+CONCLUSION: API Data Limit reached for this specific asset.
+ACTION: WAIT
+ENTRY_ZONE: 0.00
+STOP_LOSS: 0.00
+TARGET_1: 0.00
+TARGET_2: 0.00
+RISK_REWARD: N/A
+CONFIDENCE: Low (Missing Data)
+RATIONALE: The data provider does not supply enough candles for this asset."""}
+         
+    # Mathematical Resampling
     if is_intraday_request and request_data.timeframe.upper() != "5M":
          chart_list = technical_service.resample_chart_data(chart_list, request_data.timeframe)
 
-    # 5. Calculate Indicators on the RESAMPLED data
     df = pd.DataFrame(chart_list)
     technicals = technical_service.calculate_technical_indicators(df)
     pivots = technical_service.calculate_pivot_points(df)
     mas = technical_service.calculate_moving_averages(df)
     
-    # 6. AI Insight
-    analysis = await asyncio.to_thread(gemini_service.generate_timeframe_analysis, symbol, request_data.timeframe, technicals, pivots, mas)
-    
+    analysis = quant_engine.generate_algorithmic_report(symbol, request_data.timeframe, technicals, pivots, mas)
     return {"analysis": analysis}
 
 
@@ -14053,7 +13629,7 @@ async def get_all_timeframe_analysis(symbol: str):
             
             # C. Generate AI Insight
             analysis = await asyncio.to_thread(
-                gemini_service.generate_timeframe_analysis, 
+                quant_engine.generate_algorithmic_report, 
                 symbol, tf, techs, pivots, mas
             )
             return tf.lower(), analysis # Return key like "1h"
@@ -14077,4 +13653,15 @@ async def get_all_timeframe_analysis(symbol: str):
     await redis_service.redis_client.set_cache(cache_key, response_map, 300) # 5 min cache
     
     return response_map
+@router.get("/screener/bullish")
+async def get_live_bullish_screener():
+    cache_key = "live_screener_bullish"
+    cached = await redis_service.redis_client.get_cache(cache_key)
+    if cached: return cached
+    
+    from ..services.screener_bullish import fetch_bullish_reversal
+    results = await asyncio.to_thread(fetch_bullish_reversal)
+    if results and len(results) > 0:
+        await redis_service.redis_client.set_cache(cache_key, results, 300)
+    return results or[]
 ```

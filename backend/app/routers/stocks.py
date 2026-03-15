@@ -1,4 +1,4 @@
-from ..services import quant_engine
+﻿from ..services import quant_engine
 import asyncio
 import math
 import pandas as pd
@@ -311,7 +311,7 @@ async def get_timeframe_analysis(symbol: str, request_data: TimeframeRequest = B
     if not chart_list or len(chart_list) < 20:
         if is_intraday_request:
             # If 5M fails (Crypto Free Tier), instantly fetch Daily data instead!
-            print(f"⚠️ Intraday failed for {ticker}. Falling back to Daily Analysis.")
+            print(f"âš ï¸ Intraday failed for {ticker}. Falling back to Daily Analysis.")
             cache_key_1d = f"chart_base_v16_{symbol}_1D"
             chart_list = await redis_service.redis_client.get_cache(cache_key_1d)
             if not chart_list:
@@ -780,3 +780,20 @@ async def get_all_timeframe_analysis(symbol: str):
     await redis_service.redis_client.set_cache(cache_key, response_map, 300) # 5 min cache
     
     return response_map
+@router.get("/screener/configs")
+async def get_screener_configs():
+    from ..services.chartink_engine import get_all_screener_configs
+    return get_all_screener_configs()
+
+@router.get("/screener/{screener_key}")
+async def get_dynamic_screener(screener_key: str):
+    cache_key = f"live_screener_{screener_key}"
+    cached = await redis_service.redis_client.get_cache(cache_key)
+    if cached: return cached
+    
+    from ..services.chartink_engine import fetch_screener
+    results = await asyncio.to_thread(fetch_screener, screener_key)
+    if results and len(results) > 0:
+        await redis_service.redis_client.set_cache(cache_key, results, 300)
+    return results or[]
+
