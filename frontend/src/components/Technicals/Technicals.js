@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+﻿import React, { useState, useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
 import GaugeChart from 'react-gauge-chart';
 import Card from '../common/Card';
@@ -423,7 +423,7 @@ const Technicals = ({
                         arcPadding={0.02}
                         textColor="transparent"
                         needleColor="#C9D1D9"
-                        animate={true}
+                        animate={true} animDelay={0} animateDuration={800}
                     />
                 </div>
                 <VerdictTitle color={signals.color}>{signals.verdict}</VerdictTitle>

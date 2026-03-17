@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+﻿from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from ..services import gemini_service, eodhd_service, technical_service, fmp_service, quant_engine, redis_service
 import asyncio
 import pandas as pd
@@ -33,7 +33,7 @@ async def resolve_symbol_smart(ai_text: str):
     for k, v in indices.items():
         if k in s: return v, "EODHD"
 
-    # 💥 STRICT GLOBAL COMMODITIES MAP (FMP)
+    # ðŸ’¥ STRICT GLOBAL COMMODITIES MAP (FMP)
     commodities = {
         "GOLD": "XAUUSD", "XAU": "XAUUSD", "XAUUSD": "XAUUSD", "GC=F": "XAUUSD",
         "SILVER": "XAGUSD", "XAG": "XAGUSD", "XAGUSD": "XAGUSD", "SI=F": "XAGUSD",
@@ -44,13 +44,13 @@ async def resolve_symbol_smart(ai_text: str):
     if clean_sym in commodities: return commodities[clean_sym], "FMP"
     if s in commodities: return commodities[s], "FMP"
     
-    # 💥 CRYPTO ROUTING (EODHD)
+    # ðŸ’¥ CRYPTO ROUTING (EODHD)
     crypto_list =["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "MATIC", "ADA", "AVAX", "DOT", "LTC", "SHIB"]
     if clean_sym in crypto_list: return f"{clean_sym}-USD.CC", "EODHD"
     for c in crypto_list:
         if c in s: return f"{c}-USD.CC", "EODHD"
 
-    # 💥 INDIAN STOCKS FALLBACK
+    # ðŸ’¥ INDIAN STOCKS FALLBACK
     if "." not in s: return f"{s}.NSE", "EODHD"
     if ".NS" in s: return s.replace(".NS", ".NSE"), "EODHD"
     if ".BO" in s: return s.replace(".BO", ".BSE"), "EODHD"
@@ -104,4 +104,14 @@ async def analyze_chart_image(chart_image: UploadFile = File(...), analysis_type
 
 @router.post("/analyze-pure")
 async def analyze_pure_chart(chart_image: UploadFile = File(...)):
-    return {"analysis": "Please use the main upload feature."}
+    if not chart_image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Invalid file type.")
+        
+    # Read the uploaded chart image into memory
+    image_bytes = await chart_image.read()
+    
+    # Pass the image to Gemini Vision Model in a background thread
+    analysis_report = await asyncio.to_thread(gemini_service.analyze_pure_vision, image_bytes)
+    
+    return {"analysis": analysis_report}
+

@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import styled from 'styled-components';
 import {
   AreaChart,
@@ -39,7 +39,7 @@ const CustomTooltipContainer = styled.div`
 // --- The New, Smarter React Component ---
 
 const OwnershipTrend = ({ historicalStatements }) => {
-  // We now use the 'annual_revenue_and_profit' data (which is the income statements array)
+  // We now use the 'annual_balance_sheets' data (which is the income statements array)
   // as it contains the historical shares outstanding.
   if (!historicalStatements || !Array.isArray(historicalStatements) || historicalStatements.length < 2) {
     return (
@@ -64,7 +64,7 @@ const OwnershipTrend = ({ historicalStatements }) => {
     .reverse() // Reverse to show chronological order (oldest to newest)
     .map(item => ({
       year: item.calendarYear,
-      'Shares Outstanding': item.weightedAverageShsOut,
+      'Shares Outstanding': item.sharesOutstanding,
     }));
 
   const CustomTooltip = ({ active, payload, label }) => {

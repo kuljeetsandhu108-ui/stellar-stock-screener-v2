@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import GaugeChart from 'react-gauge-chart';
 import Card from '../common/Card';
@@ -7,7 +7,6 @@ import { useParams } from 'react-router-dom';
 import { FaClock, FaSync } from 'react-icons/fa';
 
 // --- STYLED COMPONENTS ---
-
 const DashboardContainer = styled.div`
   display: flex;
   flex-direction: column;
@@ -28,7 +27,7 @@ const SubMetersGrid = styled.div`
   gap: 1rem;
 
   @media (max-width: 768px) {
-    grid-template-columns: 1fr; /* Stack vertically on mobile */
+    grid-template-columns: 1fr;
     gap: 1.5rem;
   }
 `;
@@ -44,7 +43,7 @@ const SubMeterItem = styled.div`
   box-shadow: 0 4px 6px rgba(0,0,0,0.1);
   transition: transform 0.2s ease, border-color 0.2s ease;
   position: relative;
-  overflow: hidden; /* Contains the loading overlay */
+  overflow: hidden;
 
   &:hover {
     transform: translateY(-2px);
@@ -71,7 +70,6 @@ const MeterTitle = styled.h4`
   margin: 0;
 `;
 
-// --- NEW DROPDOWN STYLE ---
 const TimeframeSelect = styled.select`
   background: rgba(255,255,255,0.1);
   border: 1px solid transparent;
@@ -163,17 +161,17 @@ const LoadingOverlay = styled.div`
 
 // --- Helper for Colors ---
 const getColor = (score) => {
-  if (score >= 75) return 'var(--color-success)'; // Strong Buy
-  if (score >= 60) return '#34D399'; // Buy
-  if (score <= 25) return 'var(--color-danger)'; // Strong Sell
-  if (score <= 40) return '#F87171'; // Sell
-  return '#EDBB5A'; // Neutral
+  if (score >= 75) return 'var(--color-success)'; 
+  if (score >= 60) return '#34D399'; 
+  if (score <= 25) return 'var(--color-danger)'; 
+  if (score <= 40) return '#F87171'; 
+  return '#EDBB5A'; 
 };
 
 // --- Reusable Gauge Component ---
 const CustomGauge = ({ id, score, label, size = "small" }) => {
   const color = getColor(score);
-  const percent = Math.min(Math.max(score / 100, 0), 1); // Clamp 0-1
+  const percent = Math.min(Math.max(score / 100, 0), 1); 
   
   return (
     <div style={{ width: '100%', maxWidth: size === 'large' ? '350px' : '200px' }}>
@@ -188,7 +186,8 @@ const CustomGauge = ({ id, score, label, size = "small" }) => {
         needleBaseColor={'#FFFFFF'}
         needleColor={'#C9D1D9'}
         animate={true}
-        animDelay={300}
+        animDelay={0}
+        animateDuration={800}
         style={{ width: '100%' }}
       />
       {size === 'large' ? (
@@ -202,16 +201,20 @@ const CustomGauge = ({ id, score, label, size = "small" }) => {
 };
 
 // --- MAIN COMPONENT ---
-
 const OverallSentiment = ({ sentimentData }) => {
   const { symbol } = useParams();
-  
-  // Local state for Interactive Technical Meter
-  const [techTimeframe, setTechTimeframe] = useState('1d'); // Default to Daily to match main load
+  const[techTimeframe, setTechTimeframe] = useState('1d'); 
   const [techData, setTechData] = useState(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const[liveTick, setLiveTick] = useState(null);
 
-  // Initialize techData from the main sentimentData prop when it loads
+  // 🚀 LISTEN TO LIVE PRICE TICKS
+  useEffect(() => {
+    const handleTick = (e) => setLiveTick(e.detail);
+    window.addEventListener('livePriceTick', handleTick);
+    return () => window.removeEventListener('livePriceTick', handleTick);
+  },[]);
+
   useEffect(() => {
     if (sentimentData?.breakdown?.technical) {
       setTechData(sentimentData.breakdown.technical);
@@ -225,7 +228,6 @@ const OverallSentiment = ({ sentimentData }) => {
     setIsUpdating(true);
 
     try {
-      // Call the specific endpoint for technical scoring
       const response = await axios.post(`/api/stocks/${symbol}/technical-score`, {
         timeframe: newTf
       });
@@ -249,15 +251,24 @@ const OverallSentiment = ({ sentimentData }) => {
 
   const { score, verdict, breakdown } = sentimentData;
   
-  // Fallback defaults if breakdown is missing
   const bd = breakdown || {
       fundamental: { score: 50, label: '--' },
       financial: { score: 50, label: '--' },
       technical: { score: 50, label: '--' }
   };
 
-  // Determine which Technical Data to show (Live vs Prop)
   const currentTech = techData || bd.technical;
+
+  // 🚀 DYNAMIC REAL-TIME MOMENTUM SHIFT
+  let dynamicTechScore = currentTech?.score || 50;
+  let dynamicOverallScore = score || 50;
+
+  if (liveTick && liveTick.pct) {
+      // Dampened boost: If stock moves +1%, tech score nudges +3 points in real-time
+      const boost = liveTick.pct * 3.0; 
+      dynamicTechScore = Math.min(Math.max(dynamicTechScore + boost, 0), 100);
+      dynamicOverallScore = Math.min(Math.max(dynamicOverallScore + (boost * 0.5), 0), 100);
+  }
 
   return (
     <Card title="Confidence Matrix">
@@ -270,7 +281,7 @@ const OverallSentiment = ({ sentimentData }) => {
           </MeterTitle>
           <CustomGauge 
             id="overall-gauge" 
-            score={score} 
+            score={dynamicOverallScore} 
             label={verdict} 
             size="large" 
           />
@@ -299,8 +310,8 @@ const OverallSentiment = ({ sentimentData }) => {
             </MeterHeader>
             <CustomGauge 
                 id="tech-gauge" 
-                score={currentTech.score} 
-                label={currentTech.label} 
+                score={dynamicTechScore} 
+                label={currentTech?.label || "Neutral"} 
             />
           </SubMeterItem>
 
@@ -329,7 +340,6 @@ const OverallSentiment = ({ sentimentData }) => {
           </SubMeterItem>
 
         </SubMetersGrid>
-
       </DashboardContainer>
     </Card>
   );

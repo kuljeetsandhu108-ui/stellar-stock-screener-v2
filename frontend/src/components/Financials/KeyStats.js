@@ -1,7 +1,5 @@
-import React from 'react';
+﻿import React from 'react';
 import styled from 'styled-components';
-
-// --- Styled Components ---
 
 const StatsContainer = styled.div`
   padding-bottom: 2rem;
@@ -18,11 +16,9 @@ const SectionTitle = styled.h3`
 
 const StatsGrid = styled.div`
   display: grid;
-  /* Create 4 equal columns on larger screens */
   grid-template-columns: repeat(4, 1fr);
-  gap: 1.5rem 1rem; /* Vertical and horizontal gap */
+  gap: 1.5rem 1rem;
 
-  /* On smaller screens, reduce to 2 columns */
   @media (max-width: 992px) {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -45,8 +41,6 @@ const StatValue = styled.span`
   color: var(--color-text-primary);
 `;
 
-// --- Helper Functions to Format Data ---
-
 const formatMarketCap = (num) => {
   if (num === null || num === undefined) return '--';
   if (num >= 1e12) return `$${(num / 1e12).toFixed(2)} T`;
@@ -60,39 +54,12 @@ const formatNumber = (num) => {
   return num.toFixed(2);
 };
 
-const formatDate = (dateStr) => {
-    if (!dateStr) return '--';
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-};
-
-
-// --- The Main React Component ---
-
 const KeyStats = ({ stats }) => {
   if (!stats) return null;
 
   return (
     <StatsContainer>
-      {/* --- Upcoming Earnings Section --- */}
-      <SectionTitle>Upcoming Earnings</SectionTitle>
-      <StatsGrid>
-        <StatItem>
-          <StatLabel>Next Report Date</StatLabel>
-          <StatValue>{formatDate(stats.nextReportDate)}</StatValue>
-        </StatItem>
-        <StatItem>
-          <StatLabel>EPS Estimate</StatLabel>
-          <StatValue>{formatNumber(stats.epsEstimate)}</StatValue>
-        </StatItem>
-        <StatItem>
-          <StatLabel>Revenue Estimate</StatLabel>
-          <StatValue>{formatMarketCap(stats.revenueEstimate)}</StatValue>
-        </StatItem>
-      </StatsGrid>
-
-      {/* --- Key Stats Section --- */}
-      <SectionTitle style={{ marginTop: '2rem' }}>Key Stats</SectionTitle>
+      <SectionTitle>Key Stats</SectionTitle>
       <StatsGrid>
         <StatItem>
           <StatLabel>Market Capitalization</StatLabel>

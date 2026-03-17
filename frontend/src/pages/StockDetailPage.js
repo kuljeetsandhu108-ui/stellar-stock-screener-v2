@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
@@ -315,7 +315,7 @@ const StockDetailPage = () => {
             <TabPanel label="Shareholding">
                 <Shareholding 
                     shareholdingData={data.shareholding}
-                    historicalStatements={data.annual_revenue_and_profit}
+                    historicalStatements={data.annual_balance_sheets}
                     shareholdingBreakdown={data.shareholding_breakdown}
                 />
             </TabPanel>

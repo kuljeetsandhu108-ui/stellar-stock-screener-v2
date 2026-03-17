@@ -1,4 +1,4 @@
-import os
+﻿import os
 import requests
 import json
 from datetime import datetime, timedelta
@@ -272,8 +272,77 @@ def parse_metrics_from_fundamentals(fund_data: dict):
     }
 
 def parse_financials(fund_data: dict, type_key: str, period: str = 'yearly'):
-    """Parses Financials with Fuzzy Key Matching."""
-    if not fund_data: return []
+    """Statement-Aware Financial Parser with Exact EODHD Key Mapping"""
+    if not fund_data: return[]
+    try:
+        cat, sub = type_key.split('::')
+        stmts = fund_data.get(cat, {}).get(sub, {}).get(period, {})
+        
+        formatted =[]
+        for date_str, data in stmts.items():
+            if not data: continue
+            
+            def sf(keys): 
+                if isinstance(keys, str): keys = [keys]
+                for k in keys:
+                    val = data.get(k)
+                    if val not in[None, 'None', 'NA']:
+                        try: return float(val)
+                        except: pass
+                return None
+
+            row = {
+                "date": date_str,
+                "calendarYear": date_str[:4]
+            }
+            
+            # STRICT SEGREGATION: Only pull fields relevant to the requested statement
+            if sub == 'Income_Statement':
+                fields = {
+                    "revenue": sf(['totalRevenue', 'TotalRevenue', 'revenue']),
+                    "costOfRevenue": sf(['costOfRevenue', 'CostOfRevenue']),
+                    "grossProfit": sf(['grossProfit', 'GrossProfit']),
+                    "ebitda": sf(['ebitda', 'Ebitda']),
+                    "operatingIncome": sf(['operatingIncome', 'OperatingIncome']),
+                    "interestExpense": sf(['interestExpense', 'InterestExpense']),
+                    "netIncome": sf(['netIncome', 'NetIncome'])
+                }
+            elif sub == 'Balance_Sheet':
+                fields = {
+                    "totalAssets": sf(['totalAssets', 'TotalAssets']),
+                    "totalCurrentAssets": sf(['totalCurrentAssets', 'TotalCurrentAssets']),
+                    "cashAndEquivalents": sf(['cash', 'Cash', 'cashAndEquivalents']),
+                    "totalLiabilities": sf(['totalLiab', 'TotalLiab', 'totalLiabilities']),
+                    "totalCurrentLiabilities": sf(['totalCurrentLiabilities', 'TotalCurrentLiabilities']),
+                    "longTermDebt": sf(['longTermDebt', 'LongTermDebt']),
+                    "netDebt": sf(['netDebt', 'NetDebt']),
+                    "totalStockholdersEquity": sf(['totalStockholderEquity', 'TotalStockholderEquity']),
+                    "sharesOutstanding": sf(['commonStockSharesOutstanding', 'CommonStockSharesOutstanding', 'weightedAverageShsOut'])
+                }
+            elif sub == 'Cash_Flow':
+                fields = {
+                    "operatingCashFlow": sf(['totalCashFromOperatingActivities']),
+                    "investingCashFlow": sf(['totalCashFlowsFromInvestingActivities']),
+                    "financingCashFlow": sf(['totalCashFromFinancingActivities']),
+                    "capitalExpenditure": sf(['capitalExpenditures', 'CapitalExpenditures']),
+                    "freeCashFlow": sf(['freeCashFlow', 'FreeCashFlow']),
+                    "dividendsPaid": sf(['dividendsPaid', 'DividendsPaid'])
+                }
+            else:
+                fields = {}
+            
+            # Attach only valid, non-null fields to the row
+            for k, v in fields.items():
+                if v is not None:
+                    row[k] = v
+                    
+            # Ensure the row actually has financial data (not just a date)
+            if len(row) > 2:
+                formatted.append(row)
+            
+        formatted.sort(key=lambda x: x['date'], reverse=True)
+        return formatted[:10]
+    except: return []
     try:
         cat, sub = type_key.split('::')
         stmts = fund_data.get(cat, {}).get(sub, {}).get(period, {})
@@ -410,3 +479,4 @@ def parse_holders(fund_data: dict):
 
     except:
         return [{"holder": "Data Aggregated", "shares": 0}]
+

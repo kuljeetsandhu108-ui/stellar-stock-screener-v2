@@ -210,7 +210,7 @@ async def get_swot_analysis(symbol: str, request_data: SwotRequest = Body(...)):
     if cached: return cached
     
     # GRAB EXISTING DATA FROM CACHE (0 API Calls!)
-    master_data_key = f"all_data_v27_{symbol}"
+    master_data_key = f"all_data_v30_{symbol}"
     master_data = await redis_service.redis_client.get_cache(master_data_key)
     
     # GENERATE SWOT VIA MATH ENGINE
@@ -236,7 +236,7 @@ async def get_fundamental_analysis(symbol: str, d: FundamentalRequest = Body(...
     if cached: return cached
     
     # ZERO API CALLS - Use Cached Master Data
-    master_data_key = f"all_data_v27_{symbol}"
+    master_data_key = f"all_data_v30_{symbol}"
     master_data = await redis_service.redis_client.get_cache(master_data_key)
     
     from ..services import strategy_engine
@@ -253,7 +253,7 @@ async def get_canslim_analysis(symbol: str, d: CanslimRequest = Body(...)):
     if cached: return cached
     
     # ZERO API CALLS - Use Cached Master Data
-    master_data_key = f"all_data_v27_{symbol}"
+    master_data_key = f"all_data_v30_{symbol}"
     master_data = await redis_service.redis_client.get_cache(master_data_key)
     
     from ..services import strategy_engine
@@ -348,6 +348,37 @@ RATIONALE: The data provider does not supply enough candles for this asset."""}
     analysis = quant_engine.generate_algorithmic_report(symbol, request_data.timeframe, technicals, pivots, mas)
     return {"analysis": analysis}
 
+
+@router.post("/{symbol}/technical-score")
+async def get_technical_score(symbol: str, request_data: TimeframeRequest = Body(...)):
+    """Dedicated endpoint for the Overall Sentiment Timeframe Dropdown"""
+    source, ticker = identify_asset_class(symbol)
+    
+    is_intraday_request = request_data.timeframe.upper() in["5M", "15M", "30M", "1H", "4H"]
+    lookup_range = "5M" if is_intraday_request else request_data.timeframe
+    
+    cache_key = f"chart_base_v16_{symbol}_{lookup_range}"
+    chart_list = await redis_service.redis_client.get_cache(cache_key)
+
+    if not chart_list:
+        if source == "FMP":
+            chart_list = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, range_type=lookup_range)
+            if not chart_list: chart_list = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, request_data.timeframe)
+        else:
+            chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, range_type=lookup_range)
+        
+        if chart_list:
+             await redis_service.redis_client.set_cache(cache_key, chart_list, 300)
+
+    if not chart_list: return {"score": 50, "label": "Neutral"}
+    
+    if is_intraday_request and request_data.timeframe.upper() != "5M":
+         chart_list = technical_service.resample_chart_data(chart_list, request_data.timeframe)
+
+    df = pd.DataFrame(chart_list)
+    techs = technical_service.calculate_technical_indicators(df)
+    sentiment = sentiment_service.calculate_technical_sentiment(techs)
+    return sentiment
 
 @router.post("/{symbol}/technicals-data")
 async def get_technicals_data(symbol: str, request_data: TimeframeRequest = Body(...)):
@@ -525,7 +556,7 @@ async def get_stock_chart(symbol: str, range: str = "1D"):
 
 @router.get("/{symbol}/all")
 async def get_all_stock_data(symbol: str):
-    cache_key = f"all_data_v27_{symbol}"
+    cache_key = f"all_data_v30_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
 
@@ -796,4 +827,9 @@ async def get_dynamic_screener(screener_key: str):
     if results and len(results) > 0:
         await redis_service.redis_client.set_cache(cache_key, results, 300)
     return results or[]
+
+
+
+
+
 

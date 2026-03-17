@@ -28,17 +28,19 @@ const MainContent = styled.div`display: flex; flex-direction: column; align-item
 const Title = styled.h1`font-size: 2.8rem; font-weight: 900; background: linear-gradient(to right, #fff, #a5b4fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 1rem; animation: ${fadeIn} 1s ease-out; letter-spacing: -1.5px; @media (min-width: 768px) { font-size: 4.5rem; }`;
 const Subtitle = styled.p`font-size: 1rem; color: var(--color-text-secondary); margin-bottom: 3.5rem; max-width: 650px; animation: ${fadeIn} 1.5s ease-out; line-height: 1.8;`;
 
-const SearchSection = styled.div`width: 100%; max-width: 700px; position: relative; animation: ${fadeIn} 1.8s ease-out; z-index: 50;`;
+// SEARCH STYLES
+const SearchSection = styled.div`width: 100%; max-width: 700px; position: relative; animation: ${fadeIn} 1.8s ease-out; z-index: 999;`;
 const SearchWrapper = styled.div`position: relative; width: 100%; display: flex; align-items: center; transition: transform 0.3s ease; &:hover { transform: scale(1.01); }`;
 const SearchInput = styled.input`width: 100%; padding: 20px 30px; padding-right: 80px; font-size: 1.1rem; color: #fff; background: rgba(22, 27, 34, 0.6); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 60px; outline: none; box-shadow: 0 15px 40px rgba(0,0,0,0.4); &:focus { border-color: var(--color-primary); }`;
 const SearchButton = styled.button`position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: linear-gradient(135deg, var(--color-primary), #3b82f6); color: white; border: none; border-radius: 50%; width: 54px; height: 54px; cursor: pointer; display: flex; align-items: center; justify-content: center;`;
 
-const SuggestionsList = styled.ul`position: absolute; top: 110%; left: 15px; right: 15px; background: rgba(22, 27, 34, 0.95); backdrop-filter: blur(25px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; box-shadow: 0 25px 50px rgba(0,0,0,0.6); list-style: none; padding: 5px; max-height: 400px; overflow-y: auto; text-align: left;`;
-const SuggestionItem = styled.li`padding: 16px 20px; border-radius: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; &:hover { background-color: rgba(88, 166, 255, 0.15); }`;
+const SuggestionsList = styled.ul`position: absolute; top: calc(100% + 12px); left: 15px; right: 15px; background: #0D1117; border: 1px solid var(--color-border); border-radius: 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.9); z-index: 9999; list-style: none; padding: 8px; max-height: 350px; overflow-y: auto; text-align: left; margin: 0;`;
+const SuggestionItem = styled.li`padding: 12px 16px; border-radius: 10px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: all 0.2s ease; &:hover { background-color: rgba(88, 166, 255, 0.15); transform: translateX(4px); }`;
+const StatusItem = styled.li`padding: 16px; color: #8B949E; text-align: center; font-size: 0.95rem; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 10px;`;
 
 const SectionLabel = styled.div`display: flex; align-items: center; gap: 15px; color: var(--color-text-secondary); margin: 4rem 0 2rem 0; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 2px; width: 100%; max-width: 1200px; &::before, &::after { content: ''; height: 1px; flex-grow: 1; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent); }`;
 
-// --- NEW LIVE SCREENER UI ---
+// SCREENER STYLES
 const ScreenerContainer = styled.div`width: 100%; max-width: 1200px; margin-top: 4rem; animation: ${fadeIn} 2s ease-out;`;
 const ScreenerTabs = styled.div`display: flex; gap: 1rem; margin-bottom: 1.5rem; overflow-x: auto; padding-bottom: 0.5rem; &::-webkit-scrollbar { display: none; }`;
 const ScreenerTab = styled.button`
@@ -48,12 +50,8 @@ const ScreenerTab = styled.button`
   padding: 10px 20px; border-radius: 30px; font-weight: 700; cursor: pointer; transition: all 0.3s ease; white-space: nowrap;
   &:hover { border-color: var(--color-primary); color: #fff; }
 `;
-const StockCarousel = styled.div`
-  display: flex; gap: 1.5rem; overflow-x: auto; padding: 1rem 0.5rem; width: 100%;
-  &::-webkit-scrollbar { height: 6px; }
-  &::-webkit-scrollbar-thumb { background: #30363D; border-radius: 3px; }
-`;
 
+const StockCarousel = styled.div`display: flex; gap: 1.5rem; overflow-x: auto; padding: 1rem 0.5rem; width: 100%; &::-webkit-scrollbar { height: 6px; } &::-webkit-scrollbar-thumb { background: #30363D; border-radius: 3px; }`;
 const ScreenerCard = styled.div`
   min-width: 240px; background: linear-gradient(145deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.95));
   border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 1.5rem; text-align: left;
@@ -71,7 +69,7 @@ const CardVol = styled.div`font-size: 0.75rem; color: #8B949E; margin-top: 15px;
 
 const UploadGrid = styled.div`display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; width: 100%; max-width: 1200px; padding: 0 1rem; @media (max-width: 1024px) { grid-template-columns: 1fr; }`;
 
-// --- VISION LABS STYLES ---
+// VISION LABS STYLES
 const VisionContainer = styled.div`width: 100%; max-width: 1200px; margin-bottom: 4rem; padding: 0 1rem; animation: ${fadeIn} 2.2s ease-out;`;
 const VisionCard = styled.div`background: linear-gradient(165deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.95)); border: 1px solid rgba(88, 166, 255, 0.3); border-radius: 24px; padding: 4rem 2rem; text-align: center; position: relative; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4); transition: all 0.4s ease; &:hover { border-color: #58A6FF; box-shadow: 0 20px 60px rgba(88, 166, 255, 0.15); }`;
 const VisionGlow = styled.div`position: absolute; top: -50%; left: 50%; transform: translateX(-50%); width: 80%; height: 100%; background: radial-gradient(circle, rgba(88, 166, 255, 0.15) 0%, transparent 70%); pointer-events: none; z-index: 0;`;
@@ -80,22 +78,68 @@ const VisionTitle = styled.h2`font-size: 2.2rem; margin-bottom: 1rem; color: #ff
 const VisionDesc = styled.p`color: #8B949E; font-size: 1.1rem; max-width: 700px; margin: 0 auto 3rem auto; line-height: 1.7; position: relative; z-index: 1;`;
 const DeepScanButton = styled.label`background: #58A6FF; color: #0D1117; padding: 16px 40px; border-radius: 50px; font-weight: 800; font-size: 1.1rem; cursor: pointer; display: inline-flex; align-items: center; gap: 12px; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); position: relative; z-index: 2; box-shadow: 0 0 25px rgba(88, 166, 255, 0.4); &:hover { transform: translateY(-3px) scale(1.05); background: #fff; box-shadow: 0 0 40px rgba(255, 255, 255, 0.6); }`;
 
+
 const HomePage = () => {
   const [query, setQuery] = useState('');
-  const[suggestions, setSuggestions] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const[isSearching, setIsSearching] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const[isAutocompleteLoading, setIsAutocompleteLoading] = useState(false);
+  
   const navigate = useNavigate();
   const searchRef = useRef(null);
 
   // SINGLE SCREENER STATE
-  const [screenerConfigs, setScreenerConfigs] = useState([]); const[activeScreener, setActiveScreener] = useState(""); const [screenerData, setScreenerData] = useState([]);
+  const [screenerConfigs, setScreenerConfigs] = useState([]);
+  const[activeScreener, setActiveScreener] = useState("");
+  const[screenerData, setScreenerData] = useState([]);
   const [loadingScreener, setLoadingScreener] = useState(true);
-  const[isVisionLoading, setIsVisionLoading] = useState(false);
+  const [isVisionLoading, setIsVisionLoading] = useState(false);
 
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+        if (searchRef.current && !searchRef.current.contains(event.target)) {
+            setShowSuggestions(false);
+        }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [searchRef]);
+
+  // Robust Autocomplete Hook
+  useEffect(() => {
+    if (query.length < 2) { 
+        setSuggestions([]); 
+        setShowSuggestions(false); 
+        setIsAutocompleteLoading(false);
+        return; 
+    }
+    
+    setIsAutocompleteLoading(true);
+    setShowSuggestions(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await axios.get('/api/stocks/autocomplete?query=' + query);
+        if (res.data) {
+            setSuggestions(res.data);
+        } else {
+            setSuggestions([]);
+        }
+      } catch (e) {
+          setSuggestions([]);
+      } finally {
+          setIsAutocompleteLoading(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  // Screener Hooks
   useEffect(() => {
     let isMounted = true;
-    // 1. Fetch available screeners
     axios.get('/api/stocks/screener/configs').then(res => {
         if(isMounted && res.data.length > 0) {
             setScreenerConfigs(res.data);
@@ -109,7 +153,6 @@ const HomePage = () => {
     if(!activeScreener) return;
     let isMounted = true;
     setLoadingScreener(true);
-    // 2. Fetch data for active screener
     axios.get(`/api/stocks/screener/${activeScreener}`)
         .then(res => { if(isMounted) setScreenerData(res.data ||[]); })
         .catch(() => { if(isMounted) setScreenerData([]); })
@@ -147,26 +190,50 @@ const HomePage = () => {
         <Title>Stellar Stock Screener</Title>
         <Subtitle>The Ultimate Financial Intelligence Platform. Leveraging Quantitative Models for Real-Time Trade Discovery.</Subtitle>
         
+        {/* ROBUST SEARCH COMPONENT */}
         <SearchSection ref={searchRef}>
           <SearchWrapper>
-            <SearchInput type="text" placeholder="Search (e.g. Reliance, Bitcoin, Gold)..." value={query} onChange={(e) => setQuery(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && performSearch()} onFocus={() => query.length >= 2 && setShowSuggestions(true)} disabled={isSearching} />
+            <SearchInput 
+                type="text" 
+                placeholder="Search (e.g. Reliance, Bitcoin, Gold)..." 
+                value={query} 
+                onChange={(e) => setQuery(e.target.value)} 
+                onKeyPress={(e) => e.key === 'Enter' && performSearch()} 
+                onFocus={() => query.length >= 2 && setShowSuggestions(true)} 
+                disabled={isSearching} 
+            />
             <SearchButton onClick={() => performSearch()} disabled={isSearching}>
               {isSearching ? <FaSpinner className="fa-spin" size={20} /> : <FaSearch size={20} />}
             </SearchButton>
           </SearchWrapper>
-          {showSuggestions && (
+          
+          {showSuggestions && query.length >= 2 && (
             <SuggestionsList>
-              {suggestions.map((item) => (
-                <SuggestionItem key={item.symbol} onClick={() => { setQuery(item.symbol); performSearch(item.symbol); }}>
-                  <div style={{display:'flex', flexDirection:'column'}}><span style={{fontWeight: 700, color: 'var(--color-primary)'}}>{item.symbol}</span><span style={{fontSize: '0.8rem', color: '#8b949e'}}>{item.name}</span></div>
-                  <span style={{fontSize: '0.7rem', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '12px', color: '#8b949e'}}>{item.exchangeShortName || 'INTL'}</span>
-                </SuggestionItem>
-              ))}
+              {isAutocompleteLoading ? (
+                 <StatusItem>
+                     <FaSpinner className="fa-spin" /> Scanning Markets...
+                 </StatusItem>
+              ) : suggestions.length > 0 ? (
+                suggestions.map((item) => (
+                  <SuggestionItem key={item.symbol} onClick={() => { setQuery(item.symbol); performSearch(item.symbol); setShowSuggestions(false); }}>
+                    <div style={{display:'flex', flexDirection:'column'}}>
+                        <span style={{fontWeight: 700, color: 'var(--color-primary)'}}>{item.symbol}</span>
+                        <span style={{fontSize: '0.8rem', color: '#8b949e'}}>{item.name}</span>
+                    </div>
+                    <span style={{fontSize: '0.7rem', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '12px', color: '#8b949e'}}>
+                        {item.exchangeShortName || 'INTL'}
+                    </span>
+                  </SuggestionItem>
+                ))
+              ) : (
+                 <StatusItem>
+                     No stocks found matching "{query}"
+                 </StatusItem>
+              )}
             </SuggestionsList>
           )}
         </SearchSection>
 
-        {/* ðŸ’¥ DEDICATED LIVE SCREENER SECTION ðŸ’¥ */}
         <ScreenerContainer>
             <SectionLabel>Institutional Radar (Live)</SectionLabel>
             
@@ -195,7 +262,7 @@ const HomePage = () => {
                     {screenerData.map((stock, i) => (
                         <ScreenerCard key={i} onClick={() => navigate('/stock/' + encodeURIComponent(stock.nsecode + '.NS'))}>
                             <CardSymbol>{stock.nsecode}</CardSymbol>
-                            <CardPrice>₹{stock.close}</CardPrice>
+                            <CardPrice>{'\u20B9'}{stock.close}</CardPrice>
                             <CardChange $isPositive={stock.per_chg >= 0}>
                                 {stock.per_chg >= 0 ? <FaArrowUp size={10}/> : null} {stock.per_chg}%
                             </CardChange>
@@ -235,4 +302,3 @@ const HomePage = () => {
   );
 };
 export default HomePage;
-

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import styled, { keyframes, css } from 'styled-components';
 import ConnectBroker from './ConnectBroker';
 
@@ -192,17 +192,17 @@ const getCurrencySymbol = (currencyCode, symbol) => {
     if (symbol) {
         const s = symbol.toUpperCase();
         if (s.includes('.NS') || s.includes('.BO') || s.includes('NIFTY') || s.includes('SENSEX') || s.includes('BANKNIFTY')) {
-            return '₹';
+            return '\u20B9';
         }
     }
     
     // 2. Fallback: Currency Code
     switch (currencyCode) {
-        case 'INR': return '₹';
+        case 'INR': return '\u20B9';
         case 'USD': return '$';
-        case 'JPY': return '¥';
-        case 'EUR': return '€';
-        case 'GBP': return '£';
+        case 'JPY': return '\u00A5';
+        case 'EUR': return '\u20AC';
+        case 'GBP': return '\u00A3';
         default: return '$';
     }
 };
@@ -212,19 +212,12 @@ const getCurrencySymbol = (currencyCode, symbol) => {
 // ==========================================
 
 const StockHeader = ({ profile, quote: initialQuote }) => {
-  // State for Real-Time Data
-  const [liveData, setLiveData] = useState({
-    price: 0,
-    change: 0,
-    pct: 0
-  });
-  
-  const [flash, setFlash] = useState(null); // 'up', 'down', or null
+  const [liveData, setLiveData] = useState({ price: 0, change: 0, pct: 0 });
+  const [flash, setFlash] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const prevPriceRef = useRef(0);
   const wsRef = useRef(null);
 
-  // --- SAFE INITIALIZATION ---
   useEffect(() => {
     if (initialQuote) {
         setLiveData({ 
@@ -236,23 +229,18 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
     }
   }, [initialQuote]);
   
-  // --- REAL WEBSOCKET ENGINE WITH HEARTBEAT ---
   useEffect(() => {
-    // Crash Guard: Don't run if symbol is missing
     const symbol = profile?.symbol;
     if (!symbol) return;
 
-    // 1. Construct WebSocket URL Dynamically (Local vs Production)
     const apiUrl = process.env.REACT_APP_API_URL;
     let wsUrl = "";
     
     if (apiUrl) {
-         // Production (Vercel -> Railway)
          const host = apiUrl.replace(/^https?:\/\//, '');
          const proto = apiUrl.includes('https') ? 'wss://' : 'ws://';
          wsUrl = `${proto}${host}/ws/live/${symbol}`;
     } else {
-         // Default Localhost
          const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
          const wsHost = isLocal ? '127.0.0.1:8000' : window.location.host;
          const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -263,7 +251,6 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
 
     const connect = () => {
         try {
-            // Close existing connection if any
             if (wsRef.current) wsRef.current.close();
             
             const ws = new WebSocket(wsUrl);
@@ -271,22 +258,17 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
 
             ws.onopen = () => {
                 setIsConnected(true);
-                // --- HEARTBEAT ENGINE ---
-                // Send "ping" every 10s to keep connection alive on Railway
                 pingInterval = setInterval(() => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send("ping");
-                    }
+                    if (ws.readyState === WebSocket.OPEN) ws.send("ping");
                 }, 10000); 
             };
 
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    const newPrice = Number(data.price); // Force Number
+                    const newPrice = Number(data.price); 
                     
                     if (newPrice && newPrice !== prevPriceRef.current) {
-                        // Flash Logic
                         if (newPrice > prevPriceRef.current) setFlash('up');
                         else if (newPrice < prevPriceRef.current) setFlash('down');
                         
@@ -297,17 +279,24 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
                             change: Number(data.change) || 0,
                             pct: Number(data.percent_change) || 0
                         });
+                        
                         prevPriceRef.current = newPrice;
+                        
+                        // 🚀 BROADCAST LIVE TICK TO THE ENTIRE UI APP
+                        window.dispatchEvent(new CustomEvent('livePriceTick', { 
+                            detail: { 
+                                price: newPrice, 
+                                change: Number(data.change) || 0, 
+                                pct: Number(data.percent_change) || 0 
+                            } 
+                        }));
                     }
-                } catch (e) {
-                    // Ignore parsing errors
-                }
+                } catch (e) {}
             };
 
             ws.onclose = () => {
                 setIsConnected(false);
                 if (pingInterval) clearInterval(pingInterval);
-                // Auto Reconnect if connection drops
                 setTimeout(connect, 3000);
             };
         } catch(e) {
@@ -317,20 +306,17 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
 
     connect();
 
-    // Cleanup on unmount
     return () => {
         if (pingInterval) clearInterval(pingInterval);
         if (wsRef.current) wsRef.current.close();
     };
   }, [profile?.symbol]);
 
-  // --- RENDER SAFEGUARDS ---
-  if (!profile) return null; // Don't render until data exists
+  if (!profile) return null; 
   
   const symbol = profile.symbol || "";
   const currencySymbol = getCurrencySymbol(profile.currency, symbol);
   
-  // Safe Formatting (Prevents .toFixed crash)
   const safePrice = Number(liveData.price) || 0;
   const safeChange = Number(liveData.change) || 0;
   const safePct = Number(liveData.pct) || 0;
@@ -340,28 +326,16 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
   const formattedChange = safeChange.toFixed(2);
   const formattedPct = safePct.toFixed(2);
 
-  // Check if Indian stock (to show button)
-  const isIndian = symbol.includes('.NS') || symbol.includes('.BO') || symbol.includes('NIFTY') || symbol.includes('SENSEX');
-
   return (
     <HeaderContainer>
       <CompanyInfo>
         {profile.image ? (
-            <CompanyLogo 
-                src={profile.image} 
-                alt={`${profile.companyName} logo`} 
-                onError={(e) => e.target.style.display='none'} 
-            />
+            <CompanyLogo src={profile.image} alt={`${profile.companyName} logo`} onError={(e) => e.target.style.display='none'} />
         ) : null}
         <TextContainer>
           <TopRow>
-            <CompanyName>
-                {profile.companyName}
-            </CompanyName>
-            {/* --- CONNECT BROKER BUTTON --- */}
-            {/* {isIndian && <ConnectBroker />} */} 
+            <CompanyName>{profile.companyName}</CompanyName>
           </TopRow>
-          
           <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
              <CompanySymbol>{symbol}</CompanySymbol>
              {isConnected && (
