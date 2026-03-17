@@ -4,7 +4,8 @@ import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
 import { 
   FaSearch, FaChartBar, FaGlobeAmericas, FaSpinner, 
-  FaBitcoin, FaBrain, FaMicrochip, FaFileUpload, FaArrowUp 
+  FaBitcoin, FaBrain, FaMicrochip, FaFileUpload, FaArrowUp,
+  FaChevronLeft, FaChevronRight 
 } from 'react-icons/fa';
 import IndicesBanner from '../components/Indices/IndicesBanner';
 import ChartUploader from '../components/HomePage/ChartUploader';
@@ -51,7 +52,48 @@ const ScreenerTab = styled.button`
   &:hover { border-color: var(--color-primary); color: #fff; }
 `;
 
-const StockCarousel = styled.div`display: flex; gap: 1.5rem; overflow-x: auto; padding: 1rem 0.5rem; width: 100%; &::-webkit-scrollbar { height: 6px; } &::-webkit-scrollbar-thumb { background: #30363D; border-radius: 3px; }`;
+const CarouselWrapper = styled.div`
+  position: relative;
+  width: 100%;
+`;
+
+const ScrollArrow = styled.button`
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(22, 27, 34, 0.95);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+  transition: all 0.2s ease;
+  backdrop-filter: blur(4px);
+  
+  &:hover {
+    background: var(--color-primary);
+    color: #fff;
+    border-color: var(--color-primary);
+    transform: translateY(-50%) scale(1.1);
+  }
+
+  &.left { left: -15px; }
+  &.right { right: -15px; }
+  
+  @media (max-width: 768px) {
+      width: 34px; height: 34px;
+      &.left { left: 5px; }
+      &.right { right: 5px; }
+  }
+`;
+
+const StockCarousel = styled.div`display: flex; gap: 1.5rem; overflow-x: auto; scroll-behavior: smooth; padding: 1rem 0.5rem; width: 100%; &::-webkit-scrollbar { height: 6px; } &::-webkit-scrollbar-thumb { background: #30363D; border-radius: 3px; }`;
 const ScreenerCard = styled.div`
   min-width: 240px; background: linear-gradient(145deg, rgba(22, 27, 34, 0.8), rgba(13, 17, 23, 0.95));
   border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 1.5rem; text-align: left;
@@ -78,7 +120,6 @@ const VisionTitle = styled.h2`font-size: 2.2rem; margin-bottom: 1rem; color: #ff
 const VisionDesc = styled.p`color: #8B949E; font-size: 1.1rem; max-width: 700px; margin: 0 auto 3rem auto; line-height: 1.7; position: relative; z-index: 1;`;
 const DeepScanButton = styled.label`background: #58A6FF; color: #0D1117; padding: 16px 40px; border-radius: 50px; font-weight: 800; font-size: 1.1rem; cursor: pointer; display: inline-flex; align-items: center; gap: 12px; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); position: relative; z-index: 2; box-shadow: 0 0 25px rgba(88, 166, 255, 0.4); &:hover { transform: translateY(-3px) scale(1.05); background: #fff; box-shadow: 0 0 40px rgba(255, 255, 255, 0.6); }`;
 
-
 const HomePage = () => {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
@@ -95,8 +136,10 @@ const HomePage = () => {
   const[screenerData, setScreenerData] = useState([]);
   const [loadingScreener, setLoadingScreener] = useState(true);
   const [isVisionLoading, setIsVisionLoading] = useState(false);
+  
+  // Carousel Ref for Buttons
+  const carouselRef = useRef(null);
 
-  // Close dropdown on outside click
   useEffect(() => {
     const handleClickOutside = (event) => {
         if (searchRef.current && !searchRef.current.contains(event.target)) {
@@ -107,7 +150,6 @@ const HomePage = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [searchRef]);
 
-  // Robust Autocomplete Hook
   useEffect(() => {
     if (query.length < 2) { 
         setSuggestions([]); 
@@ -137,7 +179,6 @@ const HomePage = () => {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Screener Hooks
   useEffect(() => {
     let isMounted = true;
     axios.get('/api/stocks/screener/configs').then(res => {
@@ -179,6 +220,14 @@ const HomePage = () => {
           const res = await axios.post('/api/charts/analyze-pure', formData);
           navigate('/vision-result', { state: { analysis: res.data.analysis, image: URL.createObjectURL(file) } });
       } catch (err) { setIsVisionLoading(false); }
+  };
+
+  // Scroll function triggered by arrows
+  const scrollScreener = (dir) => {
+      if (carouselRef.current) {
+          const amount = window.innerWidth > 768 ? 600 : 250;
+          carouselRef.current.scrollBy({ left: dir === 'left' ? -amount : amount, behavior: 'smooth' });
+      }
   };
 
   return (
@@ -258,18 +307,22 @@ const HomePage = () => {
             {loadingScreener ? (
                 <div style={{color: 'var(--color-primary)', marginTop: '2rem'}}><FaSpinner className="fa-spin" size={24} /></div>
             ) : screenerData && screenerData.length > 0 ? (
-                <StockCarousel>
-                    {screenerData.map((stock, i) => (
-                        <ScreenerCard key={i} onClick={() => navigate('/stock/' + encodeURIComponent(stock.nsecode + '.NS'))}>
-                            <CardSymbol>{stock.nsecode}</CardSymbol>
-                            <CardPrice>{'\u20B9'}{stock.close}</CardPrice>
-                            <CardChange $isPositive={stock.per_chg >= 0}>
-                                {stock.per_chg >= 0 ? <FaArrowUp size={10}/> : null} {stock.per_chg}%
-                            </CardChange>
-                            <CardVol>Vol: {(stock.volume / 1000000).toFixed(2)}M</CardVol>
-                        </ScreenerCard>
-                    ))}
-                </StockCarousel>
+                <CarouselWrapper>
+                    <ScrollArrow className="left" onClick={() => scrollScreener('left')}><FaChevronLeft size={14} /></ScrollArrow>
+                    <StockCarousel ref={carouselRef}>
+                        {screenerData.map((stock, i) => (
+                            <ScreenerCard key={i} onClick={() => navigate('/stock/' + encodeURIComponent(stock.nsecode + '.NS'))}>
+                                <CardSymbol>{stock.nsecode}</CardSymbol>
+                                <CardPrice>{'\u20B9'}{stock.close}</CardPrice>
+                                <CardChange $isPositive={stock.per_chg >= 0}>
+                                    {stock.per_chg >= 0 ? <FaArrowUp size={10}/> : null} {stock.per_chg}%
+                                </CardChange>
+                                <CardVol>Vol: {(stock.volume / 1000000).toFixed(2)}M</CardVol>
+                            </ScreenerCard>
+                        ))}
+                    </StockCarousel>
+                    <ScrollArrow className="right" onClick={() => scrollScreener('right')}><FaChevronRight size={14} /></ScrollArrow>
+                </CarouselWrapper>
             ) : (
                 <div style={{color: '#8B949E', padding: '2rem', border: '1px dashed #30363D', borderRadius: '12px'}}>
                     No stocks currently matching parameters for this strategy.

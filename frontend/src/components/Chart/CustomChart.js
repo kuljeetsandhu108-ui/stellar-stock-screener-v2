@@ -86,21 +86,24 @@ const CustomChart = ({ symbol }) => {
   const fyersEngineRef = useRef(null);
 
   // Indicator Refs
-  const priceLinesRef = useRef([]); 
   const smartSRSeriesRef = useRef([]);
   const smartSRPriceLinesRef = useRef([]);
-  const smcSeriesRef = useRef([]); // Critical fix for the SMC arrays
-
-  // Drawing Refs
+  const smcSeriesRef = useRef([]); 
+  
+  // Drawing Engine Refs (Crash-Proofed)
   const drawingLinesRef = useRef([]); 
   const drawingSeriesRef = useRef([]); 
-  const previewObjectsRef = useRef([]); 
+  const previewTrendRef = useRef(null); 
+  const previewPriceLinesRef = useRef([]); 
+
   const lastCandleRef = useRef(null); 
   const isMounted = useRef(true);
   
   // Component State
-  const [timeframe, setTimeframe] = useState('1D'); 
-  const[chartData, setChartData] = useState([]);
+  const[timeframe, setTimeframe] = useState('1D'); 
+  const [chartData, setChartData] = useState([]);
+  const chartDataRef = useRef([]); 
+  
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeIndicators, setActiveIndicators] = useState([]);
   const [isLive, setIsLive] = useState(false);
@@ -124,7 +127,6 @@ const CustomChart = ({ symbol }) => {
   const [param3, setParam3] = useState(9);
 
   const isIndian = symbol?.includes('.NS') || symbol?.includes('.BO') || symbol?.includes('NIFTY') || symbol?.includes('SENSEX') || symbol?.includes('BANK');
-
   const getBaseApiUrl = () => process.env.REACT_APP_API_URL || '';
 
   const istFormatter = (timestamp) => {
@@ -137,6 +139,8 @@ const CustomChart = ({ symbol }) => {
       }
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
+
+  useEffect(() => { chartDataRef.current = chartData; }, [chartData]);
 
   useEffect(() => { 
       drawModeRef.current = drawMode; 
@@ -154,19 +158,83 @@ const CustomChart = ({ symbol }) => {
     return output;
   };
 
+  // --- DRAWING ENGINE: HIGH SPEED SAFE PREVIEW ---
+  const handleMultiClickTool = (price, time, requiredClicks, callback) => { 
+      setTempPoints(prev => { 
+          const newPoints =[...prev, { price, time }]; 
+          if (newPoints.length === requiredClicks) { 
+              clearPreview(); 
+              callback(newPoints); 
+              setDrawMode('cursor'); 
+              return[]; 
+          } 
+          return newPoints; 
+      }); 
+  };
+  
+  const clearPreview = () => { 
+      // Safely hide the preview vector without deleting array reference
+      if (previewTrendRef.current) {
+          try { previewTrendRef.current.setData([]); } catch(e){}
+      }
+      if (previewPriceLinesRef.current.length > 0 && candleSeriesRef.current) {
+          previewPriceLinesRef.current.forEach(line => { try { candleSeriesRef.current.removePriceLine(line); } catch(e){} });
+          previewPriceLinesRef.current =[];
+      }
+  };
+  
+  const drawPreviewShape = (type, p1, p2, chart, series) => { 
+      if (type === 'trend') { 
+          if (previewPriceLinesRef.current.length > 0 && series) {
+              previewPriceLinesRef.current.forEach(line => { try { series.removePriceLine(line); } catch(e){} });
+              previewPriceLinesRef.current =[];
+          }
+          
+          // Strict Math Guards to prevent Lightweight Charts crash
+          const t1 = Math.floor(p1.time);
+          const t2 = Math.floor(p2.time);
+          if (t1 === t2 || isNaN(t1) || isNaN(t2)) return; // Prevents Maximum Call Stack
+
+          const val1 = p1.time < p2.time ? p1.price : p2.price;
+          const val2 = p1.time < p2.time ? p2.price : p1.price;
+          const sortedTime1 = Math.min(t1, t2);
+          const sortedTime2 = Math.max(t1, t2);
+
+          if (previewTrendRef.current) {
+              try {
+                  previewTrendRef.current.setData([
+                      { time: sortedTime1, value: val1 }, 
+                      { time: sortedTime2, value: val2 }
+                  ]);
+              } catch(e){}
+          }
+      } else {
+          clearPreview();
+          if (type === 'fib') { 
+              const low = Math.min(p1.price, p2.price); 
+              const high = Math.max(p1.price, p2.price); 
+              const diff = high - low; 
+              const levels =[0, 0.382, 0.5, 0.618, 1]; 
+              levels.forEach(lvl => { 
+                  const line = series.createPriceLine({ price: low + (diff * lvl), color: '#FFD700', lineWidth: 1, lineStyle: 2, axisLabelVisible: false }); 
+                  previewPriceLinesRef.current.push(line); 
+              }); 
+          } else if (type === 'longshort') { 
+              const l1 = series.createPriceLine({ price: p1.price, color: '#888', title: 'ENTRY', axisLabelVisible: false }); 
+              const l2 = series.createPriceLine({ price: p2.price, color: '#3FB950', title: 'TARGET', axisLabelVisible: false }); 
+              previewPriceLinesRef.current.push(l1, l2); 
+          }
+      }
+  };
+
   // --- CHART INITIALIZATION ---
   useEffect(() => {
     isMounted.current = true;
     if (!chartContainerRef.current) return;
     chartContainerRef.current.innerHTML = '';
     
-    priceLinesRef.current = []; 
-    drawingLinesRef.current =[]; 
-    drawingSeriesRef.current =[]; 
-    previewObjectsRef.current =[];
-    smartSRSeriesRef.current =[]; 
-    smartSRPriceLinesRef.current =[]; 
-    smcSeriesRef.current =[];
+    drawingLinesRef.current =[]; drawingSeriesRef.current =[]; 
+    smartSRSeriesRef.current = []; smartSRPriceLinesRef.current =[]; smcSeriesRef.current =[];
 
     const chart = createChart(chartContainerRef.current, {
       layout: { background: { type: ColorType.Solid, color: '#0D1117' }, textColor: '#8B949E' },
@@ -188,15 +256,41 @@ const CustomChart = ({ symbol }) => {
     });
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
 
+    // Initialize High-Speed Persistent Preview Vector Line
+    previewTrendRef.current = chart.addSeries(LineSeries, {
+        color: '#58A6FF',
+        lineWidth: 2,
+        lineStyle: 2, 
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false
+    });
+
     chart.subscribeClick((param) => {
-      if (!isMounted.current || !chartRef.current || !candleSeries) return;
-      if (!param.point || !param.time) return;
-      const price = candleSeries.coordinateToPrice(param.point.y);
-      const time = param.time;
+      if (!isMounted.current || !chartRef.current || !candleSeries || drawModeRef.current === 'cursor') return;
+      
+      // Determine click coordinate (Handle off-chart clicks)
+      const pointY = param.point ? param.point.y : (param.hoveredObjectId ? 0 : null);
+      if (pointY === null) return;
+      
+      const price = candleSeries.coordinateToPrice(pointY);
+      let time = param.time;
+
+      // EXTRAPOLATE FUTURE TIME (Allows drawing into the blank right side of the chart)
+      if (!time && param.logical) {
+          const data = chartDataRef.current;
+          if (data && data.length > 0) {
+              const lastData = data[data.length - 1];
+              const interval = data.length > 1 ? data[data.length - 1].time - data[data.length - 2].time : 86400;
+              const barsIntoFuture = Math.max(1, Math.round(param.logical - data.length + 1));
+              time = Math.floor(lastData.time + (barsIntoFuture * interval)); // Strict Int
+          }
+      }
+
+      if (!time || !price || isNaN(time)) return;
       const mode = drawModeRef.current;
       const id = Date.now();
 
-      if (mode === 'cursor') return;
       if (mode === 'horizontal') { setUserDrawings(prev =>[...prev, { id, type: 'horizontal', price, title: 'H-Line' }]); setDrawMode('cursor'); return; }
       if (mode === 'rect') { setUserDrawings(prev =>[...prev, { id, type: 'rect', price, title: 'Zone' }]); return; }
       if (['fib', 'trend', 'longshort'].includes(mode)) {
@@ -207,15 +301,37 @@ const CustomChart = ({ symbol }) => {
     });
 
     chart.subscribeCrosshairMove((param) => {
-        if (!isMounted.current || !chartRef.current) return;
-        const mode = drawModeRef.current;
+        if (!isMounted.current || !chartRef.current || drawModeRef.current === 'cursor') return;
         const currentPoints = tempPointsRef.current;
-        if (mode === 'cursor' || currentPoints.length === 0 || !param.point || !param.time) return;
-        const currentPrice = candleSeries.coordinateToPrice(param.point.y);
-        const currentTime = param.time;
+        if (currentPoints.length === 0) return;
+        
+        const pointY = param.point ? param.point.y : null;
+        if (pointY === null) return;
+
+        const currentPrice = candleSeries.coordinateToPrice(pointY);
+        let currentTime = param.time;
+
+        if (!currentTime && param.logical) {
+             const data = chartDataRef.current;
+             if (data && data.length > 0) {
+                 const lastData = data[data.length - 1];
+                 const interval = data.length > 1 ? data[data.length - 1].time - data[data.length - 2].time : 86400;
+                 const barsIntoFuture = Math.max(1, Math.round(param.logical - data.length + 1));
+                 currentTime = Math.floor(lastData.time + (barsIntoFuture * interval)); // Strict Int
+             }
+        }
+
+        if (!currentTime || !currentPrice || isNaN(currentTime) || isNaN(currentPrice)) return;
         const start = currentPoints[0];
+        
         if (currentTime === start.time) return; 
-        drawPreviewShape(mode, start, { price: currentPrice, time: currentTime }, chart, candleSeries);
+        
+        // Decouple from React sync cycle to prevent rendering crash
+        requestAnimationFrame(() => {
+            if (isMounted.current && chartRef.current && candleSeriesRef.current) {
+                drawPreviewShape(drawModeRef.current, start, { price: currentPrice, time: currentTime }, chartRef.current, candleSeriesRef.current);
+            }
+        });
     });
 
     chartRef.current = chart;
@@ -245,77 +361,9 @@ const CustomChart = ({ symbol }) => {
     };
   }, [symbol, timeframe]);
 
-  // --- DRAWING HELPERS ---
-  const handleMultiClickTool = (price, time, requiredClicks, callback) => { 
-      setTempPoints(prev => { 
-          const newPoints = [...prev, { price, time }]; 
-          if (newPoints.length === requiredClicks) { 
-              clearPreview(); 
-              callback(newPoints); 
-              setDrawMode('cursor'); 
-              return[]; 
-          } 
-          return newPoints; 
-      }); 
-  };
-  
-  const clearPreview = () => { 
-      previewObjectsRef.current.forEach(obj => { 
-          if (obj.type === 'line' && candleSeriesRef.current) try{ candleSeriesRef.current.removePriceLine(obj.ref); } catch(e){} 
-          if (obj.type === 'series' && chartRef.current) try{ chartRef.current.removeSeries(obj.ref); } catch(e){} 
-      }); 
-      previewObjectsRef.current =[]; 
-  };
-  
-  const drawPreviewShape = (type, p1, p2, chart, series) => { 
-      clearPreview(); 
-      if (type === 'trend') { 
-          const sorted = p1.time > p2.time ? [p2, p1] : [p1, p2]; 
-          const data = [{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }]; 
-          const lineSeries = chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }); 
-          lineSeries.setData(data); 
-          previewObjectsRef.current.push({ type: 'series', ref: lineSeries }); 
-      } else if (type === 'fib') { 
-          const low = Math.min(p1.price, p2.price); 
-          const high = Math.max(p1.price, p2.price); 
-          const diff = high - low; 
-          const levels = [0, 0.5, 1]; 
-          levels.forEach(lvl => { 
-              const line = series.createPriceLine({ price: low + (diff * lvl), color: '#FFD700', lineWidth: 1, lineStyle: 2, axisLabelVisible: false }); 
-              previewObjectsRef.current.push({ type: 'line', ref: line }); 
-          }); 
-      } else if (type === 'longshort') { 
-          const l1 = series.createPriceLine({ price: p1.price, color: '#888', title: 'ENTRY' }); 
-          const l2 = series.createPriceLine({ price: p2.price, color: '#3FB950', title: 'TARGET' }); 
-          previewObjectsRef.current.push({ type: 'line', ref: l1 }, { type: 'line', ref: l2 }); 
-      } 
-  };
-  
-  const handleEdit = (d) => { 
-      setEditingDrawing(d.id); 
-      if (d.points) { 
-          setEditValues({ p1: d.points[0]?.price, p2: d.points[1]?.price, p3: d.points[2]?.price }); 
-      } else { 
-          setEditValues({ p1: d.price }); 
-      } 
-  };
-  
-  const saveEdit = () => { 
-      setUserDrawings(prev => prev.map(d => { 
-          if (d.id !== editingDrawing) return d; 
-          if (d.points) { 
-              const newPoints = [...d.points]; 
-              if (editValues.p1) newPoints[0].price = parseFloat(editValues.p1); 
-              if (editValues.p2) newPoints[1].price = parseFloat(editValues.p2); 
-              if (editValues.p3 && newPoints[2]) newPoints[2].price = parseFloat(editValues.p3); 
-              return { ...d, points: newPoints }; 
-          } else { 
-              return { ...d, price: parseFloat(editValues.p1) }; 
-          } 
-      })); 
-      setEditingDrawing(null); 
-  };
-  
+  // --- DRAWING MODAL HELPERS ---
+  const handleEdit = (d) => { setEditingDrawing(d.id); if (d.points) { setEditValues({ p1: d.points[0]?.price, p2: d.points[1]?.price, p3: d.points[2]?.price }); } else { setEditValues({ p1: d.price }); } };
+  const saveEdit = () => { setUserDrawings(prev => prev.map(d => { if (d.id !== editingDrawing) return d; if (d.points) { const newPoints =[...d.points]; if (editValues.p1) newPoints[0].price = parseFloat(editValues.p1); if (editValues.p2) newPoints[1].price = parseFloat(editValues.p2); if (editValues.p3 && newPoints[2]) newPoints[2].price = parseFloat(editValues.p3); return { ...d, points: newPoints }; } else { return { ...d, price: parseFloat(editValues.p1) }; } })); setEditingDrawing(null); };
   const deleteDrawing = (id) => setUserDrawings(prev => prev.filter(d => d.id !== id));
   const clearDrawings = () => setUserDrawings([]);
   const undoLastDrawing = () => { if (userDrawings.length > 0) setUserDrawings(prev => prev.slice(0, -1)); };
@@ -326,6 +374,7 @@ const CustomChart = ({ symbol }) => {
       drawingLinesRef.current =[]; 
       drawingSeriesRef.current.forEach(item => { try { chartRef.current.removeSeries(item.ref); } catch(e){} }); 
       drawingSeriesRef.current =[]; 
+      
       userDrawings.forEach(d => { 
           if (d.type === 'horizontal') { 
               const line = candleSeriesRef.current.createPriceLine({ price: d.price, color: '#38bdf8', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: d.title }); 
@@ -341,10 +390,15 @@ const CustomChart = ({ symbol }) => {
                   drawingLinesRef.current.push({ type: 'line', ref: line }); 
               }); 
           } else if (d.type === 'trend') { 
-              const sorted = d.points[0].time > d.points[1].time ? [d.points[1], d.points[0]] :[d.points[0], d.points[1]]; 
-              const data =[{ time: sorted[0].time, value: sorted[0].price }, { time: sorted[1].time, value: sorted[1].price }]; 
-              const series = chartRef.current.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }); 
-              series.setData(data); 
+              const t1 = Math.floor(d.points[0].time); const t2 = Math.floor(d.points[1].time);
+              if(t1 === t2 || isNaN(t1) || isNaN(t2)) return;
+              const val1 = t1 < t2 ? d.points[0].price : d.points[1].price;
+              const val2 = t1 < t2 ? d.points[1].price : d.points[0].price;
+              const sortedTime1 = Math.min(t1, t2);
+              const sortedTime2 = Math.max(t1, t2);
+              
+              const series = chartRef.current.addSeries(LineSeries, { color: '#58A6FF', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }); 
+              series.setData([{ time: sortedTime1, value: val1 }, { time: sortedTime2, value: val2 }]); 
               drawingSeriesRef.current.push({ type: 'series', ref: series }); 
           } else if (d.type === 'longshort') { 
               const entry = d.points[0].price; const stop = d.points[1].price; const target = d.points[2].price; 
@@ -476,7 +530,7 @@ const CustomChart = ({ symbol }) => {
           } else { setHasError(true); setChartData([]); }
       }
     } catch (err) { if (!axios.isCancel(err)) setHasError(true); setIsLive(false); } finally { if (!isSilent && isMounted.current) setIsChartLoading(false); }
-  },[symbol, timeframe]);
+  }, [symbol, timeframe]);
 
   useEffect(() => { fetchData(false); }, [symbol, timeframe]);
 
@@ -537,7 +591,7 @@ const CustomChart = ({ symbol }) => {
         clearSmartSR(); 
         clearSMC(); 
     };
-  },[symbol, isIndian]);
+  }, [symbol, isIndian]);
 
   // --- ADD INDICATOR LOGIC ---
   const addIndicator = () => {
@@ -554,7 +608,7 @@ const CustomChart = ({ symbol }) => {
     let paramsLabel = '';
 
     try {
-        if (selectedInd === 'SMC' || selectedInd === 'SmartSR') {} // Handled by Effects
+        if (selectedInd === 'SMC' || selectedInd === 'SmartSR') {} 
         else if (selectedInd === 'SMA') {
             const period = parseInt(param1);
             const res = SMA.calculate({period, values: closePrices});
