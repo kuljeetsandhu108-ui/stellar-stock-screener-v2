@@ -31,17 +31,20 @@ print(f"🤖 AI Engine Initialized with Model: {MODEL_NAME}")
 # --- VISION AI (Chart Identification) ---
 from .system_watchdog import auto_heal
 
-@auto_heal(fallback_return="NOT_FOUND")
-def identify_ticker_from_image(image_bytes: bytes):
+@auto_heal(fallback_return="NOT_FOUND,1D")
+def identify_chart_context_from_image(image_bytes: bytes):
     configure_gemini_for_request()
     model = genai.GenerativeModel(MODEL_NAME)
     
     prompt = (
-        "You are a highly precise OCR bot. Read the main Ticker Symbol text (usually top left). "
-        "Return ONLY the ticker string. "
-        "If it says 'HDFC Bank', return 'HDFCBANK'. "
-        "If it says 'NIFTY BANK', return 'BANKNIFTY'. "
-        "Do not add suffixes like .NS. Just the raw, exact name."
+        "You are a highly precise OCR bot. Read the stock chart image.\n"
+        "Identify the Ticker Symbol and the Timeframe.\n"
+        "Format your response EXACTLY as: SYMBOL,TIMEFRAME\n"
+        "Example 1: RELIANCE,15M\n"
+        "Example 2: NIFTY,1D\n"
+        "Example 3: BTC,4H\n"
+        "Example 4: HDFCBANK,1D\n"
+        "If you cannot determine the timeframe, default to 1D. Return NOTHING else."
     )
     
     response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
@@ -130,4 +133,5 @@ def analyze_chart_technicals_from_image(image_bytes: bytes):
     
     response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
     return response.text.strip()
+
 

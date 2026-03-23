@@ -85,6 +85,7 @@ TRADINGVIEW_OVERRIDE_MAP = {
 def identify_asset_class(symbol: str):
     from urllib.parse import unquote
     s = unquote(symbol).upper().strip()
+    clean_sym = s.replace("/", "").replace("-", "").replace(" ", "").replace("USDT", "").replace("USD", "").replace(".NS", "").replace(".BO", "").replace(".NSE", "").replace(".BSE", "")
     
     crypto_map = {"BITCOIN": "BTC", "ETHEREUM": "ETH", "SOLANA": "SOL", "RIPPLE": "XRP", "DOGECOIN": "DOGE"}
     for name, short in crypto_map.items():
@@ -97,55 +98,26 @@ def identify_asset_class(symbol: str):
         "BRENT": "UKOIL", "UKOIL": "UKOIL",
         "NATURALGAS": "NGUSD", "NGUSD": "NGUSD", "NG=F": "NGUSD"
     }
-    if s in commodities_map: return "FMP", commodities_map[s]
+    if s in commodities_map or clean_sym in commodities_map: 
+        return "FMP", commodities_map.get(s, commodities_map.get(clean_sym))
     
     crypto_shorts =["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "MATIC", "BNB", "AVAX", "DOT", "LTC", "SHIB"]
-    base = s.replace("-USD.CC", "").replace("-USD", "").replace("USD", "")
+    base = s.replace("-USD.CC", "").replace("-USD", "").replace("USD", "").replace(".CC", "")
     if base in crypto_shorts: return "EODHD", f"{base}-USD.CC"
         
-    if "NIFTY" in s or "NSEI" in s: return "EODHD", "NSEI.INDX"
-    if "SENSEX" in s or "BSESN" in s: return "EODHD", "BSESN.INDX"
-    if "BANK" in s: return "EODHD", "NSEBANK.INDX"
+    # STRICT EXACT MATCHING (Fixes HDFCBANK -> BANKNIFTY data hijack)
+    if clean_sym in["NIFTY", "NIFTY50", "NSEI"]: return "EODHD", "NSEI.INDX"
+    if clean_sym in["BANKNIFTY", "NIFTYBANK", "NSEBANK"]: return "EODHD", "NSEBANK.INDX"
+    if clean_sym in ["SENSEX", "BSESN"]: return "EODHD", "BSESN.INDX"
+    if clean_sym in["SPX", "S&P500", "GSPC"]: return "EODHD", "GSPC.INDX"
+    if clean_sym in ["NDX", "NASDAQ"]: return "EODHD", "NDX.INDX"
+    if clean_sym in ["DOW", "DJI", "DOWJONES"]: return "EODHD", "DJI.INDX"
     if ".INDX" in s: return "EODHD", s
 
     if "." not in s: return "EODHD", f"{s}.NSE"
     if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
     if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
     
-    return "EODHD", s
-
-    if "." not in s: return "EODHD", f"{s}.NSE"
-    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
-    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
-    
-    return "EODHD", s
-
-    if "." not in s: return "EODHD", f"{s}.NSE"
-    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
-    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
-    
-    return "EODHD", s
-
-    if "." not in s: return "EODHD", f"{s}.NSE"
-    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
-    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
-    
-    return "EODHD", s
-
-    if "." not in s: return "EODHD", f"{s}.NSE"
-    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
-    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
-    return "EODHD", s
-
-    if "." not in s: return "EODHD", f"{s}.NSE"
-    if ".NS" in s: return "EODHD", s.replace(".NS", ".NSE")
-    if ".BO" in s: return "EODHD", s.replace(".BO", ".BSE")
-    
-    return "EODHD", s 
-    crypto_shorts =["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "MATIC", "BNB", "AVAX", "DOT", "LTC", "SHIB"]
-    for c in crypto_shorts:
-        if s == c or s == f"{c}USD" or s == f"{c}-USD":
-            return "EODHD", f"{c}-USD.CC"
     return "EODHD", s
 
 # ==========================================
@@ -295,7 +267,7 @@ async def get_timeframe_analysis(symbol: str, request_data: TimeframeRequest = B
     is_intraday_request = request_data.timeframe.upper() in["5M", "15M", "30M", "1H", "4H"]
     lookup_range = "5M" if is_intraday_request else request_data.timeframe
 
-    cache_key = f"chart_base_v16_{symbol}_{lookup_range}" 
+    cache_key = f"chart_base_v17_{symbol}_{lookup_range}" 
     chart_list = await redis_service.redis_client.get_cache(cache_key)
     
     if not chart_list:
@@ -312,7 +284,7 @@ async def get_timeframe_analysis(symbol: str, request_data: TimeframeRequest = B
         if is_intraday_request:
             # If 5M fails (Crypto Free Tier), instantly fetch Daily data instead!
             print(f"âš ï¸ Intraday failed for {ticker}. Falling back to Daily Analysis.")
-            cache_key_1d = f"chart_base_v16_{symbol}_1D"
+            cache_key_1d = f"chart_base_v17_{symbol}_1D"
             chart_list = await redis_service.redis_client.get_cache(cache_key_1d)
             if not chart_list:
                 chart_list = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, "1D")
@@ -357,7 +329,7 @@ async def get_technical_score(symbol: str, request_data: TimeframeRequest = Body
     is_intraday_request = request_data.timeframe.upper() in["5M", "15M", "30M", "1H", "4H"]
     lookup_range = "5M" if is_intraday_request else request_data.timeframe
     
-    cache_key = f"chart_base_v16_{symbol}_{lookup_range}"
+    cache_key = f"chart_base_v17_{symbol}_{lookup_range}"
     chart_list = await redis_service.redis_client.get_cache(cache_key)
 
     if not chart_list:
@@ -392,7 +364,7 @@ async def get_technicals_data(symbol: str, request_data: TimeframeRequest = Body
     lookup_range = "5M" if is_intraday_request else request_data.timeframe
     
     # Check Cache for Master Data
-    cache_key = f"chart_base_v16_{symbol}_{lookup_range}"
+    cache_key = f"chart_base_v17_{symbol}_{lookup_range}"
     chart_list = await redis_service.redis_client.get_cache(cache_key)
 
     if not chart_list:
@@ -512,7 +484,7 @@ async def get_stock_chart(symbol: str, range: str = "1D"):
     is_intraday_derived = range in ["5M", "15M", "30M", "1H", "4H"]
     lookup_range = "5M" if is_intraday_derived else range
     
-    cache_key = f"chart_base_v16_{symbol}_{lookup_range}"
+    cache_key = f"chart_base_v17_{symbol}_{lookup_range}"
     ttl = 300 if is_intraday_derived else 43200
     
     chart_data = await redis_service.redis_client.get_cache(cache_key)
@@ -746,70 +718,62 @@ async def get_all_stock_data(symbol: str):
 
 @router.post("/{symbol}/all-timeframe-analysis")
 async def get_all_timeframe_analysis(symbol: str):
-    """
-    Generates AI Analysis for 5M, 15M, 1H, 4H, and 1D in a SINGLE request.
-    Uses Mathematical Resampling to avoid extra API calls.
-    """
-    cache_key = f"omni_analysis_v1_{symbol}"
+    cache_key = f"omni_analysis_v7_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
 
-    # 1. Identify Asset
     source, ticker = identify_asset_class(symbol)
     
-    # 2. Fetch MASTER Data (5 Minute)
-    # We use 5M because we can build 15M, 1H, 4H, 1D from it mathematically.
+    # Concurrent Fetch: 5M (for intraday) and 1D (for macro/EMA accuracy)
     if source == "FMP":
-        chart_data = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, range_type="5M")
-        if not chart_data: chart_data = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, range_type="5M")
+        chart_5m = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, "5M")
+        if not chart_5m: chart_5m = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, "5M")
+        chart_1d = await asyncio.to_thread(fmp_service.get_commodity_history, ticker, "1D")
+        if not chart_1d: chart_1d = await asyncio.to_thread(fmp_service.get_crypto_history, ticker, "1D")
+        quote = await asyncio.to_thread(fmp_service.get_quote, ticker)
     else:
-        chart_data = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, range_type="5M")
+        chart_5m = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, "5M")
+        chart_1d = await asyncio.to_thread(eodhd_service.get_historical_data, ticker, "1D")
+        quote = await asyncio.to_thread(eodhd_service.get_live_price, ticker)
 
-    if not chart_data or len(chart_data) < 50:
-        return {"error": "Insufficient market data for analysis."}
+    if not chart_5m or len(chart_5m) < 50:
+        return {"error": "Insufficient market data."}
 
-    # 3. Define Targets
-    timeframes = ["15M", "1H", "4H", "1D"]
-    tasks = []
+    current_price = quote.get('price') if quote else None
 
-    # Helper function to process one timeframe
+    def stitch_live_price(data):
+        if data and current_price:
+            data[-1]['close'] = current_price
+            if current_price > data[-1]['high']: data[-1]['high'] = current_price
+            if current_price < data[-1]['low']: data[-1]['low'] = current_price
+        return data
+
+    chart_5m = stitch_live_price(chart_5m)
+    chart_1d = stitch_live_price(chart_1d)
+
     async def process_timeframe(tf):
         try:
-            # A. Resample (Math)
-            # If tf is 5M, use original. Else resample.
-            data = chart_data if tf == "5M" else technical_service.resample_chart_data(chart_data, tf)
+            if tf == "1D": data = chart_1d
+            elif tf == "5M": data = chart_5m
+            else: data = technical_service.resample_chart_data(chart_5m, tf)
             
-            # B. Calculate Technicals (Math)
             df = pd.DataFrame(data)
             techs = technical_service.calculate_technical_indicators(df)
             pivots = technical_service.calculate_pivot_points(df)
             mas = technical_service.calculate_moving_averages(df)
             
-            # C. Generate AI Insight
-            analysis = await asyncio.to_thread(
-                quant_engine.generate_algorithmic_report, 
-                symbol, tf, techs, pivots, mas
-            )
-            return tf.lower(), analysis # Return key like "1h"
-        except:
-            return tf.lower(), "Analysis unavailable."
+            analysis = await asyncio.to_thread(quant_engine.generate_algorithmic_report, symbol, tf, techs, pivots, mas)
+            return tf.lower(), analysis
+        except: return tf.lower(), "Analysis unavailable."
 
-    # 4. Execute Parallel Processing
-    # We run 5 AI Models simultaneously. This takes ~3 seconds total instead of 15s.
     results = await asyncio.gather(
-        process_timeframe("5M"),
-        process_timeframe("15M"),
-        process_timeframe("1H"),
-        process_timeframe("4H"),
+        process_timeframe("5M"), process_timeframe("15M"),
+        process_timeframe("1H"), process_timeframe("4H"),
         process_timeframe("1D")
     )
-
-    # 5. Construct Final Response
+    
     response_map = {k: v for k, v in results}
-    
-    # Cache the heavy result
-    await redis_service.redis_client.set_cache(cache_key, response_map, 300) # 5 min cache
-    
+    await redis_service.redis_client.set_cache(cache_key, response_map, 300)
     return response_map
 @router.get("/screener/configs")
 async def get_screener_configs():
@@ -827,6 +791,10 @@ async def get_dynamic_screener(screener_key: str):
     if results and len(results) > 0:
         await redis_service.redis_client.set_cache(cache_key, results, 300)
     return results or[]
+
+
+
+
 
 
 
