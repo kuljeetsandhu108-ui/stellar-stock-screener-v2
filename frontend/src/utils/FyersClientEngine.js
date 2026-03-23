@@ -1,4 +1,4 @@
-export class FyersClientEngine {
+﻿export class FyersClientEngine {
     constructor(token, symbol, onTick) {
         this.token = token;
         this.symbol = symbol;
@@ -23,7 +23,9 @@ export class FyersClientEngine {
                 const tick = msg.d?.[0] || msg[0]; 
                 if (tick && tick.v && tick.v.lp) {
                     const price = parseFloat(tick.v.lp);
-                    if (this.onTick) this.onTick({ price: price });
+                    const change = parseFloat(tick.v.ch) || 0;
+                    const pct = parseFloat(tick.v.chp) || 0;
+                    if (this.onTick) this.onTick({ price, change, pct });
                 }
             } catch (e) {}
         };

@@ -1,6 +1,7 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
 import styled, { keyframes, css } from 'styled-components';
-import ConnectBroker from './ConnectBroker';
+import { FyersClientEngine } from '../../utils/FyersClientEngine';
+window.FyersClientEngine = FyersClientEngine; // Expose for internal routing
 
 // ==========================================
 // 1. HIGH-END ANIMATIONS
@@ -216,7 +217,6 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
   const [flash, setFlash] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const prevPriceRef = useRef(0);
-  const wsRef = useRef(null);
 
   useEffect(() => {
     if (initialQuote) {
@@ -233,82 +233,96 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
     const symbol = profile?.symbol;
     if (!symbol) return;
 
-    const apiUrl = process.env.REACT_APP_API_URL;
-    let wsUrl = "";
-    
-    if (apiUrl) {
-         const host = apiUrl.replace(/^https?:\/\//, '');
-         const proto = apiUrl.includes('https') ? 'wss://' : 'ws://';
-         wsUrl = `${proto}${host}/ws/live/${symbol}`;
-    } else {
-         const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-         const wsHost = isLocal ? '127.0.0.1:8000' : window.location.host;
-         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-         wsUrl = `${protocol}//${wsHost}/ws/live/${symbol}`;
-    }
+    // --- SMART SYMBOL MAPPER ---
+    const getFyersSymbol = (sym) => {
+        if (sym === 'NSEI.INDX') return 'NSE:NIFTY50-INDEX';
+        if (sym === 'NSEBANK.INDX') return 'NSE:NIFTYBANK-INDEX';
+        if (sym === 'INDIAVIX.INDX') return 'NSE:INDIAVIX-INDEX';
+        if (sym === 'BSESN.INDX') return 'BSE:SENSEX-INDEX';
+        if (sym.includes('.NS')) return `NSE:${sym.replace('.NS', '-EQ')}`;
+        if (sym.includes('.BO')) return `BSE:${sym.replace('.BO', '-EQ')}`;
+        return null;
+    };
 
+    const userToken = localStorage.getItem('fyers_token');
+    const fyersSymbol = getFyersSymbol(symbol);
+    
+    let fyersEngine = null;
+    let ws = null;
     let pingInterval = null;
 
-    const connect = () => {
-        try {
-            if (wsRef.current) wsRef.current.close();
+    // --- UNIFIED BROADCASTER ---
+    const broadcastTick = (price, change, pct) => {
+        const newPrice = Number(price); 
+        if (newPrice && newPrice !== prevPriceRef.current) {
+            if (newPrice > prevPriceRef.current) setFlash('up');
+            else if (newPrice < prevPriceRef.current) setFlash('down');
             
-            const ws = new WebSocket(wsUrl);
-            wsRef.current = ws;
+            setTimeout(() => setFlash(null), 800);
 
-            ws.onopen = () => {
-                setIsConnected(true);
-                pingInterval = setInterval(() => {
-                    if (ws.readyState === WebSocket.OPEN) ws.send("ping");
-                }, 10000); 
-            };
-
-            ws.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    const newPrice = Number(data.price); 
-                    
-                    if (newPrice && newPrice !== prevPriceRef.current) {
-                        if (newPrice > prevPriceRef.current) setFlash('up');
-                        else if (newPrice < prevPriceRef.current) setFlash('down');
-                        
-                        setTimeout(() => setFlash(null), 800);
-
-                        setLiveData({
-                            price: newPrice,
-                            change: Number(data.change) || 0,
-                            pct: Number(data.percent_change) || 0
-                        });
-                        
-                        prevPriceRef.current = newPrice;
-                        
-                        // 🚀 BROADCAST LIVE TICK TO THE ENTIRE UI APP
-                        window.dispatchEvent(new CustomEvent('livePriceTick', { 
-                            detail: { 
-                                price: newPrice, 
-                                change: Number(data.change) || 0, 
-                                pct: Number(data.percent_change) || 0 
-                            } 
-                        }));
-                    }
-                } catch (e) {}
-            };
-
-            ws.onclose = () => {
-                setIsConnected(false);
-                if (pingInterval) clearInterval(pingInterval);
-                setTimeout(connect, 3000);
-            };
-        } catch(e) {
-            console.error("WS Connect Error", e);
+            setLiveData({ price: newPrice, change: Number(change) || 0, pct: Number(pct) || 0 });
+            prevPriceRef.current = newPrice;
+            
+            window.dispatchEvent(new CustomEvent('livePriceTick', { 
+                detail: { price: newPrice, change: Number(change) || 0, pct: Number(pct) || 0 } 
+            }));
         }
     };
 
-    connect();
+    // A. DIRECT BROKER CONNECTION (Zero-Lag Mode)
+    if (userToken && fyersSymbol && window.FyersSocket) {
+        setIsConnected(true);
+        fyersEngine = new window.FyersClientEngine(userToken, fyersSymbol, (tick) => {
+             broadcastTick(tick.price, tick.change, tick.pct);
+        });
+        fyersEngine.connect();
+        window.dispatchEvent(new CustomEvent('connectionTypeUpdate', { detail: 'Broker' }));
+    } 
+    // B. FALLBACK SERVER CONNECTION (Standard Mode)
+    else {
+        const apiUrl = process.env.REACT_APP_API_URL;
+        let wsUrl = "";
+        if (apiUrl) {
+             const host = apiUrl.replace(/^https?:\/\//, '');
+             const proto = apiUrl.includes('https') ? 'wss://' : 'ws://';
+             wsUrl = `${proto}${host}/ws/live/${symbol}`;
+        } else {
+             const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+             const wsHost = isLocal ? '127.0.0.1:8000' : window.location.host;
+             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+             wsUrl = `${protocol}//${wsHost}/ws/live/${symbol}`;
+        }
+
+        const connectServer = () => {
+            try {
+                ws = new WebSocket(wsUrl);
+                ws.onopen = () => {
+                    setIsConnected(true);
+                    pingInterval = setInterval(() => {
+                        if (ws.readyState === WebSocket.OPEN) ws.send("ping");
+                    }, 10000); 
+                };
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        broadcastTick(data.price, data.change, data.percent_change);
+                    } catch (e) {}
+                };
+                ws.onclose = () => {
+                    setIsConnected(false);
+                    if (pingInterval) clearInterval(pingInterval);
+                    setTimeout(connectServer, 3000);
+                };
+            } catch(e) {}
+        };
+        connectServer();
+        window.dispatchEvent(new CustomEvent('connectionTypeUpdate', { detail: 'Server' }));
+    }
 
     return () => {
         if (pingInterval) clearInterval(pingInterval);
-        if (wsRef.current) wsRef.current.close();
+        if (ws) ws.close();
+        if (fyersEngine) fyersEngine.disconnect();
     };
   }, [profile?.symbol]);
 
@@ -361,3 +375,4 @@ const StockHeader = ({ profile, quote: initialQuote }) => {
 };
 
 export default StockHeader;
+

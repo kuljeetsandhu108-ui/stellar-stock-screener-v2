@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import PureVisionPage from './pages/PureVisionPage';
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import { GlobalStyles } from './styles/GlobalStyles';
@@ -6,7 +6,6 @@ import HomePage from './pages/HomePage';
 import StockDetailPage from './pages/StockDetailPage';
 // --- NEW: Import our new Index Detail Page ---
 import IndexDetailPage from './pages/IndexDetailPage';
-import AuthCallback from './pages/AuthCallback'; // Import this
 
 
 function App() {
@@ -29,7 +28,6 @@ function App() {
               The ":encodedSymbol" will hold the URL-safe version of the index symbol. */}
           <Route path="/index/:encodedSymbol" element={<IndexDetailPage />} />
           <Route path="/vision-result" element={<PureVisionPage />} />
-          <Route path="/auth-callback" element={<AuthCallback />} />
 
 
         </Routes>

@@ -353,7 +353,7 @@ const CustomChart = ({ symbol }) => {
     return () => {
       isMounted.current = false;
       resizeObserver.disconnect();
-      if (fyersEngineRef.current) fyersEngineRef.current.disconnect();
+      
       if (chartRef.current) {
         try { chartRef.current.remove(); } catch(e) {}
         chartRef.current = null; candleSeriesRef.current = null; volumeSeriesRef.current = null;
@@ -549,49 +549,39 @@ const CustomChart = ({ symbol }) => {
     if (isSmartSR) applySmartSR(chartData); else clearSmartSR();
   }, [chartData, activeIndicators]);
 
-  // --- HYBRID SOCKET ENGINE ---
+  // --- EVENT-DRIVEN TICK LISTENER (Replaces Heavy WebSockets) ---
   useEffect(() => {
     if (!symbol) return;
-    setConnectionType("Server");
-    const getWsUrl = () => {
-         const apiUrl = window.location.origin;
-         const wsProtocol = apiUrl.includes('https') ? 'wss://' : 'ws://';
-         const host = apiUrl.replace(/^https?:\/\//, '').replace(/^http?:\/\//, '');
-         return `${wsProtocol}${host}/ws/live/${symbol}`;
-    };
-    let ws = null;
-    let pingInterval = null;
     
-    const connect = () => {
-        try {
-            ws = new WebSocket(getWsUrl());
-            ws.onopen = () => { pingInterval = setInterval(() => { if (isMounted.current && ws.readyState === WebSocket.OPEN) { ws.send("ping"); } }, 10000); };
-            ws.onmessage = (event) => {
-                if (!chartRef.current || !candleSeriesRef.current || !isMounted.current) return;
-                try {
-                    const data = JSON.parse(event.data);
-                    const currentPrice = data.price;
-                    if (currentPrice && lastCandleRef.current) {
-                        const last = lastCandleRef.current;
-                        const updatedCandle = { ...last, close: currentPrice, high: Math.max(last.high, currentPrice), low: Math.min(last.low, currentPrice) };
-                        lastCandleRef.current = updatedCandle;
-                        try { candleSeriesRef.current.update(updatedCandle); } catch(e){}
-                    }
-                } catch(e) {}
+    const handleTick = (e) => {
+        const currentPrice = e.detail.price;
+        if (currentPrice && lastCandleRef.current && candleSeriesRef.current) {
+            const last = lastCandleRef.current;
+            const updatedCandle = { 
+                ...last, 
+                close: currentPrice, 
+                high: Math.max(last.high, currentPrice), 
+                low: Math.min(last.low, currentPrice) 
             };
-            ws.onclose = () => { if (pingInterval) clearInterval(pingInterval); if (isMounted.current) setTimeout(connect, 3000); };
-        } catch (e) {}
+            lastCandleRef.current = updatedCandle;
+            try { candleSeriesRef.current.update(updatedCandle); } catch(err){}
+        }
     };
-    connect();
-    
-    return () => { 
-        if (pingInterval) clearInterval(pingInterval); 
-        if (ws) ws.close(); 
-        if (fyersEngineRef.current) fyersEngineRef.current.disconnect(); 
+
+    const handleConnUpdate = (e) => {
+        setConnectionType(e.detail);
+    };
+
+    window.addEventListener('livePriceTick', handleTick);
+    window.addEventListener('connectionTypeUpdate', handleConnUpdate);
+
+    return () => {
+        window.removeEventListener('livePriceTick', handleTick);
+        window.removeEventListener('connectionTypeUpdate', handleConnUpdate);
         clearSmartSR(); 
         clearSMC(); 
     };
-  }, [symbol, isIndian]);
+  }, [symbol]);
 
   // --- ADD INDICATOR LOGIC ---
   const addIndicator = () => {
@@ -843,3 +833,4 @@ const CustomChart = ({ symbol }) => {
 };
 
 export default CustomChart;
+

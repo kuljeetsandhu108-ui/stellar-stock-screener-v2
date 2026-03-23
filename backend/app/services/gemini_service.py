@@ -29,27 +29,23 @@ MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 print(f"🤖 AI Engine Initialized with Model: {MODEL_NAME}")
 
 # --- VISION AI (Chart Identification) ---
+from .system_watchdog import auto_heal
+
+@auto_heal(fallback_return="NOT_FOUND")
 def identify_ticker_from_image(image_bytes: bytes):
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel(MODEL_NAME)
-        
-        # Safe string concatenation (No triple quotes to cause errors)
-        prompt = (
-            "Look at this stock chart. Read the main Ticker Symbol text (top left usually). "
-            "Return ONLY the ticker string. "
-            "Examples: "
-            "- If you see 'NIFTY 50', return 'NIFTY' "
-            "- If you see 'RELIANCE', return 'RELIANCE' "
-            "- If you see 'BTC/USD', return 'BTC' "
-            "Do not add suffixes like .NS or .INDX. Just the raw name."
-        )
-        
-        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
-        return response.text.strip().upper().replace("", "").replace(" ", "")
-    except Exception as e:
-        print(f"❌ VISION ERROR: {e}")
-        return "NOT_FOUND"
+    configure_gemini_for_request()
+    model = genai.GenerativeModel(MODEL_NAME)
+    
+    prompt = (
+        "You are a highly precise OCR bot. Read the main Ticker Symbol text (usually top left). "
+        "Return ONLY the ticker string. "
+        "If it says 'HDFC Bank', return 'HDFCBANK'. "
+        "If it says 'NIFTY BANK', return 'BANKNIFTY'. "
+        "Do not add suffixes like .NS. Just the raw, exact name."
+    )
+    
+    response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
+    return response.text.strip().upper().replace("\n", "").replace(" ", "")
 
 def analyze_pure_vision(image_bytes: bytes):
     try:
@@ -103,35 +99,35 @@ def generate_fundamental_conclusion(company_name, p, g, d, k, n): return "Use Lo
 def generate_timeframe_analysis(symbol, timeframe, technicals, pivots, mas): return "Use Local Quant Engine"
 
 
+@auto_heal(fallback_return="TREND: Neutral\nPATTERNS: Chart processing interrupted.\nMOMENTUM: Neutral\nLEVELS: System recalibrating.\nVOLUME: Standard\nINDICATORS: N/A\nCONCLUSION: Auto-Healer engaged due to processing fault.\nACTION: WAIT\nENTRY_ZONE: N/A\nSTOP_LOSS: N/A\nTARGET_1: N/A\nTARGET_2: N/A\nRISK_REWARD: N/A\nCONFIDENCE: Low\nRATIONALE: Fallback triggered to prevent application crash.")
 def analyze_chart_technicals_from_image(image_bytes: bytes):
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel(MODEL_NAME)
-        prompt = '''Act as an expert Chartered Market Technician. Analyze this stock chart image.
-        Provide a professional technical analysis and a precision trade setup based on the timeframe shown in the image.
+    configure_gemini_for_request()
+    model = genai.GenerativeModel(MODEL_NAME)
+    prompt = '''Act as an expert Chartered Market Technician. Analyze this stock chart image.
+    Provide a professional technical analysis and a precision trade setup based on the timeframe shown in the image.
 
-        STRICT RESPONSE FORMAT (Do not deviate):
+    CRITICAL INSTRUCTION FOR PRICES: Look at the Y-axis. Do NOT hallucinate prices. If you cannot see exact numbers clearly, use approximate estimates (e.g. "Near 1500") or say "N/A".
 
-        TREND:[Uptrend / Downtrend / Sideways]
-        PATTERNS: [List key patterns or "None"]
-        MOMENTUM: [Bullish / Bearish / Neutral]
-        LEVELS:[List key Support and Resistance price levels visible]
-        VOLUME: [Describe volume behavior]
-        INDICATORS: [Mention visible indicators]
-        CONCLUSION: [A professional 2-sentence summary]
-        
-        -- TRADE TICKET --
-        ACTION:[BUY / SELL / WAIT]
-        ENTRY_ZONE:[Price ONLY. e.g., "150.00"]
-        STOP_LOSS:[Price ONLY. e.g., "145.00"]
-        TARGET_1: [Price ONLY. e.g., "160.00"]
-        TARGET_2: [Price ONLY. e.g., "165.00"]
-        RISK_REWARD: [Ratio. e.g., "1:3"]
-        CONFIDENCE:[High / Medium / Low]
-        RATIONALE: [One clear sentence explaining the strategy.]'''
-        
-        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
-        return response.text.strip()
-    except Exception as e:
-        print(f"❌ VISION CHART ANALYSIS ERROR: {e}")
-        return "TREND: Error\nACTION: WAIT\nRATIONALE: AI failed to process image."
+    STRICT RESPONSE FORMAT (Do not deviate):
+
+    TREND: [Uptrend / Downtrend / Sideways]
+    PATTERNS: [List key patterns or "None"]
+    MOMENTUM:[Bullish / Bearish / Neutral]
+    LEVELS: [List key Support and Resistance price levels visible]
+    VOLUME:[Describe volume behavior]
+    INDICATORS: [Mention visible indicators]
+    CONCLUSION: [A professional 2-sentence summary]
+    
+    -- TRADE TICKET --
+    ACTION: [BUY / SELL / WAIT]
+    ENTRY_ZONE: [Price ONLY or N/A]
+    STOP_LOSS: [Price ONLY or N/A]
+    TARGET_1:[Price ONLY or N/A]
+    TARGET_2: [Price ONLY or N/A]
+    RISK_REWARD: [Ratio. e.g., "1:3" or N/A]
+    CONFIDENCE: [High / Medium / Low]
+    RATIONALE: [One clear sentence explaining the strategy.]'''
+    
+    response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
+    return response.text.strip()
+

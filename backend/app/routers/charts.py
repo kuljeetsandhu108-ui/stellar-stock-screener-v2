@@ -21,6 +21,9 @@ RISK_REWARD: N/A
 CONFIDENCE: Low (Missing Data)
 RATIONALE: The data provider does not supply enough candles for this asset.'''
 
+from ..services.system_watchdog import auto_heal
+
+@auto_heal(fallback_return=("NSEI.INDX", "EODHD"))
 async def resolve_symbol_smart(ai_text: str):
     s = ai_text.strip().upper()
     crypto_map = {"BITCOIN": "BTC", "ETHEREUM": "ETH", "SOLANA": "SOL", "RIPPLE": "XRP", "DOGECOIN": "DOGE"}
@@ -29,11 +32,15 @@ async def resolve_symbol_smart(ai_text: str):
     
     clean_sym = s.replace("/", "").replace("-", "").replace(" ", "").replace("USDT", "").replace("USD", "")
     
-    indices = {"NIFTY": "NSEI.INDX", "BANK": "NSEBANK.INDX", "SENSEX": "BSESN.INDX", "SPX": "GSPC.INDX", "NDX": "NDX.INDX", "DOW": "DJI.INDX"}
-    for k, v in indices.items():
-        if k in s: return v, "EODHD"
+    # 💥 STRICT EXACT MATCHING (Fixes the HDFCBANK -> BANKNIFTY bug)
+    if clean_sym in ["NIFTY", "NIFTY50", "NSEI"]: return "NSEI.INDX", "EODHD"
+    if clean_sym in["BANKNIFTY", "NIFTYBANK", "NSEBANK"]: return "NSEBANK.INDX", "EODHD"
+    if clean_sym in ["SENSEX", "BSESN"]: return "BSESN.INDX", "EODHD"
+    if clean_sym in["SPX", "S&P500", "GSPC"]: return "GSPC.INDX", "EODHD"
+    if clean_sym in ["NDX", "NASDAQ"]: return "NDX.INDX", "EODHD"
+    if clean_sym in ["DOW", "DJI", "DOWJONES"]: return "DJI.INDX", "EODHD"
 
-    # ðŸ’¥ STRICT GLOBAL COMMODITIES MAP (FMP)
+    # 💥 STRICT GLOBAL COMMODITIES MAP (FMP)
     commodities = {
         "GOLD": "XAUUSD", "XAU": "XAUUSD", "XAUUSD": "XAUUSD", "GC=F": "XAUUSD",
         "SILVER": "XAGUSD", "XAG": "XAGUSD", "XAGUSD": "XAGUSD", "SI=F": "XAGUSD",
@@ -44,13 +51,13 @@ async def resolve_symbol_smart(ai_text: str):
     if clean_sym in commodities: return commodities[clean_sym], "FMP"
     if s in commodities: return commodities[s], "FMP"
     
-    # ðŸ’¥ CRYPTO ROUTING (EODHD)
+    # 💥 CRYPTO ROUTING (EODHD)
     crypto_list =["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "MATIC", "ADA", "AVAX", "DOT", "LTC", "SHIB"]
     if clean_sym in crypto_list: return f"{clean_sym}-USD.CC", "EODHD"
     for c in crypto_list:
         if c in s: return f"{c}-USD.CC", "EODHD"
 
-    # ðŸ’¥ INDIAN STOCKS FALLBACK
+    # 💥 INDIAN STOCKS FALLBACK
     if "." not in s: return f"{s}.NSE", "EODHD"
     if ".NS" in s: return s.replace(".NS", ".NSE"), "EODHD"
     if ".BO" in s: return s.replace(".BO", ".BSE"), "EODHD"
@@ -114,4 +121,5 @@ async def analyze_pure_chart(chart_image: UploadFile = File(...)):
     analysis_report = await asyncio.to_thread(gemini_service.analyze_pure_vision, image_bytes)
     
     return {"analysis": analysis_report}
+
 

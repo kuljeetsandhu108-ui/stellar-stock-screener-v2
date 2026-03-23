@@ -10,7 +10,7 @@ import {
 import IndicesBanner from '../components/Indices/IndicesBanner';
 import ChartUploader from '../components/HomePage/ChartUploader';
 
-const API_URL = '';
+const API_URL = process.env.REACT_APP_API_URL || '';
 
 // --- ANIMATIONS ---
 const fadeIn = keyframes`from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); }`;
@@ -132,7 +132,7 @@ const HomePage = () => {
 
   // SINGLE SCREENER STATE
   const [screenerConfigs, setScreenerConfigs] = useState([]);
-  const[activeScreener, setActiveScreener] = useState("");
+  const [activeScreener, setActiveScreener] = useState("");
   const[screenerData, setScreenerData] = useState([]);
   const [loadingScreener, setLoadingScreener] = useState(true);
   const [isVisionLoading, setIsVisionLoading] = useState(false);
@@ -150,6 +150,7 @@ const HomePage = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [searchRef]);
 
+  // Robust Autocomplete Hook
   useEffect(() => {
     if (query.length < 2) { 
         setSuggestions([]); 
@@ -179,6 +180,7 @@ const HomePage = () => {
     return () => clearTimeout(timer);
   }, [query]);
 
+  // Screener Hooks
   useEffect(() => {
     let isMounted = true;
     axios.get('/api/stocks/screener/configs').then(res => {
