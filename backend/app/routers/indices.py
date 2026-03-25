@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 # Import robust services
@@ -101,6 +101,78 @@ async def get_indices_summary():
         await redis_service.redis_client.set_cache(cache_key, final_results, 10)
     
     return final_results
+
+@router.get("/market-mood")
+async def get_market_mood():
+    """
+    Calculates the Stellar Market Mood Index (MMI) 0-100.
+    Uses India VIX, Nifty RSI, and Nifty Trend Distance.
+    """
+    cache_key = "stellar_mmi_v1"
+    cached = await redis_service.redis_client.get_cache(cache_key)
+    if cached: return cached
+
+    try:
+        # Fetch Nifty 50 Daily History & Live India VIX
+        tasks = {
+            "nifty": asyncio.to_thread(eodhd_service.get_historical_data, "NSEI.INDX", "1D"),
+            "vix": asyncio.to_thread(eodhd_service.get_live_price, "INDIAVIX.INDX")
+        }
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        raw = dict(zip(tasks.keys(), results))
+        
+        nifty_data = raw.get("nifty")
+        vix_data = raw.get("vix")
+
+        mmi = 50.0
+        status = "Neutral"
+
+        if nifty_data and len(nifty_data) > 50 and vix_data:
+            # 1. Volatility Proxy (India VIX)
+            vix = float(vix_data.get('price', 15.0))
+            # VIX mapped to 0-100 (Inverse: High VIX = Fear/0, Low VIX = Greed/100)
+            vix_score = max(0, min(100, 100 - ((vix - 10) / 15) * 100))
+
+            # 2. Momentum Proxy (Nifty RSI)
+            df = pd.DataFrame(nifty_data)
+            techs = technical_service.calculate_technical_indicators(df)
+            mas = technical_service.calculate_moving_averages(df)
+            
+            rsi = float(techs.get('rsi', 50))
+            
+            # 3. Trend Proxy (Distance from 50 SMA)
+            price = float(nifty_data[-1]['close'])
+            sma50 = float(mas.get('50', price))
+            diff = (price - sma50) / sma50
+            # Diff mapping: -5% = Fear(0), +5% = Greed(100)
+            trend_score = max(0, min(100, 50 + (diff * 10) * 100))
+
+            # Weighted Synthesis
+            mmi = (vix_score * 0.40) + (rsi * 0.40) + (trend_score * 0.20)
+
+        # Categorize Sentiment
+        if mmi <= 30: 
+            status = "Extreme Fear"
+            desc = "suggests a good time to open fresh positions, as markets are likely to be oversold and might turn upwards."
+            color = "#10B981" # Green
+        elif mmi <= 50: 
+            status = "Fear"
+            desc = "suggests investors are fearful. Market may be presenting value opportunities."
+            color = "#34D399" # Light Green
+        elif mmi <= 70: 
+            status = "Greed"
+            desc = "suggests investors are acting greedily. Caution is advised as markets may be overvalued."
+            color = "#F59E0B" # Orange
+        else: 
+            status = "Extreme Greed"
+            desc = "suggests a good time to book profits or hedge, as markets are likely to be overbought and might turn downwards."
+            color = "#EF4444" # Red
+
+        res = {"mmi": round(mmi, 2), "status": status, "description": desc, "color": color}
+        await redis_service.redis_client.set_cache(cache_key, res, 300) # 5 Min Cache
+        return res
+    except Exception as e:
+        return {"mmi": 50.0, "status": "Neutral", "description": "Analyzing market data...", "color": "#EDBB5A"}
 
 # ==========================================
 # 3. HEADER PRICE (Index Details)

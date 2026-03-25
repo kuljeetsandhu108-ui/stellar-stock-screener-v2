@@ -8,6 +8,7 @@ import {
   FaChevronLeft, FaChevronRight 
 } from 'react-icons/fa';
 import IndicesBanner from '../components/Indices/IndicesBanner';
+import GaugeChart from 'react-gauge-chart';
 import ChartUploader from '../components/HomePage/ChartUploader';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -28,6 +29,13 @@ const BlobTwo = styled(GlowingBlob)`bottom: -10%; right: -10%; width: 70vw; heig
 const MainContent = styled.div`display: flex; flex-direction: column; align-items: center; text-align: center; width: 100%; margin-top: 5vh; z-index: 1; position: relative;`;
 const Title = styled.h1`font-size: 2.8rem; font-weight: 900; background: linear-gradient(to right, #fff, #a5b4fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 1rem; animation: ${fadeIn} 1s ease-out; letter-spacing: -1.5px; @media (min-width: 768px) { font-size: 4.5rem; }`;
 const Subtitle = styled.p`font-size: 1rem; color: var(--color-text-secondary); margin-bottom: 3.5rem; max-width: 650px; animation: ${fadeIn} 1.5s ease-out; line-height: 1.8;`;
+
+// MMI STYLES
+const MMIContainer = styled.div`width: 100%; max-width: 800px; margin: 3rem 0; animation: ${fadeIn} 1.8s ease-out; position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; background: linear-gradient(145deg, rgba(22, 27, 34, 0.6), rgba(13, 17, 23, 0.8)); border: 1px solid rgba(255,255,255,0.05); border-radius: 24px; padding: 2rem; box-shadow: 0 15px 35px rgba(0,0,0,0.4); backdrop-filter: blur(10px);`;
+const MMITitle = styled.h2`font-size: 1.8rem; font-weight: 800; color: #fff; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 10px;`;
+const MMIValue = styled.div`font-size: 2.8rem; font-weight: 800; color: ${({ color }) => color}; margin-top: -30px; text-shadow: 0 0 20px ${({ color }) => color}66; font-family: 'Roboto Mono', monospace;`;
+const MMIDesc = styled.p`font-size: 0.95rem; color: #8B949E; text-align: center; max-width: 90%; margin-top: 1rem; line-height: 1.6;`;
+const Highlight = styled.span`color: ${({ color }) => color}; font-weight: 700;`;
 
 // SEARCH STYLES
 const SearchSection = styled.div`width: 100%; max-width: 700px; position: relative; animation: ${fadeIn} 1.8s ease-out; z-index: 999;`;
@@ -136,6 +144,15 @@ const HomePage = () => {
   const[screenerData, setScreenerData] = useState([]);
   const [loadingScreener, setLoadingScreener] = useState(true);
   const [isVisionLoading, setIsVisionLoading] = useState(false);
+  const [mmiData, setMmiData] = useState(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    axios.get('/api/indices/market-mood').then(res => {
+        if(isMounted && res.data) setMmiData(res.data);
+    }).catch(e => console.error(e));
+    return () => { isMounted = false; };
+  }, []);
   
   // Carousel Ref for Buttons
   const carouselRef = useRef(null);
@@ -240,6 +257,39 @@ const HomePage = () => {
       <MainContent>
         <Title>Stellar Stock Screener</Title>
         <Subtitle>The Ultimate Financial Intelligence Platform. Leveraging Quantitative Models for Real-Time Trade Discovery.</Subtitle>
+        
+        {mmiData && (
+          <MMIContainer>
+            <div style={{fontSize:'0.8rem', color:'#8b949e', textTransform:'uppercase', letterSpacing:'1px', marginBottom:'10px'}}>Know what's the sentiment on the street today</div>
+            <MMITitle>Market Mood Index (MMI)</MMITitle>
+            
+            <div style={{width: '100%', maxWidth: '400px', marginTop: '1rem'}}>
+              <GaugeChart 
+                id="mmi-gauge" 
+                nrOfLevels={4} 
+                arcsLength={[0.3, 0.2, 0.2, 0.3]}
+                colors={['#10B981', '#34D399', '#F59E0B', '#EF4444']} 
+                percent={mmiData.mmi / 100} 
+                arcPadding={0.02} 
+                cornerRadius={3} 
+                textColor="transparent" 
+                needleColor="#C9D1D9" 
+                needleBaseColor="#C9D1D9"
+                animate={true}
+                animDelay={0}
+                animateDuration={1500}
+              />
+            </div>
+            
+            <MMIValue color={mmiData.color}>{mmiData.mmi.toFixed(2)}</MMIValue>
+            
+            <MMIDesc>
+              The market is currently in the <Highlight color={mmiData.color}>{mmiData.status.toLowerCase()}</Highlight> zone. 
+              {mmiData.status.includes('Fear') ? ' Extreme fear ' : ' Extreme greed '} 
+              {mmiData.description}
+            </MMIDesc>
+          </MMIContainer>
+        )}
         
         {/* ROBUST SEARCH COMPONENT */}
         <SearchSection ref={searchRef}>
@@ -357,3 +407,4 @@ const HomePage = () => {
   );
 };
 export default HomePage;
+
