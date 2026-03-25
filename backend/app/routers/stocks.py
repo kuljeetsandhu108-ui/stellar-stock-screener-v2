@@ -182,7 +182,7 @@ async def get_swot_analysis(symbol: str, request_data: SwotRequest = Body(...)):
     if cached: return cached
     
     # GRAB EXISTING DATA FROM CACHE (0 API Calls!)
-    master_data_key = f"all_data_v30_{symbol}"
+    master_data_key = f"all_data_v31_{symbol}"
     master_data = await redis_service.redis_client.get_cache(master_data_key)
     
     # GENERATE SWOT VIA MATH ENGINE
@@ -208,7 +208,7 @@ async def get_fundamental_analysis(symbol: str, d: FundamentalRequest = Body(...
     if cached: return cached
     
     # ZERO API CALLS - Use Cached Master Data
-    master_data_key = f"all_data_v30_{symbol}"
+    master_data_key = f"all_data_v31_{symbol}"
     master_data = await redis_service.redis_client.get_cache(master_data_key)
     
     from ..services import strategy_engine
@@ -225,7 +225,7 @@ async def get_canslim_analysis(symbol: str, d: CanslimRequest = Body(...)):
     if cached: return cached
     
     # ZERO API CALLS - Use Cached Master Data
-    master_data_key = f"all_data_v30_{symbol}"
+    master_data_key = f"all_data_v31_{symbol}"
     master_data = await redis_service.redis_client.get_cache(master_data_key)
     
     from ..services import strategy_engine
@@ -397,82 +397,68 @@ async def get_technicals_data(symbol: str, request_data: TimeframeRequest = Body
 @router.get("/{symbol}/peers")
 async def get_peers_comparison(symbol: str):
     """
-    High-Performance Peers Engine.
-    1. Gets Peer List.
-    2. Normalizes Tickers (Adds .NS/.BO).
-    3. Uses FMP Bulk Quote for instant data.
+    High-Performance Contextual Peers Engine.
+    Uses Gemini AI for Indian conglomerates, falls back to FMP for US.
     """
-    cache_key = f"peers_v9_{symbol}"
+    cache_key = f"peers_v10_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
     
-    # 1. Identify Asset Class to handle Suffixes
     source, ticker = identify_asset_class(symbol)
-    
-    # Skip peers for commodities/crypto as data is often sparse
-    if source == "FMP" and "USD" in ticker: return []
+    if source == "FMP" and "USD" in ticker: return[]
 
-    # 2. Get Peer List
-    # Try FMP first
-    peers = await asyncio.to_thread(fmp_service.get_stock_peers, ticker)
-    
-    # Fallback to AI if FMP returns empty
-    if not peers:
+    is_indian = ".NS" in symbol or ".BO" in symbol
+    peers =[]
+
+    # 1. Indian Context Routing (AI First)
+    if is_indian:
         base_profile = await asyncio.to_thread(eodhd_service.get_company_fundamentals, ticker)
         general = base_profile.get('General', {})
         name = general.get('Name', ticker)
         sector = general.get('Sector', '')
         industry = general.get('Industry', '')
-        country = "India" if ".NS" in ticker or ".BO" in ticker else "US"
         
-        peers_str = await asyncio.to_thread(gemini_service.find_peer_tickers_by_industry, name, sector, industry, country)
+        peers_str = await asyncio.to_thread(gemini_service.find_peer_tickers_by_industry, name, sector, industry, "India")
         if peers_str:
-            peers = [p.strip() for p in peers_str.split(',')]
+            peers =[p.strip().upper() for p in peers_str.split(',') if p.strip()]
 
-    if not peers: return []
+    # 2. US Context Routing (FMP First)
+    if not peers:
+        peers = await asyncio.to_thread(fmp_service.get_stock_peers, ticker)
 
-    # 3. NORMALIZE TICKERS (The Fix)
-    # If we are looking at an Indian stock, ensure all peers have .NS
-    clean_peers = []
+    if not peers: return[]
+
+    # 3. Strict Deduplication & Ordering (Prevents Main Stock from disappearing)
     suffix = ""
     if ".NS" in symbol: suffix = ".NS"
     elif ".BO" in symbol: suffix = ".BO"
     
-    # Add Main Symbol to the list for comparison
-    all_symbols = [ticker]
+    all_symbols = [ticker] # Target stock is ALWAYS first
     
     for p in peers:
         p_clean = p.strip().upper()
-        # If main symbol has suffix but peer doesn't, append it
         if suffix and not p_clean.endswith(suffix) and "." not in p_clean:
             p_clean += suffix
-        all_symbols.append(p_clean)
+        # Add only if not already in the list (Maintains strict order unlike sets)
+        if p_clean not in all_symbols:
+            all_symbols.append(p_clean)
 
-    # Limit to top 6 to save bandwidth
-    target_symbols = list(set(all_symbols))[:6]
+    target_symbols = all_symbols[:6]
 
-    # 4. BULK FETCH (Using Quote Endpoint - Most Reliable)
-    # We use get_crypto_real_time_bulk because it is a generic quote fetcher in our FMP service
-    # It works for stocks too!
+    # 4. Fetch Live Data
     raw_data = await asyncio.to_thread(fmp_service.get_crypto_real_time_bulk, target_symbols)
-    
-    if not raw_data:
-        return []
+    if not raw_data: return []
 
-    # 5. Format Data
-    final_data = []
+    final_data =[]
     for item in raw_data:
-        # FMP Quote returns 'price', 'pe', 'marketCap'
-        # We map it to what the Frontend expects
         final_data.append({
             "symbol": item.get('symbol'),
-            "marketCap": item.get('marketCap'), # Frontend expects raw number
-            "peRatioTTM": item.get('pe'),       # Quote endpoint uses 'pe'
-            "revenueGrowth": item.get('changesPercentage'), # Proxy for growth in this view
-            "grossMargins": 0 # Not available in simple quote, set 0 to avoid N/A crash
+            "marketCap": item.get('marketCap'),
+            "peRatioTTM": item.get('pe'),
+            "revenueGrowth": item.get('changesPercentage'),
+            "grossMargins": 0
         })
 
-    # Cache result
     await redis_service.redis_client.set_cache(cache_key, final_data, 86400)
     return final_data
     
@@ -528,7 +514,7 @@ async def get_stock_chart(symbol: str, range: str = "1D"):
 
 @router.get("/{symbol}/all")
 async def get_all_stock_data(symbol: str):
-    cache_key = f"all_data_v30_{symbol}"
+    cache_key = f"all_data_v31_{symbol}"
     cached = await redis_service.redis_client.get_cache(cache_key)
     if cached: return cached
 
@@ -791,6 +777,7 @@ async def get_dynamic_screener(screener_key: str):
     if results and len(results) > 0:
         await redis_service.redis_client.set_cache(cache_key, results, 300)
     return results or[]
+
 
 
 

@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import styled from 'styled-components';
 import Card from '../common/Card';
 import DonutChart from './DonutChart';
@@ -56,7 +56,7 @@ const Shareholding = ({ shareholdingData, historicalStatements, shareholdingBrea
 
         </ChartContainer>
         <ChartContainer>
-           <TrendChart />
+           <TrendChart data={shareholdingData} />
         </ChartContainer>
       </GridContainer>
 

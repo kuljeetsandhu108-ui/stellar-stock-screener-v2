@@ -83,16 +83,19 @@ def generate_forecast_analysis(company_name: str, analyst_ratings: list, price_t
         print(f"❌ FORECAST ERROR: {e}")
         return "Forecast analysis temporarily unavailable."
 
+@auto_heal(fallback_return="")
 def find_peer_tickers_by_industry(company_name: str, sector: str, industry: str, country: str):
-    try:
-        configure_gemini_for_request()
-        model = genai.GenerativeModel(MODEL_NAME)
-        prompt = f"List 5 major competitor tickers for {company_name} ({industry}, {country}). Comma separated only. Example: RELIANCE.NS, TCS.NS"
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"❌ PEER ERROR: {e}")
-        return ""
+    configure_gemini_for_request()
+    model = genai.GenerativeModel(MODEL_NAME)
+    prompt = (
+        f"Identify 5 direct publicly traded competitor stock tickers for '{company_name}' "
+        f"operating in the '{industry}' industry within '{country}'. "
+        "If it is a mega-cap conglomerate, list its true market-cap peers. "
+        "Return ONLY a comma-separated list of symbols. Do not write any other text. "
+        "For Indian stocks, ensure they end with .NS. Example: TCS.NS,INFY.NS,HCLTECH.NS"
+    )
+    response = model.generate_content(prompt)
+    return response.text.strip().replace(" ", "").replace("\n", "")
 
 # --- LEGACY PLACEHOLDERS (Handled by Math Engine now) ---
 def generate_swot_analysis(company_name, description, news): return "Use Local Math Engine"
@@ -133,5 +136,6 @@ def analyze_chart_technicals_from_image(image_bytes: bytes):
     
     response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
     return response.text.strip()
+
 
 
