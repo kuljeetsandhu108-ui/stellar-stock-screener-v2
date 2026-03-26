@@ -116,3 +116,4 @@ const OwnershipTrend = ({ historicalStatements }) => {
 };
 
 export default OwnershipTrend;
+

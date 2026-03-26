@@ -5,6 +5,7 @@ import Card from '../common/Card';
 import axios from 'axios';
 import { useParams } from 'react-router-dom';
 import { FaArrowUp, FaArrowDown, FaExchangeAlt, FaLayerGroup, FaSync } from 'react-icons/fa';
+import { calculateTechnicalSignal } from '../../utils/technical_calculator';
 
 // --- CONFIGURATION ---
 const API_URL = '';
@@ -536,3 +537,4 @@ const Technicals = ({
 };
 
 export default Technicals;
+

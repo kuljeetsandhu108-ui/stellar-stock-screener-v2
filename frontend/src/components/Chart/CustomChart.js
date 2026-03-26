@@ -684,10 +684,10 @@ const CustomChart = ({ symbol }) => {
              const s1 = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, title: `EMA 9` }); const s2 = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 2, title: `EMA 21` });
              s1.setData(mapData(ema1, chartData)); s2.setData(mapData(ema2, chartData)); newSeries.push(s1, s2); paramsLabel = `9, 21`;
         }
-        else if (selectedInd === 'Combo_12_21') {
-             const ema1 = EMA.calculate({ period: 12, values: closePrices }); const ema2 = EMA.calculate({ period: 21, values: closePrices });
-             const s1 = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, title: `EMA 12` }); const s2 = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 2, title: `EMA 21` });
-             s1.setData(mapData(ema1, chartData)); s2.setData(mapData(ema2, chartData)); newSeries.push(s1, s2); paramsLabel = `12, 21`;
+        else if (selectedInd === 'Combo_14_21') {
+             const ema1 = EMA.calculate({ period: 14, values: closePrices }); const ema2 = EMA.calculate({ period: 21, values: closePrices });
+             const s1 = chartRef.current.addSeries(LineSeries, { color: '#2962FF', lineWidth: 2, title: `EMA 14` }); const s2 = chartRef.current.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 2, title: `EMA 21` });
+             s1.setData(mapData(ema1, chartData)); s2.setData(mapData(ema2, chartData)); newSeries.push(s1, s2); paramsLabel = `14, 21`;
         }
 
         setActiveIndicators([...activeIndicators, { id, type: selectedInd, series: newSeries, paneId, params: paramsLabel }]);
@@ -699,7 +699,7 @@ const CustomChart = ({ symbol }) => {
       const val = e.target.value; 
       setSelectedInd(val); 
       if (val === 'Combo_9_21') { setParam1(9); setParam2(21); } 
-      else if (val === 'Combo_12_21') { setParam1(12); setParam2(21); } 
+      else if (val === 'Combo_14_21') { setParam1(14); setParam2(21); } 
   };
   
   const removeIndicator = (id) => { 
@@ -790,7 +790,7 @@ const CustomChart = ({ symbol }) => {
                             <option value="SMC">{'\u26A1'} SMC</option>
                             <option value="SmartSR">{'\uD83C\uDFAF'} Smart S/R</option>
                             <option value="Combo_9_21">{'\uD83D\uDE80'} 9/21 EMA</option>
-                            <option value="Combo_12_21">{'\uD83D\uDE80'} 12/21 EMA</option>
+                            <option value="Combo_14_21">{'\uD83D\uDE80'} 14/21 EMA</option>
                             <option value="SuperTrend">SuperTrend</option>
                             <option value="VWAP">VWAP</option>
                             <option value="SMA">SMA</option>
@@ -833,4 +833,5 @@ const CustomChart = ({ symbol }) => {
 };
 
 export default CustomChart;
+
 

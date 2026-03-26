@@ -260,7 +260,7 @@ const StockDetailPage = () => {
               <SwotAnalysis analysisText={swot} isLoading={loadingSwot} onRegenerate={fetchSwot} />
             </LeftCol>
             <RightCol>
-              {isStock && <OverallSentiment sentimentData={data.overall_sentiment} />}
+              {isStock && <OverallSentiment sentimentData={data.overall_sentiment} initialTechs={data.technical_indicators} initialMAs={data.moving_averages} quote={data.quote} symbol={symbol} />}
               <PriceLevels pivotPoints={data.pivot_points} quote={data.quote} profile={data.profile} />
               <NewsList newsArticles={data.news} />
             </RightCol>
@@ -336,3 +336,4 @@ const StockDetailPage = () => {
 };
 
 export default StockDetailPage;
+
