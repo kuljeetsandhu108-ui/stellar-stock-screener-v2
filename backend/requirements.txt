@@ -1,4 +1,4 @@
-fastapi
+﻿fastapi
 uvicorn[standard]
 python-dotenv
 requests
@@ -11,8 +11,8 @@ async-lru
 beautifulsoup4
 gunicorn
 msgpack
-fyers-apiv3
 websockets
 httpx
-yfinance
+aiohttp
+yfinance>=0.2.40
 google-generativeai

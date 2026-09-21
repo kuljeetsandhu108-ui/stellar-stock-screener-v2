@@ -1,9 +1,20 @@
 ﻿def generate_algorithmic_report(symbol, timeframe, technicals, pivots, mas):
     """
     Advanced Institutional Quant Engine.
-    Uses SMC (Smart Money Concepts), Liquidity Sweeps, Volatility Squeezes, and Dynamic ATR Risk Management.
-    Outputs strict format for React UI Parsing.
+    Uses SMC, Liquidity Sweeps, Volatility Squeezes, and Dynamic ATR Risk Management.
     """
+    # --- ADAPTIVE PRECISION FORMATTER ---
+    def fmt(v):
+        if v is None: return "N/A"
+        try:
+            val = float(v)
+            if val == 0: return "0.00"
+            if abs(val) < 0.001: return f"{val:.8f}"
+            if abs(val) < 1.0: return f"{val:.4f}"
+            return f"{val:.2f}"
+        except:
+            return "N/A"
+
     try:
         # 1. Safe Extraction of Math Variables
         price = float(technicals.get('price_action', {}).get('current_close', 0))
@@ -71,12 +82,10 @@
         action = "WAIT"
         rationale = "Market is in a low-probability chop zone. Capital preservation mode active."
         
-        # --- CRASH FIX: Define default fallbacks BEFORE the if/else tree ---
         stop_loss = s1 if price > pp else r1
         target_1 = r1 if price > pp else s1
         target_2 = r2 if price > pp else s2
         
-        # Bullish Setup
         if ("Bullish" in trend and macd > macd_signal) or (price <= s1 and rsi < 30):
             if adx > 20 or rsi < 30: 
                 action = "BUY"
@@ -86,7 +95,6 @@
                 target_2 = price + (risk * 3.5) 
                 rationale = "High-probability long setup based on SMC discount pricing and bullish momentum alignment."
 
-        # Bearish Setup
         elif ("Bearish" in trend and macd < macd_signal) or (price >= r1 and rsi > 70):
             if adx > 20 or rsi > 70:
                 action = "SELL"
@@ -96,22 +104,22 @@
                 target_2 = price - (risk * 3.5)
                 rationale = "High-probability short setup targeting lower liquidity pools (Sell-side liquidity)."
 
-        rr_text = "1:1.5 (T1) | 1:3.5 (T2)" if action in["BUY", "SELL"] else "N/A"
+        rr_text = "1:1.5 (T1) | 1:3.5 (T2)" if action in ["BUY", "SELL"] else "N/A"
         confidence = "High (Confluence)" if adx > 25 and action != "WAIT" else "Medium" if action != "WAIT" else "Low"
 
-        # 6. PERFECT FORMATTING FOR REACT UI PARSER
+        # 6. DYNAMIC FORMATTING FOR REACT UI PARSER
         report = f"""TREND: {trend}
 PATTERNS: {patterns}
 MOMENTUM: {momentum}
-LEVELS: Critical Floor at {s1:.2f} | Local Equilibrium at {pp:.2f} | Heavy Supply at {r1:.2f}
+LEVELS: Critical Floor at {fmt(s1)} | Local Equilibrium at {fmt(pp)} | Heavy Supply at {fmt(r1)}
 VOLUME: Algorithmic standard deviation profiles stable.
-INDICATORS: RSI ({rsi:.1f}) | MACD Delta ({macd - macd_signal:.3f}) | ATR Volatility ({atr:.2f})
+INDICATORS: RSI ({rsi:.1f}) | MACD Delta ({fmt(macd - macd_signal)}) | ATR Volatility ({fmt(atr)})
 CONCLUSION: The quantitative matrix confirms a {trend.lower()} environment on the {timeframe} interval.
 ACTION: {action}
-ENTRY_ZONE: {price:.2f}
-STOP_LOSS: {stop_loss:.2f}
-TARGET_1: {target_1:.2f}
-TARGET_2: {target_2:.2f}
+ENTRY_ZONE: {fmt(price)}
+STOP_LOSS: {fmt(stop_loss)}
+TARGET_1: {fmt(target_1)}
+TARGET_2: {fmt(target_2)}
 RISK_REWARD: {rr_text}
 CONFIDENCE: {confidence}
 RATIONALE: {rationale}"""
